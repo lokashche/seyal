@@ -1,0 +1,22 @@
+# Local development database. Values come from .env (copy .env.example first).
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      SEYAL_OWNER_PASSWORD: ${SEYAL_OWNER_PASSWORD:?set SEYAL_OWNER_PASSWORD in .env}
+      SEYAL_APP_PASSWORD: ${SEYAL_APP_PASSWORD:?set SEYAL_APP_PASSWORD in .env}
+    ports:
+      # Bound to localhost only, so the database is not reachable from the network.
+      - "127.0.0.1:${SEYAL_DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d seyal"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:

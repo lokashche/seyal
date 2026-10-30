@@ -1,0 +1,17 @@
+# Private, per-developer notes and context. Never commit.
+.local/
+CLAUDE.md
+docs/
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+
+# Build output and runtime data
+/bin/
+/data/
+*.exe
+*.test
+*.out
+coverage.*
