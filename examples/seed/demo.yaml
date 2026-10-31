@@ -1,0 +1,87 @@
+# Fictional demo business for trying Seyal. Every name, email and number here is made up.
+# Load it with:  seyal seed
+#
+# A real business uses the same format in a PRIVATE file (never in this repo):
+#   seyal import path/to/your-business.yaml
+# Money is written in normal units (12000 = 12,000.00). "@key" points at a person below.
+
+business:
+  slug: demo
+  name: Kaveri Associates (demo)
+  currency: INR
+  timezone: Asia/Kolkata
+  fiscal_year_start_month: 4
+
+roles:
+  - { key: sales, name: Sales }
+  - { key: ops, name: Operations }
+  - { key: owner, name: Owner }
+
+people:
+  - { key: arjun, name: Arjun Mehta, email: arjun@kaveri-demo.example, roles: [sales] }
+  - { key: priya, name: Priya Raman, email: priya@kaveri-demo.example, roles: [ops] }
+  - { key: lakshmi, name: Lakshmi Narayanan, email: lakshmi@kaveri-demo.example, roles: [owner] }
+  - { key: karthik, name: Karthik Subramanian, email: karthik@kaveri-demo.example, roles: [] }
+  - { key: fatima, name: Fatima Sheikh, email: fatima@kaveri-demo.example, roles: [] }
+  - { key: rahul, name: Rahul Iyer, email: rahul@kaveri-demo.example, roles: [sales] }
+
+master:
+  client:
+    - key: sundaram-textiles
+      name: Sundaram Textiles
+      fields: { contact_person: Ravi Sundaram, email: accounts@sundaram.example, phone: "+91 00000 00001" }
+    - key: annapoorna-foods
+      name: Annapoorna Foods
+      fields: { contact_person: Meena Pillai, email: office@annapoorna.example, phone: "+91 00000 00002" }
+    - key: deccan-motors
+      name: Deccan Motors
+      fields: { contact_person: Imran Qureshi, email: finance@deccan.example, phone: "+91 00000 00003" }
+    - key: ganga-traders
+      name: Ganga Traders
+      fields: { contact_person: Sunita Verma, email: hello@ganga.example, phone: "+91 00000 00004" }
+
+  work_type:
+    - key: monthly-books
+      name: Monthly bookkeeping
+      fields:
+        documents: [Bank statements, Sales invoices, Purchase invoices, Expense bills]
+        timeline_days: 10
+        maker: "@karthik"
+        checker: "@fatima"
+        reviewer: "@lakshmi"
+        standard_fee: 12000
+        est_hours: 8
+        is_new: false
+    - key: gst-returns
+      name: GST returns (monthly)
+      fields:
+        documents: [Sales register, Purchase register, Previous return]
+        timeline_days: 5
+        maker: "@fatima"
+        checker: "@karthik"
+        reviewer: "@lakshmi"
+        standard_fee: 5000
+        est_hours: 4
+        is_new: false
+    - key: annual-accounts
+      name: Annual accounts
+      fields:
+        documents: [Trial balance, Bank statements, Fixed asset register, Loan statements]
+        timeline_days: 30
+        maker: "@karthik"
+        checker: "@fatima"
+        reviewer: "@lakshmi"
+        standard_fee: 35000
+        est_hours: 40
+        is_new: false
+    - key: tds-returns
+      name: TDS returns (quarterly)
+      fields:
+        documents: [Deduction details, Challans]
+        timeline_days: 7
+        maker: "@fatima"
+        checker: "@karthik"
+        reviewer: "@lakshmi"
+        standard_fee: 4000
+        est_hours: 3
+        is_new: true

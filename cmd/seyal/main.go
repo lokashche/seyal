@@ -46,6 +46,12 @@ func run(args []string, out io.Writer) error {
 		return runVerify(args[1:], out)
 	case "check":
 		return runCheck(out)
+	case "import":
+		return runImport(args[1:], out)
+	case "seed":
+		return runSeed(out)
+	case "set-password":
+		return runSetPassword(args[1:], out)
 	case "help", "-h", "--help":
 		usage(out)
 		return nil
@@ -67,6 +73,9 @@ Commands:
   migrate        apply all pending database migrations
   verify         check every ledger for tampering (--full: from the start)
   check          verify the integrity of the playbooks and master data
+  import FILE    create or update a business from a set-up file
+  seed           load the fictional demo business and print its logins
+  set-password   give a person a new password (--business SLUG --email EMAIL)
   help           show this help
 `, appName)
 }
