@@ -42,6 +42,8 @@ func run(args []string, out io.Writer) error {
 		return runDev(args[1:], out)
 	case "migrate":
 		return runMigrate(out)
+	case "verify":
+		return runVerify(args[1:], out)
 	case "help", "-h", "--help":
 		usage(out)
 		return nil
@@ -61,6 +63,7 @@ Commands:
   dev test       run the quick tests
   dev test-db    run the database tests (needs "dev up")
   migrate        apply all pending database migrations
+  verify         check every ledger for tampering (--full: from the start)
   help           show this help
 `, appName)
 }

@@ -10,6 +10,7 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 	"github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/lock"
 )
 
 //go:embed *.sql
@@ -24,10 +25,14 @@ func Up(ctx context.Context, databaseURL string) ([]string, error) {
 	}
 	defer db.Close()
 
-	provider, err := goose.NewProvider(goose.DialectPostgres, db, files)
+	// A database lock makes a second "migrate" (e.g. another test package) wait its turn.
+	locker, err := lock.NewPostgresSessionLocker()
+
 	if err != nil {
 		return nil, err
 	}
+	provider, err := goose.NewProvider(goose.DialectPostgres, db, files, goose.WithSessionLocker(locker))
+
 	results, err := provider.Up(ctx)
 	if err != nil {
 		return nil, err
