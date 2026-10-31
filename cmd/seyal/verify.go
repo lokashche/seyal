@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"seyal/internal/audit"
 	"seyal/internal/config"
 	"seyal/internal/db"
 	"seyal/internal/ledger"
@@ -46,6 +47,7 @@ func runVerify(args []string, out io.Writer) error {
 	broken := 0
 	for _, t := range tenants {
 		var rep ledger.Report
+		var tableProblems []audit.Problem
 		err := db.WithTenant(ctx, pool, t.ID, func(tx pgx.Tx) error {
 			var from ledger.Checkpoint
 			if !*full {
@@ -60,7 +62,14 @@ func runVerify(args []string, out io.Writer) error {
 				return err
 			}
 			rep = r
-			if r.OK() {
+			if !r.OK() {
+				return nil // the tables can only be checked against a sound ledger
+			}
+			// The tables are always checked in full: they can be edited at any time.
+			if tableProblems, err = audit.CheckTables(ctx, tx); err != nil {
+				return err
+			}
+			if len(tableProblems) == 0 {
 				return ledger.SaveCheckpoint(ctx, tx, r)
 			}
 			return nil
@@ -68,8 +77,9 @@ func runVerify(args []string, out io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("verify %s: %w", t.Slug, err)
 		}
-		if rep.OK() {
-			fmt.Fprintf(out, "%s: ok (%d events checked, chain at event %d)\n", t.Slug, rep.Checked, rep.LastSeq)
+		if rep.OK() && len(tableProblems) == 0 {
+			fmt.Fprintf(out, "%s: ok (%d events checked, chain at event %d, tables match)\n",
+				t.Slug, rep.Checked, rep.LastSeq)
 			continue
 		}
 		broken++
@@ -77,9 +87,12 @@ func runVerify(args []string, out io.Writer) error {
 		for _, p := range rep.Problems {
 			fmt.Fprintf(out, "  event %d: %s\n", p.Seq, p.Reason)
 		}
+		for _, p := range tableProblems {
+			fmt.Fprintf(out, "  table %s\n", p)
+		}
 	}
 	if broken > 0 {
-		return fmt.Errorf("%d of %d businesses have a broken ledger", broken, len(tenants))
+		return fmt.Errorf("%d of %d businesses have a broken ledger or tables", broken, len(tenants))
 	}
 	fmt.Fprintf(out, "all %d businesses ok\n", len(tenants))
 	return nil
