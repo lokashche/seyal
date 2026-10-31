@@ -74,6 +74,12 @@ func scanItem(row pgx.Row) (Item, error) {
 	return it, nil
 }
 
+// PlaybookFor returns the exact playbook version the item follows. tx must come from db.WithTenant.
+func PlaybookFor(ctx context.Context, tx pgx.Tx, it Item) (*playbook.Playbook, error) {
+	s, err := open(ctx, tx, it.PlaybookVersionID)
+	return s.p, err
+}
+
 // session bundles what every action needs: the transaction and the item's own playbook.
 type session struct {
 	ctx context.Context
