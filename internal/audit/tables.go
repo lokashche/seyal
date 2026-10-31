@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Package audit checks that the tables Seyal keeps for screens (work items, approvals, links,
-// master items and playbook versions) match what the ledger says happened. The ledger is the
+// master items, playbook versions and messages) match what the ledger says happened. The ledger is the
 // record; the tables are a convenient copy. Anyone who edits a table directly, bypassing Seyal,
 // is caught here.
 package audit
@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"seyal/internal/channel"
 	"seyal/internal/engine"
 	"seyal/internal/workitem"
 )
@@ -39,7 +40,7 @@ func CheckTables(ctx context.Context, tx pgx.Tx) ([]Problem, error) {
 		return nil, err
 	}
 	c := &checker{ctx: ctx, tx: tx, want: want}
-	for _, check := range []func() error{c.items, c.approvals, c.links, c.masters, c.playbooks} {
+	for _, check := range []func() error{c.items, c.approvals, c.links, c.masters, c.playbooks, c.messages} {
 		if err := check(); err != nil {
 			return nil, err
 		}
@@ -54,6 +55,7 @@ type expected struct {
 	links     map[string]bool          // by "from/to/kind"
 	masters   map[string]masterRow     // by id
 	playbooks map[string]string        // id → sha256 of the file, in hex
+	messages  map[string]channel.Message
 }
 
 type approval struct {
@@ -80,6 +82,7 @@ func replay(ctx context.Context, tx pgx.Tx) (expected, error) {
 		links:     map[string]bool{},
 		masters:   map[string]masterRow{},
 		playbooks: map[string]string{},
+		messages:  map[string]channel.Message{},
 	}
 	rows, err := tx.Query(ctx, `SELECT body FROM ledger WHERE tenant_id = current_tenant() ORDER BY seq`)
 	if err != nil {
@@ -132,6 +135,17 @@ func (w expected) apply(kind, subject, actor string, payload json.RawMessage) er
 			return err
 		}
 		w.playbooks[subject] = p.SHA256
+		return nil
+	case "message.received", "message.sent", "message.filed":
+		var p struct {
+			Message channel.Message `json:"message"`
+		}
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return err
+		}
+		w.messages[subject] = p.Message
+		return nil
+	case "person.identity_added":
 		return nil
 	}
 
@@ -361,5 +375,31 @@ func (c *checker) playbooks() error {
 		return err
 	}
 	leftovers(c, "playbook_versions", c.want.playbooks)
+	return nil
+}
+
+func (c *checker) messages() error {
+	got, err := channel.List(c.ctx, c.tx)
+	if err != nil {
+		return err
+	}
+	for _, g := range got {
+		w, ok := c.want.messages[g.ID]
+		delete(c.want.messages, g.ID)
+		switch {
+		case !ok:
+			c.add("messages", g.ID, "not in the ledger (added outside Seyal)")
+		case w.Text != g.Text:
+			c.add("messages", g.ID, "text differs from the ledger")
+		case w.ThreadID != g.ThreadID:
+			c.add("messages", g.ID, "thread is %q, but the ledger says %q", g.ThreadID, w.ThreadID)
+		case w.AuthorKind != g.AuthorKind || w.PersonID != g.PersonID || w.Channel != g.Channel ||
+			w.ExternalID != g.ExternalID || !w.SentAt.Equal(g.SentAt):
+			c.add("messages", g.ID, "sender, channel or time differs from the ledger")
+		case !slices.Equal(w.Media, g.Media):
+			c.add("messages", g.ID, "attached files differ from the ledger")
+		}
+	}
+	leftovers(c, "messages", c.want.messages)
 	return nil
 }
