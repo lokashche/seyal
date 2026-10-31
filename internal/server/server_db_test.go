@@ -203,6 +203,13 @@ func TestLoginPage(t *testing.T) {
 		}
 	})
 
+	t.Run("pages link static files by fingerprint, so browsers never keep an old copy", func(t *testing.T) {
+		_, body, _ := s.get(s.browser(), home+"login")
+		if !regexp.MustCompile(`href="/static/app\.css\?v=[0-9a-f]{12}"`).MatchString(body) {
+			t.Error("app.css is linked without a fingerprint")
+		}
+	})
+
 	t.Run("static files", func(t *testing.T) {
 		for _, path := range []string{"/static/htmx.min.js", "/static/app.css", "/static/fonts.css"} {
 			if code, _, h := s.get(s.browser(), path); code != http.StatusOK || h.Get("Cache-Control") == "" {

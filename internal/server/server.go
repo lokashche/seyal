@@ -7,6 +7,8 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"html/template"
 	"io/fs"
@@ -36,6 +38,7 @@ type Server struct {
 	secure  bool // send cookies only over HTTPS
 	pages   map[string]*template.Template
 	static  http.Handler
+	asset   string // fingerprint of the static files, added to their addresses
 	limiter *limiter
 }
 
@@ -55,7 +58,30 @@ func New(app *pgxpool.Pool, store media.Store, secureCookies bool) (*Server, err
 		return nil, err
 	}
 	s.static = http.StripPrefix("/static/", http.FileServerFS(static))
+	if s.asset, err = fingerprint(static); err != nil {
+		return nil, err
+	}
 	return s, nil
+}
+
+// fingerprint is a short hash of every static file. Pages link to "/static/app.css?v=<fingerprint>",
+// so when a file changes its address changes too, and browsers fetch the new one instead of an
+// old copy they kept.
+func fingerprint(files fs.FS) (string, error) {
+	h := sha256.New()
+	err := fs.WalkDir(files, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, err := fs.ReadFile(files, path)
+		if err != nil {
+			return err
+		}
+		h.Write([]byte(path))
+		h.Write(data)
+		return nil
+	})
+	return hex.EncodeToString(h.Sum(nil))[:12], err
 }
 
 // Handler returns all routes, wrapped in the security layers: browsers may not send a form or
@@ -80,6 +106,7 @@ func (s *Server) Handler() http.Handler {
 
 // page is what every template gets.
 type page struct {
+	Asset          string // static files fingerprint, filled in by render
 	Slug, Business string
 	Session        *auth.Session
 	Error          string
@@ -239,6 +266,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request, c *call) {
 
 // render runs a page template into a buffer first, so a template error never sends half a page.
 func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, name string, p page) {
+	p.Asset = s.asset
 	var buf bytes.Buffer
 	if err := s.pages[name].ExecuteTemplate(&buf, "layout", p); err != nil {
 		s.fail(w, r, err)
