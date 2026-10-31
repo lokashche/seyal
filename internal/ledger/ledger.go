@@ -35,6 +35,28 @@ type Event struct {
 	Payload       any    // details, stored as JSON
 }
 
+// Actor says who did something and in what capacity.
+type Actor struct {
+	Kind       ActorKind
+	PersonID   string // Human only
+	OnBehalfOf string // Agent only
+}
+
+// PersonActor is a person acting directly.
+func PersonActor(personID string) Actor { return Actor{Kind: Human, PersonID: personID} }
+
+// AgentActor is Seyal acting on behalf of a person.
+func AgentActor(onBehalfOf string) Actor { return Actor{Kind: Agent, OnBehalfOf: onBehalfOf} }
+
+// SystemActor is Seyal acting on its own, e.g. when a rule fires.
+var SystemActor = Actor{Kind: System}
+
+// By returns a copy of e recorded as done by a.
+func (e Event) By(a Actor) Event {
+	e.ActorKind, e.ActorPersonID, e.OnBehalfOf = a.Kind, a.PersonID, a.OnBehalfOf
+	return e
+}
+
 // Recorded is an event as stored in the chain.
 type Recorded struct {
 	Seq        int64
