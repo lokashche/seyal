@@ -1,0 +1,7 @@
+# Sample master-data kind. Every item also has a built-in key and name.
+kind: client
+label: Client
+fields:
+  - { key: contact_person, label: Contact person, type: text }
+  - { key: email, label: Email, type: text }
+  - { key: phone, label: Phone, type: text }

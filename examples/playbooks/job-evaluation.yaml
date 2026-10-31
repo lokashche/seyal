@@ -1,0 +1,73 @@
+# Sample playbook: evaluate and approve a new job before work starts.
+# Generic example only. Real playbooks live in a private folder (SEYAL_PLAYBOOKS_DIR).
+id: job-evaluation
+version: "0.1"
+description: Evaluate a new piece of client work and get it approved before work starts.
+examples:
+  - "New monthly bookkeeping job for Acme Traders, fee 12000"
+  - "Acme Traders wants annual accounts done, agreed 30000, they send data by 15th"
+numbering: "J-{yyyy}-{seq:4}"
+title: "{client} — {nature_of_work}"
+roles: [sales, ops, owner]
+
+fields:
+  - { key: client, label: Client, type: master, kind: client, required: true, ask: "Which client is this for?" }
+  - key: nature_of_work
+    label: Nature of work
+    type: master
+    kind: work_type
+    required: true
+    ask: "What kind of work is it?"
+    prefill:
+      required_documents: documents
+      timeline_days: timeline_days
+      maker: maker
+      checker: checker
+      reviewer: reviewer
+      standard_fee: standard_fee
+      est_hours: est_hours
+  - { key: reason, label: Reason for job, type: text, required: true, ask: "Why does the client need this?" }
+  - { key: required_documents, label: Documents required, type: list, of: text }
+  - { key: resources, label: Resources, type: list, of: person }
+  - { key: timeline_days, label: Timeline (days), type: number }
+  - { key: maker, label: Maker, type: person }
+  - { key: checker, label: Checker, type: person }
+  - { key: reviewer, label: Reviewer, type: person }
+  - { key: est_hours, label: Estimated hours, type: number }
+  - { key: standard_fee, label: Standard fee, type: money, readonly: true }
+  - { key: fee_agreed, label: Fee agreed, type: money, required: true, ask: "What fee did we agree?" }
+  - { key: advance, label: Advance, type: money, ask: "Any advance received?" }
+  - { key: client_data_due, label: Client data due, type: date, ask: "When will the client send their data?" }
+  - { key: scope_exclusions, label: Scope exclusions, type: text }
+  - { key: integrity_check, label: Integrity check, type: choice, options: [pass, fail], required: true, ask: "Did the integrity check pass?" }
+  - { key: payment_terms, label: Payment terms, type: text, ask: "What are the payment terms?" }
+
+states: [draft, pending_approval, approved, cancelled]
+initial: draft
+
+transitions:
+  - { action: submit, from: [draft], to: pending_approval, when: required_filled }
+  - { action: cancel, from: [draft, pending_approval, approved], to: cancelled, needs: reason }
+
+approvals:
+  in: pending_approval
+  on_complete: approved
+  on_reject: draft
+  slots:
+    - { slot: sales, role: sales }
+    - { slot: ops, role: ops }
+    - slot: owner
+      role: owner
+      required_if:
+        any:
+          - { field: fee_agreed, lt: { field: standard_fee } }
+          - { field: nature_of_work.is_new, eq: true }
+          - { field: integrity_check, eq: fail }
+
+deadlines:
+  - { due_from: client_data_due }
+
+on:
+  approved:
+    - { do: post, text: "Approved. Over to {maker}." }
+    - { do: assign, to: maker }

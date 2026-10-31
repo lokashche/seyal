@@ -1,0 +1,12 @@
+# Sample master-data kind. A work type pre-fills a new job (see prefill in the playbook).
+kind: work_type
+label: Work type
+fields:
+  - { key: documents, label: Documents required, type: list, of: text }
+  - { key: timeline_days, label: Timeline (days), type: number }
+  - { key: maker, label: Default maker, type: person }
+  - { key: checker, label: Default checker, type: person }
+  - { key: reviewer, label: Default reviewer, type: person }
+  - { key: standard_fee, label: Standard fee, type: money }
+  - { key: est_hours, label: Estimated hours, type: number }
+  - { key: is_new, label: New work type (needs owner approval), type: bool }
