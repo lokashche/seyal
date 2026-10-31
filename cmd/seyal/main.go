@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"seyal/internal/config"
 )
 
 // appName is the command name shown to users. Rename here (and the cmd/ folder) if needed.
@@ -17,6 +19,10 @@ const appName = "seyal"
 var version = "0.0.1-dev"
 
 func main() {
+	if err := config.LoadDotEnv(".env"); err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", appName, err)
+		os.Exit(1)
+	}
 	if err := run(os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", appName, err)
 		os.Exit(1)
@@ -34,6 +40,8 @@ func run(args []string, out io.Writer) error {
 		return nil
 	case "dev":
 		return runDev(args[1:], out)
+	case "migrate":
+		return runMigrate(out)
 	case "help", "-h", "--help":
 		usage(out)
 		return nil
@@ -52,6 +60,7 @@ Commands:
   dev down       stop the local database
   dev test       run the quick tests
   dev test-db    run the database tests (needs "dev up")
+  migrate        apply all pending database migrations
   help           show this help
 `, appName)
 }

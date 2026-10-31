@@ -1,0 +1,6 @@
+{
+  "files.eol": "\n",
+  "[go]": {
+    "editor.formatOnSave": true
+  }
+}
