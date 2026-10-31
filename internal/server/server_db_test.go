@@ -5,12 +5,15 @@
 package server_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/textproto"
 	"net/url"
 	"regexp"
 	"strings"
@@ -333,6 +336,89 @@ func TestAJobInTheBrowser(t *testing.T) {
 		}
 		if code, _, _ := s.get(s.browser(), src[1]); code != http.StatusSeeOther {
 			t.Errorf("voice note without login = %d, want a redirect to login", code)
+		}
+	})
+}
+
+// upload posts a composer form the way the browser does when a voice note or file is attached.
+func (s *site) upload(c *http.Client, path string, fields map[string]string, files []upFile) (int, string, http.Header) {
+	s.t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	for k, v := range fields {
+		mw.WriteField(k, v)
+	}
+	for _, f := range files {
+		h := textproto.MIMEHeader{}
+		h.Set("Content-Disposition", `form-data; name="`+f.field+`"; filename="`+f.name+`"`)
+		h.Set("Content-Type", f.contentType)
+		part, _ := mw.CreatePart(h)
+		part.Write(f.data)
+	}
+	mw.Close()
+	req, _ := http.NewRequest(http.MethodPost, s.srv.URL+path, &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := c.Do(req)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(body), resp.Header
+}
+
+type upFile struct {
+	field, name, contentType string
+	data                     []byte
+}
+
+func TestVoiceNotesAndAttachments(t *testing.T) {
+	s := newSite(t)
+	base := "/t/" + s.slug
+	a := s.logIn(arjun)
+	_, home, _ := s.get(a, base+"/")
+	pv := regexp.MustCompile(`name="playbook" value="([^"]+)"`).FindStringSubmatch(home)[1]
+	voice := upFile{"voice", "voice-note.webm", "audio/webm;codecs=opus", []byte("pretend opus recording")}
+
+	t.Run("a job can start from a voice note alone", func(t *testing.T) {
+		code, body, h := s.upload(a, base+"/tell", map[string]string{"playbook": pv, "text": ""}, []upFile{voice})
+		if code != http.StatusSeeOther {
+			t.Fatalf("tell with voice = %d: %s", code, problem(body))
+		}
+		_, page, _ := s.get(a, h.Get("Location"))
+		if !strings.Contains(page, "🎙 Voice note") || !strings.Contains(page, "<audio controls") ||
+			!strings.Contains(page, "Which client is this for?") {
+			t.Error("the new job doesn't show the voice note and Seyal's first question")
+		}
+	})
+
+	t.Run("voice note and photo in a thread", func(t *testing.T) {
+		_, _, h := s.post(a, base+"/tell", url.Values{"playbook": {pv}, "text": {"New job"}}, nil)
+		item := h.Get("Location")
+		photo := upFile{"file", "statement.jpg", "image/jpeg", []byte("\xff\xd8\xff pretend jpeg")}
+		code, body, _ := s.upload(a, item+"/say", map[string]string{"text": "Client sent this"}, []upFile{voice, photo})
+		if code != http.StatusSeeOther {
+			t.Fatalf("say with files = %d: %s", code, problem(body))
+		}
+		_, page, _ := s.get(a, item)
+		if strings.Count(page, "/media/") < 2 || !strings.Contains(page, "Client sent this") {
+			t.Error("the thread doesn't show the text, the voice note and the photo")
+		}
+	})
+
+	t.Run("a web page disguised as an attachment is refused", func(t *testing.T) {
+		_, _, h := s.post(a, base+"/tell", url.Values{"playbook": {pv}, "text": {"New job"}}, nil)
+		bad := upFile{"file", "x.html", "text/html", []byte("<script>alert(1)</script>")}
+		code, body, _ := s.upload(a, h.Get("Location")+"/say", map[string]string{"text": ""}, []upFile{bad})
+		if code != http.StatusUnprocessableEntity || !strings.Contains(problem(body), "not accepted") {
+			t.Errorf("html attachment = %d: %s", code, problem(body))
+		}
+	})
+
+	t.Run("an empty message is refused", func(t *testing.T) {
+		code, body, _ := s.upload(a, base+"/tell", map[string]string{"playbook": pv, "text": "  "}, nil)
+		if code != http.StatusUnprocessableEntity || !strings.Contains(problem(body), "record") {
+			t.Errorf("empty tell = %d: %s", code, problem(body))
 		}
 	})
 }

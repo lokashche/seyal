@@ -39,13 +39,13 @@
     <div class="empty">Type the work as you would tell a colleague. Seyal turns it into a work item and asks only for what's missing.</div>
   </div>
   {{with .Data.Tell}}
-  <form class="composer" method="post" action="/t/{{$.Slug}}/tell">
+  <form class="composer" method="post" action="/t/{{$.Slug}}/tell" enctype="multipart/form-data">
     {{if gt (len .Choices) 1}}
       <label class="ctl-label">Type<select name="playbook">{{range .Choices}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>
     {{else}}{{range .Choices}}<input type="hidden" name="playbook" value="{{.ID}}">{{end}}{{end}}
     <label for="msg" class="ctl-label">Message</label>
-    <textarea id="msg" name="text" required placeholder="For example: new monthly bookkeeping job for Sundaram Textiles"></textarea>
-    <div class="row"><button class="btn">Send</button><span class="why">Ctrl + Enter sends</span></div>
+    <textarea id="msg" name="text" placeholder="For example: new monthly bookkeeping job for Sundaram Textiles"></textarea>
+    {{template "tools"}}
   </form>
   {{else}}
   <p class="none">No playbooks are set up for this business yet.</p>
@@ -63,6 +63,22 @@
 </aside>
 {{end}}
 
+{{define "tools"}}
+    <div class="voice-preview" data-voice-preview hidden>
+      <audio controls></audio>
+      <button type="button" class="btn ok sm" data-voice="send">Send voice note</button>
+      <button type="button" class="btn ghost sm" data-voice="discard">Discard</button>
+    </div>
+    <div class="row">
+      <button class="btn">Send</button>
+      <button type="button" class="btn ghost" data-voice="record" aria-pressed="false">🎙 Record</button>
+      <label class="btn ghost attach">📎 Attach
+        <input type="file" name="file" accept="audio/*,image/png,image/jpeg,image/webp,image/heic,application/pdf" multiple>
+      </label>
+      <span class="why" data-voice-status aria-live="polite"></span>
+    </div>
+{{end}}
+
 {{define "item"}}{{with .Data.Item}}
 <section class="pane main-pane" aria-label="Thread">
   <div class="pane-h">
@@ -78,7 +94,7 @@
         <span class="who">{{.Who}} · {{.Time}}</span>
         {{with .Text}}<p>{{.}}</p>{{end}}
         {{range .Media}}
-          {{if .Audio}}<audio controls preload="none" src="{{.URL}}"></audio>
+          {{if .Audio}}<span class="voice-label">🎙 Voice note</span><audio controls preload="none" src="{{.URL}}"></audio>
           {{else if .Image}}<a href="{{.URL}}" hx-boost="false"><img src="{{.URL}}" alt="Attached image" loading="lazy"></a>
           {{else}}<a href="{{.URL}}" hx-boost="false">Attached file</a>{{end}}
         {{end}}
@@ -92,10 +108,10 @@
     {{end}}
   </div>
   {{if not .Closed}}
-  <form class="composer" method="post" action="/t/{{$.Slug}}/items/{{.Item.ID}}/say">
+  <form class="composer" method="post" action="/t/{{$.Slug}}/items/{{.Item.ID}}/say" enctype="multipart/form-data">
     <label for="msg" class="ctl-label">Message</label>
-    <textarea id="msg" name="text" required placeholder="Answer Seyal, give a short command like submit, or write a note"></textarea>
-    <div class="row"><button class="btn">Send</button><span class="why">Ctrl + Enter sends</span></div>
+    <textarea id="msg" name="text" placeholder="Answer Seyal, give a short command like submit, or write a note"></textarea>
+    {{template "tools"}}
   </form>
   {{end}}
 </section>

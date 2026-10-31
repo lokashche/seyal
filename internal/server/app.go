@@ -5,6 +5,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -20,6 +21,7 @@ import (
 	"seyal/internal/db"
 	"seyal/internal/engine"
 	"seyal/internal/ledger"
+	"seyal/internal/media"
 	"seyal/internal/playbook"
 	"seyal/internal/thread"
 	"seyal/internal/workitem"
@@ -419,15 +421,17 @@ func (s *Server) showScreen(w http.ResponseWriter, r *http.Request, c *call, ite
 }
 
 func (s *Server) tell(w http.ResponseWriter, r *http.Request, c *call) {
-	text := strings.TrimSpace(r.PostFormValue("text"))
-	if text == "" {
-		s.showScreen(w, r, c, "", http.StatusUnprocessableEntity, "Please write what the work is.")
+	in, err := s.incoming(w, r, c)
+	if err == nil && in.Text == "" && len(in.Files) == 0 {
+		err = errors.New("please write or record what the work is")
+	}
+	if err != nil {
+		s.showScreen(w, r, c, "", http.StatusUnprocessableEntity, sentence(err.Error())+".")
 		return
 	}
 	var itemID string
-	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
-		reply, err := ask.Begin(r.Context(), tx, s.store, r.PostFormValue("playbook"), channel.Incoming{
-			Channel: channel.Web{}.Name(), PersonID: c.session.PersonID, Text: text})
+	err = db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
+		reply, err := ask.Begin(r.Context(), tx, s.store, r.FormValue("playbook"), in)
 		itemID = reply.Item.ID
 		return err
 	})
@@ -439,17 +443,60 @@ func (s *Server) tell(w http.ResponseWriter, r *http.Request, c *call) {
 }
 
 func (s *Server) say(w http.ResponseWriter, r *http.Request, c *call) {
-	id, text := r.PathValue("id"), strings.TrimSpace(r.PostFormValue("text"))
-	if text == "" {
-		s.showScreen(w, r, c, id, http.StatusUnprocessableEntity, "Please write a message.")
+	id := r.PathValue("id")
+	in, err := s.incoming(w, r, c)
+	if err == nil && in.Text == "" && len(in.Files) == 0 {
+		err = errors.New("please write a message, record a voice note or attach a file")
+	}
+	if err != nil {
+		s.showScreen(w, r, c, id, http.StatusUnprocessableEntity, sentence(err.Error())+".")
 		return
 	}
-	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
-		_, err := ask.Converse(r.Context(), tx, s.store, id, channel.Incoming{
-			Channel: channel.Web{}.Name(), PersonID: c.session.PersonID, Text: text})
+	err = db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
+		_, err := ask.Converse(r.Context(), tx, s.store, id, in)
 		return err
 	})
 	s.done(w, r, c, id, err)
+}
+
+// maxFiles is how many files one message may carry.
+const maxFiles = 5
+
+// incoming reads the composer form: the text, plus a recorded voice note and attached files when the
+// form is sent as multipart. The whole request is limited in size before anything is read.
+func (s *Server) incoming(w http.ResponseWriter, r *http.Request, c *call) (channel.Incoming, error) {
+	in := channel.Incoming{Channel: channel.Web{}.Name(), PersonID: c.session.PersonID}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFiles*media.MaxSize+1<<20)
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		if err := r.ParseMultipartForm(8 << 20); err != nil {
+			return in, errors.New("the message or its files are too large")
+		}
+		for _, field := range []string{"voice", "file"} {
+			for _, fh := range r.MultipartForm.File[field] {
+				if fh.Size == 0 {
+					continue // an empty file input
+				}
+				if len(in.Files) == maxFiles {
+					return in, fmt.Errorf("a message can carry at most %d files", maxFiles)
+				}
+				if fh.Size > media.MaxSize {
+					return in, fmt.Errorf("files can be at most %d MB", media.MaxSize>>20)
+				}
+				f, err := fh.Open()
+				if err != nil {
+					return in, err
+				}
+				data, err := io.ReadAll(f)
+				f.Close()
+				if err != nil {
+					return in, err
+				}
+				in.Files = append(in.Files, channel.File{ContentType: fh.Header.Get("Content-Type"), Data: data})
+			}
+		}
+	}
+	in.Text = strings.TrimSpace(r.FormValue("text"))
+	return in, nil
 }
 
 func (s *Server) act(w http.ResponseWriter, r *http.Request, c *call) {
