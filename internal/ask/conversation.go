@@ -99,6 +99,17 @@ func Converse(ctx context.Context, tx pgx.Tx, store media.Store, itemID string, 
 	return c.reply, nil
 }
 
+// Pending returns the field Seyal is waiting for an answer to on this item, or nil.
+// tx must come from db.WithTenant.
+func Pending(ctx context.Context, tx pgx.Tx, it workitem.Item) (*playbook.Field, error) {
+	p, err := workitem.PlaybookFor(ctx, tx, it)
+	if err != nil {
+		return nil, err
+	}
+	c := &conversation{ctx: ctx, tx: tx, p: p, reply: Reply{Item: it}}
+	return c.pending()
+}
+
 type conversation struct {
 	ctx    context.Context
 	tx     pgx.Tx

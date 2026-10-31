@@ -1,0 +1,17 @@
+{{define "title"}}Log in · Seyal{{end}}
+{{define "content"}}
+<div class="center">
+  <form method="post" class="card">
+    <h1>Seyal<span class="tamil" lang="ta">செயல்</span></h1>
+    <p class="lede">No forms. Just tell Seyal.</p>
+    {{with .Error}}<p class="error" role="alert">{{.}}</p>{{end}}
+    <label>Email
+      <input type="email" name="email" autocomplete="username" required autofocus value="{{.Data}}">
+    </label>
+    <label>Password
+      <input type="password" name="password" autocomplete="current-password" required>
+    </label>
+    <button class="btn">Log in</button>
+  </form>
+</div>
+{{end}}

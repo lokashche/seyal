@@ -40,16 +40,37 @@ type Item struct {
 // ErrNotFound means there is no work item with that id.
 var ErrNotFound = errors.New("work item not found")
 
-const selectItem = `
+const selectItems = `
 	SELECT id::text, number, playbook_version_id::text, title, state,
 		coalesce(assignee_id::text, ''), coalesce(to_char(due_on, 'YYYY-MM-DD'), ''),
 		version, fields, fields_sha256, started_via, coalesce(started_ref, ''),
 		coalesce(created_by::text, '')
-	FROM work_items WHERE tenant_id = current_tenant() AND id::text = $1`
+	FROM work_items WHERE tenant_id = current_tenant()`
+
+const selectItem = selectItems + ` AND id::text = $1`
 
 // Get returns one work item. tx must come from db.WithTenant.
 func Get(ctx context.Context, tx pgx.Tx, id string) (Item, error) {
 	return scanItem(tx.QueryRow(ctx, selectItem, id))
+}
+
+// List returns the tenant's work items, most recently changed first, at most 500.
+// tx must come from db.WithTenant.
+func List(ctx context.Context, tx pgx.Tx) ([]Item, error) {
+	rows, err := tx.Query(ctx, selectItems+` ORDER BY updated_at DESC, number LIMIT 500`)
+	if err != nil {
+		return nil, fmt.Errorf("workitem: list: %w", err)
+	}
+	defer rows.Close()
+	var items []Item
+	for rows.Next() {
+		it, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, it)
+	}
+	return items, rows.Err()
 }
 
 // getForUpdate returns one work item and locks it until the transaction ends, so two people

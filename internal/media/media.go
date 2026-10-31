@@ -20,10 +20,14 @@ import (
 // MaxSize is the largest file accepted (25 MB): enough for several minutes of voice.
 const MaxSize = 25 << 20
 
-// Allowed reports whether a file of this type may be stored: audio, images and PDFs.
+// Allowed reports whether a file of this type may be stored: audio, images and PDFs. SVG images are
+// refused, because an SVG can contain scripts.
 func Allowed(contentType string) bool {
 	base, _, _ := strings.Cut(strings.ToLower(contentType), ";")
 	base = strings.TrimSpace(base)
+	if base == "image/svg+xml" {
+		return false
+	}
 	return strings.HasPrefix(base, "audio/") || strings.HasPrefix(base, "image/") || base == "application/pdf"
 }
 

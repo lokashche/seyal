@@ -57,6 +57,7 @@ func TestAllowed(t *testing.T) {
 		"image/jpeg":             true,
 		"application/pdf":        true,
 		"text/html":              false,
+		"image/svg+xml":          false, // can contain scripts
 		"application/x-msdos":    false,
 		"":                       false,
 	} {

@@ -126,6 +126,12 @@ func Login(ctx context.Context, tx pgx.Tx, email, password, userAgent string) (t
 	return token, s, err
 }
 
+// Pretend spends as long as checking a real password. Use it for a login to an address that
+// doesn't exist, so the answer can't reveal which addresses do.
+func Pretend(password string) {
+	bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
+}
+
 // Check returns the session for a token from a cookie, or ErrNoSession. A person who was disabled
 // is logged out at once. tx must come from db.WithTenant.
 func Check(ctx context.Context, tx pgx.Tx, token string) (Session, error) {

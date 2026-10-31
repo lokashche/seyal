@@ -1,0 +1,162 @@
+{{define "title"}}{{with .Data.Item}}{{.Item.Number}} · {{end}}Seyal{{end}}
+{{define "content"}}
+<header class="bar">
+  <a class="brand" href="/t/{{.Slug}}/">Seyal<span class="tamil" lang="ta">செயல்</span></a>
+  <span class="biz">{{.Business}}</span>
+  <form method="post" action="/t/{{.Slug}}/logout" class="who">
+    <span>{{.Session.Name}}</span>
+    <button class="btn ghost sm">Log out</button>
+  </form>
+</header>
+{{with .Error}}<p class="banner error" role="alert">{{.}}</p>{{end}}
+<div class="app{{if .Data.Item}} has-item{{end}}">
+  <section class="pane list-pane" aria-label="My Work">
+    <div class="pane-h"><b>My Work</b><small>as {{.Session.Name}}</small></div>
+    <nav class="groups">
+      <a class="item tell{{if not .Data.Item}} current{{end}}" href="/t/{{.Slug}}/">+ Tell Seyal</a>
+      {{range .Data.Groups}}
+        <div class="grp">{{.Title}}</div>
+        {{range .Rows}}
+        <a class="item" href="/t/{{$.Slug}}/items/{{.ID}}"{{if eq .ID $.Data.Current}} aria-current="true"{{end}}>
+          <span class="id">{{.Number}}{{with .Kind}} · {{.}}{{end}}</span>
+          <span class="t">{{or .Title "Untitled"}}</span>
+          <span class="pill {{.Pill}}">{{.Status}}</span>
+        </a>
+        {{end}}
+      {{else}}
+        <p class="none">Nothing open. Tell Seyal about new work.</p>
+      {{end}}
+    </nav>
+  </section>
+  {{if .Data.Item}}{{template "item" .}}{{else}}{{template "tell" .}}{{end}}
+</div>
+{{end}}
+
+{{define "tell"}}
+<section class="pane main-pane" aria-label="Tell Seyal">
+  <div class="pane-h"><b>Tell Seyal</b></div>
+  <div class="thread" id="thread">
+    <div class="empty">Type the work as you would tell a colleague. Seyal turns it into a work item and asks only for what's missing.</div>
+  </div>
+  {{with .Data.Tell}}
+  <form class="composer" method="post" action="/t/{{$.Slug}}/tell">
+    {{if gt (len .Choices) 1}}
+      <label class="ctl-label">Type<select name="playbook">{{range .Choices}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>
+    {{else}}{{range .Choices}}<input type="hidden" name="playbook" value="{{.ID}}">{{end}}{{end}}
+    <label for="msg" class="ctl-label">Message</label>
+    <textarea id="msg" name="text" required placeholder="For example: new monthly bookkeeping job for Sundaram Textiles"></textarea>
+    <div class="row"><button class="btn">Send</button><span class="why">Ctrl + Enter sends</span></div>
+  </form>
+  {{else}}
+  <p class="none">No playbooks are set up for this business yet.</p>
+  {{end}}
+</section>
+<aside class="pane side-pane" aria-label="Fields">
+  <div class="pane-h"><b>Fields &amp; approvals</b></div>
+  <div class="side">
+    {{with .Data.Tell}}
+    <h4>{{.Name}} fields</h4>
+    <dl class="fields">{{range .Fields}}<dt>{{.}}</dt><dd class="miss">waiting</dd>{{end}}</dl>
+    <p class="why">These fill themselves from the conversation. Nobody types into a form.</p>
+    {{end}}
+  </div>
+</aside>
+{{end}}
+
+{{define "item"}}{{with .Data.Item}}
+<section class="pane main-pane" aria-label="Thread">
+  <div class="pane-h">
+    <a class="back" href="/t/{{$.Slug}}/">← My Work</a>
+    <b>{{or .Item.Title "Untitled"}}</b><small>{{.Item.Number}}</small>
+  </div>
+  <div class="thread" id="thread">
+    {{range .Thread}}
+      {{if eq .Kind "evt"}}
+      <div class="evt">· {{.Who}}: {{.Text}} ·</div>
+      {{else}}
+      <div class="msg {{.Kind}}">
+        <span class="who">{{.Who}} · {{.Time}}</span>
+        {{with .Text}}<p>{{.}}</p>{{end}}
+        {{range .Media}}
+          {{if .Audio}}<audio controls preload="none" src="{{.URL}}"></audio>
+          {{else if .Image}}<a href="{{.URL}}" hx-boost="false"><img src="{{.URL}}" alt="Attached image" loading="lazy"></a>
+          {{else}}<a href="{{.URL}}" hx-boost="false">Attached file</a>{{end}}
+        {{end}}
+      </div>
+      {{end}}
+    {{end}}
+    {{with .Quick}}
+    <div class="quick">
+      {{range .}}<form method="post" action="/t/{{$.Slug}}/items/{{$.Data.Item.Item.ID}}/say"><input type="hidden" name="text" value="{{.}}"><button>{{.}}</button></form>{{end}}
+    </div>
+    {{end}}
+  </div>
+  {{if not .Closed}}
+  <form class="composer" method="post" action="/t/{{$.Slug}}/items/{{.Item.ID}}/say">
+    <label for="msg" class="ctl-label">Message</label>
+    <textarea id="msg" name="text" required placeholder="Answer Seyal, give a short command like submit, or write a note"></textarea>
+    <div class="row"><button class="btn">Send</button><span class="why">Ctrl + Enter sends</span></div>
+  </form>
+  {{end}}
+</section>
+<aside class="pane side-pane" aria-label="Fields and approvals">
+  <div class="pane-h"><b>Fields &amp; approvals</b><small>version {{.Item.Version}}</small></div>
+  <div class="side">
+    <div><span class="pill {{.Pill}}">{{.Status}}</span></div>
+    <h4>{{.Kind}} fields</h4>
+    <dl class="fields">
+      {{range .Fields}}<dt>{{.Label}}</dt><dd{{if .Missing}} class="miss"{{end}}>{{if .Missing}}Seyal will ask{{else}}{{or .Value "—"}}{{end}}</dd>{{end}}
+    </dl>
+
+    {{with .Slots}}
+    <h4>Approvals</h4>
+    <div class="appr">
+      {{range .}}
+      <div class="ap">
+        <div>{{.Name}}<span class="r">{{.Why}}</span></div>
+        {{if .Done}}<span class="s-ok">✓ {{.By}}</span>
+        {{else if .CanDecide}}
+          <form method="post" action="/t/{{$.Slug}}/items/{{$.Data.Item.Item.ID}}/decide">
+            <input type="hidden" name="slot" value="{{.Slot}}">
+            <button class="btn ok sm" name="decision" value="approve">Approve</button>
+          </form>
+          <details>
+            <summary>Refuse…</summary>
+            <form method="post" action="/t/{{$.Slug}}/items/{{$.Data.Item.Item.ID}}/decide" class="reason">
+              <input type="hidden" name="slot" value="{{.Slot}}">
+              <input name="reason" required placeholder="Why?" aria-label="Reason for refusing">
+              <button class="btn warn sm" name="decision" value="reject">Refuse</button>
+            </form>
+          </details>
+        {{else}}<span class="s-wait">waiting</span>{{end}}
+      </div>
+      {{end}}
+    </div>
+    <p class="why">Approvals belong to version {{$.Data.Item.Item.Version}}. Any change resets them.</p>
+    {{end}}
+
+    {{with .Actions}}
+    <h4>Actions</h4>
+    <div class="acts">
+      {{range .}}
+        {{if .NeedsReason}}
+        <details>
+          <summary>{{.Label}}…</summary>
+          <form method="post" action="/t/{{$.Slug}}/items/{{$.Data.Item.Item.ID}}/act" class="reason">
+            <input type="hidden" name="action" value="{{.Name}}">
+            <input name="reason" required placeholder="Why?" aria-label="Reason">
+            <button class="btn warn sm">{{.Label}}</button>
+          </form>
+        </details>
+        {{else}}
+        <form method="post" action="/t/{{$.Slug}}/items/{{$.Data.Item.Item.ID}}/act">
+          <input type="hidden" name="action" value="{{.Name}}">
+          <button class="btn sm">{{.Label}}</button>
+        </form>
+        {{end}}
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+</aside>
+{{end}}{{end}}

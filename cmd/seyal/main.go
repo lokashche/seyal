@@ -46,6 +46,8 @@ func run(args []string, out io.Writer) error {
 		return runVerify(args[1:], out)
 	case "check":
 		return runCheck(out)
+	case "serve":
+		return runServe(out)
 	case "import":
 		return runImport(args[1:], out)
 	case "seed":
@@ -66,6 +68,7 @@ func usage(out io.Writer) {
 
 Commands:
   version        print the version
+  serve          start the web app (SEYAL_ADDR, default 127.0.0.1:8080)
   dev up         start the local database (Docker)
   dev down       stop the local database
   dev test       run the quick tests
