@@ -43,6 +43,8 @@ type group struct {
 
 type row struct {
 	ID, Number, Title, Kind, Pill, Status string
+	Hint                                  string // what happens next, for the person looking
+	Quoted                                bool   // Title is the start of the first message (the item has no title yet)
 }
 
 type tellView struct {
@@ -71,6 +73,7 @@ type itemView struct {
 	Pill    string
 	Status  string
 	With    string // who has it now: a person, or a team
+	Links   []linkView
 	Closed  bool
 	Thread  []entryView
 	Quick   []string
@@ -85,6 +88,11 @@ type entryView struct {
 	Text  string
 	Time  string
 	Media []mediaView
+}
+
+// linkView is a linked work item: the one this item is part of, or one it started.
+type linkView struct {
+	ID, Number, Title, Kind, Status, Relation string
 }
 
 type mediaView struct {
@@ -159,62 +167,6 @@ func (v *view) playbook(it workitem.Item) (*playbook.Playbook, error) {
 
 // groups builds the My Work list. Each open item appears once, in the first group it fits:
 // waiting for my approval, overdue, assigned to me, my drafts, other open work.
-func (v *view) groups() ([]group, error) {
-	items, err := workitem.List(v.ctx, v.tx)
-	if err != nil {
-		return nil, err
-	}
-	titles := []string{"Waiting for my approval", "Overdue", "My drafts", "Assigned to me", "For my team", "Other open work"}
-	buckets := make([][]row, len(titles))
-	kinds := map[string]bool{}
-	type placed struct {
-		r      row
-		bucket int
-		pbID   string
-	}
-	var all []placed
-	me := v.c.session.PersonID
-	for _, it := range items {
-		p, err := v.playbook(it)
-		if err != nil {
-			return nil, err
-		}
-		if engine.IsClosed(p, it.State) {
-			continue
-		}
-		kinds[p.ID] = true
-		pill, status := v.status(p, it)
-		r := row{ID: it.ID, Number: it.Number, Title: it.Title, Pill: pill, Status: status}
-		bucket := 5
-		switch {
-		case p.Approvals != nil && it.State == p.Approvals.In && v.mine(it):
-			bucket = 0
-		case it.DueOn != "" && it.DueOn < v.today && (it.AssigneeID == me || it.CreatedBy == me):
-			bucket = 1
-		case it.CreatedBy == me && it.State == p.Initial:
-			bucket = 2
-		case it.AssigneeID == me:
-			bucket = 3
-		case it.AssigneeID == "" && it.Team != "" && slices.Contains(v.c.session.Roles, it.Team):
-			bucket = 4
-		}
-		all = append(all, placed{r, bucket, p.ID})
-	}
-	for _, pl := range all {
-		if len(kinds) > 1 {
-			pl.r.Kind = human(pl.pbID)
-		}
-		buckets[pl.bucket] = append(buckets[pl.bucket], pl.r)
-	}
-	var out []group
-	for i, rows := range buckets {
-		if len(rows) > 0 {
-			out = append(out, group{Title: titles[i], Rows: rows})
-		}
-	}
-	return out, nil
-}
-
 // mine reports whether the item waits for a decision the person can make.
 func (v *view) mine(it workitem.Item) bool {
 	st, err := workitem.Approvals(v.ctx, v.tx, it.ID)
@@ -319,6 +271,10 @@ func (v *view) item(id string) (*itemView, error) {
 			return nil, err
 		}
 		iv.With = cmp.Or(name, it.Team) + " team"
+	}
+
+	if iv.Links, err = v.links(it.ID); err != nil {
+		return nil, err
 	}
 
 	entries, err := thread.For(v.ctx, v.tx, id)
@@ -671,7 +627,10 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request, c *call) {
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		_, err := workitem.Act(r.Context(), tx, id, r.PostFormValue("action"), strings.TrimSpace(r.PostFormValue("reason")),
 			ledger.PersonActor(c.session.PersonID))
-		return err
+		if err != nil {
+			return err
+		}
+		return ask.Nudge(r.Context(), tx, s.env(), id)
 	})
 	s.done(w, r, c, id, err)
 }
@@ -681,7 +640,10 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, c *call) {
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		_, err := workitem.Decide(r.Context(), tx, id, c.session.PersonID, r.PostFormValue("slot"),
 			r.PostFormValue("decision"), strings.TrimSpace(r.PostFormValue("reason")))
-		return err
+		if err != nil {
+			return err
+		}
+		return ask.Nudge(r.Context(), tx, s.env(), id)
 	})
 	s.done(w, r, c, id, err)
 }

@@ -32,7 +32,7 @@ transitions:
 `
 
 // TestStepsOnScreen: the starter is asked only the first step's question; "send to ops" puts the
-// item under "For my team" for everyone in Ops, the item says who has it, and Ops is asked its own
+// item under "For your team" for everyone in Ops, the item says who has it, and Ops is asked its own
 // question.
 func TestStepsOnScreen(t *testing.T) {
 	s := newSite(t)
@@ -66,8 +66,8 @@ func TestStepsOnScreen(t *testing.T) {
 
 	p := s.logIn(priya) // ops
 	_, home, _ = s.get(p, base+"/")
-	if !strings.Contains(home, "For my team") {
-		t.Errorf("Priya (ops) doesn't see the item under For my team")
+	if !strings.Contains(home, "For your team") {
+		t.Errorf("Priya (ops) doesn't see the item under For your team")
 	}
 	_, page, _ = s.get(p, item)
 	page = html.UnescapeString(page)
@@ -75,7 +75,54 @@ func TestStepsOnScreen(t *testing.T) {
 		!strings.Contains(page, "What amount?") {
 		t.Errorf("after send to ops, the item should be with the Operations team and ask Ops' question:\n%s", problem(page))
 	}
-	if _, home, _ = s.get(a, base+"/"); strings.Contains(home, "For my team") {
-		t.Error("Arjun (sales) sees it under For my team")
+	if _, home, _ = s.get(a, base+"/"); strings.Contains(home, "For your team") {
+		t.Error("Arjun (sales) sees it under For your team")
+	}
+}
+
+// TestLinkedWorkOnScreen: with the shipped samples, a job for new work shows its study under "Linked
+// work", the study shows the job it is part of, and the study is under "For your team" for Ops.
+func TestLinkedWorkOnScreen(t *testing.T) {
+	s := newSiteWith(t, "../../examples/playbooks")
+	base := "/t/" + s.slug
+	// TDS returns is marked new in the demo data, so it is studied first.
+	a := s.logIn(arjun)
+	_, home, _ := s.get(a, base+"/")
+	m := regexp.MustCompile(`value="([^"]+)" form="tell-form" data-name="Job evaluation"`).FindStringSubmatch(home)
+	if m == nil {
+		t.Fatalf("Tell Seyal doesn't offer Job evaluation:\n%s", problem(home))
+	}
+	_, _, h := s.post(a, base+"/tell", url.Values{"playbook": {m[1]}, "text": {"TDS work for Ganga"}}, nil)
+	job := h.Get("Location")
+	for _, answer := range []string{"ganga", "tds", "Quarterly returns", "pass", "send to ops"} {
+		s.post(a, job+"/say", url.Values{"text": {answer}}, nil)
+	}
+	_, page, _ := s.get(a, job)
+	page = html.UnescapeString(page)
+	if !strings.Contains(page, "Linked work") || !strings.Contains(page, "Started</span> <a") ||
+		!strings.Contains(page, "Requirement study") || !strings.Contains(page, "study it first") {
+		t.Fatalf("the job should show its study:\n%s", problem(page))
+	}
+	study := regexp.MustCompile(`Started</span> <a href="([^"]+)"`).FindStringSubmatch(page)[1]
+	if strings.Count(page, "Started requirement study") != 1 || strings.Contains(page, "added sub-item") || strings.Contains(page, "from this") ||
+		strings.Contains(page, "changed Fee proposed by Sales") {
+		t.Errorf("the job's thread repeats the link or shows bookkeeping:\n%s", problem(page))
+	}
+	// Arjun's My Work: the job waits on others and says for what.
+	_, home, _ = s.get(a, base+"/")
+	waitingGroup := home[strings.Index(home, "Waiting on others"):]
+	if !strings.Contains(html.UnescapeString(waitingGroup), "Waiting for requirement study S-") ||
+		!strings.Contains(html.UnescapeString(waitingGroup), "(Operations team)") {
+		t.Errorf("Arjun's job should wait on others, for the study:\n%s", problem(home))
+	}
+
+	p := s.logIn(priya)
+	if _, home, _ := s.get(p, base+"/"); !strings.Contains(home, "For your team") || !strings.Contains(home, "requirement study") ||
+		!strings.Contains(html.UnescapeString(home), "Seyal is asking: How will we do this work?") {
+		t.Errorf("Priya (ops) should see the study under For your team, with Seyal's question:\n%s", problem(home))
+	}
+	_, page, _ = s.get(p, study)
+	if !strings.Contains(page, "Part of</span>") || !strings.Contains(page, "How will we do this work?") {
+		t.Errorf("the study should show its job and ask Ops' first question:\n%s", problem(page))
 	}
 }

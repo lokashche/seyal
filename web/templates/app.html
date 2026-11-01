@@ -11,7 +11,8 @@
         {{range .Rows}}
         <a class="item" href="/t/{{$.Slug}}/items/{{.ID}}"{{if eq .ID $.Data.Current}} aria-current="true"{{end}}>
           <span class="id">{{.Number}}{{with .Kind}} · {{.}}{{end}}</span>
-          <span class="t">{{or .Title "Untitled"}}</span>
+          <span class="t{{if .Quoted}} q{{end}}">{{if .Quoted}}“{{.Title}}”{{else}}{{or .Title "Untitled"}}{{end}}</span>
+          {{with .Hint}}<span class="hint">{{.}}</span>{{end}}
           <span class="pill {{.Pill}}">{{.Status}}</span>
         </a>
         {{end}}
@@ -145,6 +146,12 @@
   <div class="pane-h"><b>Fields &amp; approvals</b><small>version {{.Item.Version}}</small></div>
   <div class="side">
     <div><span class="pill {{.Pill}}">{{.Status}}</span>{{with .With}} <span class="why">with {{.}}</span>{{end}}</div>
+    {{with .Links}}
+    <h4>Linked work</h4>
+    <ul class="links">
+      {{range .}}<li><span class="why">{{.Relation}}</span> <a href="/t/{{$.Slug}}/items/{{.ID}}">{{.Number}}</a> {{.Kind}}{{with .Title}} · {{.}}{{end}} <span class="why">· {{.Status}}</span></li>{{end}}
+    </ul>
+    {{end}}
     <h4>{{.Kind}} fields</h4>
     <dl class="fields">
       {{range .Fields}}

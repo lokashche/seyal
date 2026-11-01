@@ -244,8 +244,8 @@ func (c *conversation) apply(pr *proposal, text string, pending *playbook.Field)
 	var offers []newItem // new names, one per field, offered one after another
 	for _, key := range sortedKeys(pr.Fields) {
 		f := c.field(key)
-		if f == nil || f.Readonly {
-			continue
+		if f == nil || f.Readonly || strings.TrimSpace(pr.Fields[key]) == "" {
+			continue // unknown, automatic, or not given
 		}
 		v, err := Understand(*f, pr.Fields[key], c.today, choices{c.ctx, c.tx})
 		if err == nil {

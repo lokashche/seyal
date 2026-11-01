@@ -340,6 +340,9 @@ func (s *Server) addProcess(w http.ResponseWriter, r *http.Request, c *call) {
 		if err := s.checkForBusiness(r, tx, t); err != nil {
 			return err
 		}
+		if err := playbook.EnsureStarted(r.Context(), tx, s.lib, t, by); err != nil {
+			return err
+		}
 		_, err := playbook.EnsureUsed(r.Context(), tx, t, by)
 		return err
 	})
@@ -402,6 +405,9 @@ func (s *Server) changeProcess(w http.ResponseWriter, r *http.Request, c *call) 
 			}
 			if err := s.checkForBusiness(r, tx, t); err != nil {
 				return s.explainListGap(r, tx, t, err)
+			}
+			if err := playbook.EnsureStarted(r.Context(), tx, s.lib, t, by); err != nil {
+				return err
 			}
 			versionID, _, err := playbook.Register(r.Context(), tx, t)
 			if err != nil {

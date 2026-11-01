@@ -165,6 +165,9 @@ func (v *validator) statesAndTransitions() {
 		if t.Needs != "" && t.Needs != "reason" {
 			v.add(`%s: unknown "needs" %q (use reason)`, where, t.Needs)
 		}
+		if t.By != "" && t.By != "seyal" {
+			v.add(`%s: unknown "by" %q (use seyal, or leave it out)`, where, t.By)
+		}
 	}
 	v.unique("transitions", actions)
 }
@@ -313,8 +316,22 @@ func (v *validator) deadlinesAndActions() {
 				if from != nil && to != nil && (from.Type != to.Type || from.Of != to.Of) {
 					v.add("%s: copy from %s (%s) to %s (%s): the types must match", where, from.Key, from.Type, to.Key, to.Type)
 				}
+			case "start":
+				if strings.TrimSpace(a.Process) == "" || a.Text != "" || a.To != "" || a.From != "" || a.Action != "" {
+					v.add(`%s: start needs "process" (and optionally "copy"), nothing else`, where)
+				}
+				for _, child := range slices.Sorted(maps.Keys(a.Copy)) {
+					v.fieldRef(a.Copy[child], where+": start: copy")
+				}
+			case "tell_parent":
+				if strings.TrimSpace(a.Action) == "" || a.Text != "" || a.To != "" || a.From != "" || a.Process != "" {
+					v.add(`%s: tell_parent needs "action" (and optionally "copy"), nothing else`, where)
+				}
+				for _, parent := range slices.Sorted(maps.Keys(a.Copy)) {
+					v.fieldRef(a.Copy[parent], where+": tell_parent: copy")
+				}
 			default:
-				v.add("%s: unknown action %q (use post, assign or copy)", where, a.Do)
+				v.add("%s: unknown action %q (use post, assign, copy, start or tell_parent)", where, a.Do)
 			}
 		}
 	}

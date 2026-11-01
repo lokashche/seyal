@@ -6,6 +6,7 @@
 package thread
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"seyal/internal/channel"
+	"seyal/internal/engine"
 	"seyal/internal/playbook"
 	"seyal/internal/workitem"
 )
@@ -62,7 +64,9 @@ type builder struct {
 	tx      pgx.Tx
 	p       *playbook.Playbook
 	names   map[string]string // person id → display name
+	roles   map[string]string // role key → name, for hand-offs to a team
 	numbers map[string]string // item id → number, for links
+	before  engine.Fields     // the item's fields before the event being described
 	entries []Entry
 }
 
@@ -84,6 +88,15 @@ func (b *builder) loadNames() error {
 	b.numbers = map[string]string{}
 	for _, it := range items {
 		b.numbers[it.ID] = it.Number
+	}
+	rows, _ = b.tx.Query(b.ctx, `SELECT key, name FROM roles WHERE tenant_id = current_tenant()`)
+	roles, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ Key, Name string }])
+	if err != nil {
+		return fmt.Errorf("thread: roles: %w", err)
+	}
+	b.roles = map[string]string{}
+	for _, r := range roles {
+		b.roles[r.Key] = r.Name
 	}
 	return nil
 }
@@ -119,10 +132,10 @@ func (b *builder) addEvents(itemID string) error {
 		}
 		e.Who = b.who(actorKind, actor, behalf)
 		pl := parsed.Payload
-		if e.Kind == "item.linked" {
-			e.Text = b.describeLink(itemID, pl.From, pl.To, pl.Kind)
-		} else {
+		// Links aren't lines of their own: starting linked work posts a message in both threads.
+		if e.Kind != "item.linked" {
 			e.Text = b.describe(e.Kind, pl.Change, pl.Item)
+			b.before = pl.Item.Fields
 		}
 		if e.Text != "" {
 			b.entries = append(b.entries, e)
@@ -163,10 +176,18 @@ func (b *builder) describe(kind string, change map[string]any, it workitem.Item)
 	case "item.started":
 		return "started " + it.Number
 	case "item.fields_set":
+		if change["copied_from"] != nil {
+			return "" // Seyal keeping a value for later is bookkeeping, not news
+		}
 		values, _ := change["values"].(map[string]any)
 		labels := make([]string, 0, len(values))
 		for _, key := range slices.Sorted(maps.Keys(values)) {
-			labels = append(labels, b.label(key))
+			if !engine.SameValue(b.before[key], it.Fields[key]) {
+				labels = append(labels, b.label(key))
+			}
+		}
+		if len(labels) == 0 {
+			return ""
 		}
 		text := "changed " + strings.Join(labels, ", ")
 		if from := str("state_from"); from != "" {
@@ -199,22 +220,12 @@ func (b *builder) describe(kind string, change map[string]any, it workitem.Item)
 	case "item.posted":
 		return str("text")
 	case "item.assigned":
+		if team := str("team"); team != "" {
+			return "handed it to the " + cmp.Or(b.roles[team], team) + " team"
+		}
 		return "assigned it to " + b.name(str("assignee_id"))
 	}
 	return ""
-}
-
-func (b *builder) describeLink(itemID, from, to, kind string) string {
-	switch {
-	case kind == "parent" && from == itemID:
-		return "added sub-item " + b.number(to)
-	case kind == "parent":
-		return "made this a sub-item of " + b.number(from)
-	case kind == "started_by" && from == itemID:
-		return "started because of " + b.number(to)
-	default:
-		return "started " + b.number(from) + " from this"
-	}
 }
 
 // who names the actor of an event the way people expect to read it.

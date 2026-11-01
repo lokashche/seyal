@@ -234,7 +234,8 @@ Process definition keys:
 - transitions: each { action, from: [states], to, when: required_filled (optional), needs: reason (optional),
   if: a condition (optional) }. The same action may be listed more than once with different "if"s: the first
   true one is taken; list the one without "if" (the default) last. Action names are lowercase_with_underscores
-  and people may type them with spaces ("send to ops").
+  and people may type them with spaces ("send to ops"). by: seyal marks a move only Seyal takes (e.g. when
+  linked work reports back); people can't take it.
 - steps (optional): who has the item in a state and what Seyal asks there:
   { state: { owner: starter | "role:<role>" | "field:<person field>", asks: [field keys], needs: [field keys] } }.
   owner: the person who started it, anyone with the role (shown to them under "For my team"), or the person in
@@ -250,6 +251,10 @@ Process definition keys:
 - on (optional): actions when entering a state: { state: [ { do: post, text: "..." }, { do: assign, to: person_field },
   { do: copy, from: field, to: field } ] }. post text may use {field_key}. copy keeps a value to compare with later
   (e.g. the amount proposed before someone else changes it); copy into a readonly field of the same type.
+  { do: start, process: other-process-id, copy: { its_field: this_field } } starts another process of this
+  business as linked work. In that other process, { do: tell_parent, action: an_action_of_the_parent,
+  copy: { parent_field: its_field } } reports back: it fills the parent's fields and takes that action (mark that
+  action "by: seyal" in the parent).
 
 List definition: { kind: lowercase_with_underscores, label: Singular label, fields: [ { key, label, type, ... } ] }.
 List fields use the types text, number, money, date, bool, choice, person, list; no ask, kind or prefill.

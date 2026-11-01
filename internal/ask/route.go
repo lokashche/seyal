@@ -191,3 +191,14 @@ func (c *conversation) start(pr *proposal) (Reply, error) {
 	}
 	return c.reply, nil
 }
+
+// Nudge asks the next question, if any, in an item and in the items linked to it (the one it is part
+// of, and those it started), for when something other than a message in their own thread changed them:
+// a button, or linked work starting or reporting back. A question already asked isn't repeated.
+// tx must come from db.WithTenant.
+func Nudge(ctx context.Context, tx pgx.Tx, env Env, itemID string) error {
+	if err := askIn(ctx, tx, env, []string{itemID}); err != nil {
+		return err
+	}
+	return nudgeLinked(ctx, tx, env, itemID)
+}

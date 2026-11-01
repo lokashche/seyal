@@ -83,12 +83,13 @@ func Owner(p *playbook.Playbook, state string) (kind, name string) {
 	return kind, name
 }
 
-// Actions returns the actions that can start from the item's current state, in playbook order and
-// each once. Transition still checks their other conditions (required fields, reason, if).
+// Actions returns the actions people can take from the item's current state, in playbook order and
+// each once (moves only Seyal takes are left out). Transition still checks their other conditions
+// (required fields, reason, if).
 func Actions(p *playbook.Playbook, it Item) []string {
 	var actions []string
 	for _, t := range p.Transitions {
-		if slices.Contains(t.From, it.State) && !slices.Contains(actions, t.Action) {
+		if t.By != "seyal" && slices.Contains(t.From, it.State) && !slices.Contains(actions, t.Action) {
 			actions = append(actions, t.Action)
 		}
 	}
@@ -99,7 +100,8 @@ func Actions(p *playbook.Playbook, it Item) []string {
 // to. reason is the reason the person gave, if any. When the action is listed more than once, the
 // first move whose if-condition is true is taken; an unknown answer doesn't count as true, so the
 // move without a condition (the default) is taken then. lookup finds master data for conditions.
-func Transition(p *playbook.Playbook, it Item, action, reason string, lookup MasterLookup) (string, error) {
+// bySeyal says Seyal itself takes the action; a move marked "by: seyal" refuses anyone else.
+func Transition(p *playbook.Playbook, it Item, action, reason string, lookup MasterLookup, bySeyal bool) (string, error) {
 	known, found := false, -1
 	for i, t := range p.Transitions {
 		if t.Action != action {
@@ -128,6 +130,9 @@ func Transition(p *playbook.Playbook, it Item, action, reason string, lookup Mas
 		return "", fmt.Errorf("%s while %s: %w", action, it.State, ErrNotNow)
 	}
 	t := p.Transitions[found]
+	if t.By == "seyal" && !bySeyal {
+		return "", fmt.Errorf("%s happens by itself: %w", action, ErrNotNow)
+	}
 	if t.When == "required_filled" {
 		if keys := Missing(p, it.State, it.Fields); len(keys) > 0 {
 			return "", &MissingError{Keys: keys}

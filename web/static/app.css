@@ -116,6 +116,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .fields dt { color: var(--muted); }
 .fields dd { margin: 0; font-weight: 500; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .fields .miss { color: var(--warn); font-weight: 400; font-style: italic; }
+.item .hint { display: block; font-size: 12.5px; color: var(--muted); margin: 2px 0 4px; }
+.item .t.q { font-weight: 500; font-style: italic; }
+.links { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; }
 .fields .from { display: block; font: 400 11px var(--f-mono); color: var(--muted); }
 .edit summary { display: inline-block; cursor: pointer; font: 500 11px var(--f-mono); color: var(--accent-ink); margin-top: 2px; }
 .edit[open] summary { margin-bottom: 4px; }

@@ -140,7 +140,43 @@ func Converse(ctx context.Context, tx pgx.Tx, env Env, itemID string, in channel
 			return Reply{}, err
 		}
 	}
+	// A command may have started linked work or moved a linked item on; ask there too.
+	if err := nudgeLinked(ctx, tx, env, it.ID); err != nil {
+		return Reply{}, err
+	}
 	return c.reply, nil
+}
+
+// nudgeLinked asks the next question in the items linked to this one (not in this one: its own
+// conversation has just done that).
+func nudgeLinked(ctx context.Context, tx pgx.Tx, env Env, itemID string) error {
+	rows, _ := tx.Query(ctx, `
+		SELECT CASE WHEN to_item_id::text = $1 THEN from_item_id::text ELSE to_item_id::text END
+		FROM work_item_links
+		WHERE tenant_id = current_tenant() AND kind = 'parent' AND (from_item_id::text = $1 OR to_item_id::text = $1)`, itemID)
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	return askIn(ctx, tx, env, ids)
+}
+
+// askIn asks the next question, if any, in each item (none in closed ones; none repeated).
+func askIn(ctx context.Context, tx pgx.Tx, env Env, ids []string) error {
+	for _, id := range ids {
+		it, err := workitem.Get(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		c, err := newConversation(ctx, tx, env, it.PlaybookVersionID, it, channel.Message{})
+		if err != nil {
+			return err
+		}
+		if err := c.askNext(false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Pending returns the field Seyal is waiting for an answer to on this item, or nil, and the name it

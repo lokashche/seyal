@@ -175,8 +175,10 @@ func (s *Server) setField(w http.ResponseWriter, r *http.Request, c *call) {
 		if err != nil {
 			return errors.New(ask.Label(f) + ": " + err.Error())
 		}
-		_, err = workitem.SetFields(r.Context(), tx, id, engine.Fields{key: value}, ledger.PersonActor(c.session.PersonID))
-		return err
+		if _, err = workitem.SetFields(r.Context(), tx, id, engine.Fields{key: value}, ledger.PersonActor(c.session.PersonID)); err != nil {
+			return err
+		}
+		return ask.Nudge(r.Context(), tx, s.env(), id)
 	})
 	s.done(w, r, c, id, err)
 }

@@ -52,7 +52,7 @@ func TestTransition(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			to, err := Transition(p, Item{State: tt.state, Fields: tt.fields}, tt.action, tt.reason, nil)
+			to, err := Transition(p, Item{State: tt.state, Fields: tt.fields}, tt.action, tt.reason, nil, false)
 			switch want := tt.wantErr.(type) {
 			case nil:
 				if err != nil || to != tt.wantTo {
@@ -71,7 +71,7 @@ func TestTransition(t *testing.T) {
 		})
 	}
 
-	if _, err := Transition(p, Item{State: "draft"}, "approve-everything", "", nil); err == nil {
+	if _, err := Transition(p, Item{State: "draft"}, "approve-everything", "", nil, false); err == nil {
 		t.Error("Transition accepted an unknown action")
 	}
 }
@@ -180,13 +180,13 @@ transitions:
 	for _, tt := range []struct {
 		kind, want string
 	}{{"new", "studying"}, {"usual", "with_team"}} {
-		to, err := Transition(p, Item{State: "asking", Fields: Fields{"who": "A", "kind": tt.kind}}, "hand_over", "", nil)
+		to, err := Transition(p, Item{State: "asking", Fields: Fields{"who": "A", "kind": tt.kind}}, "hand_over", "", nil, false)
 		if err != nil || to != tt.want {
 			t.Errorf("hand_over with kind %s = %s, %v; want %s", tt.kind, to, err, tt.want)
 		}
 	}
 	var missing *MissingError
-	if _, err := Transition(p, Item{State: "with_team", Fields: Fields{"who": "A", "kind": "usual"}}, "finish", "", nil); !errors.As(err, &missing) ||
+	if _, err := Transition(p, Item{State: "with_team", Fields: Fields{"who": "A", "kind": "usual"}}, "finish", "", nil, false); !errors.As(err, &missing) ||
 		!slices.Equal(missing.Keys, []string{"amount"}) {
 		t.Errorf("finish without the amount = %v, want amount still needed", err)
 	}
@@ -195,5 +195,38 @@ transitions:
 	}
 	if k, _ := Owner(p, "done"); k != "" {
 		t.Errorf("owner of done = %q, want none (unchanged)", k)
+	}
+}
+
+// TestSeyalOnlyMoves: a move marked "by: seyal" isn't offered to people and refuses them.
+func TestSeyalOnlyMoves(t *testing.T) {
+	p, err := playbook.Parse([]byte(`id: waits
+version: "1"
+description: Waits for linked work.
+numbering: "W-{seq:4}"
+fields:
+  - { key: x, label: X, type: text }
+states: [waiting, ready]
+initial: waiting
+transitions:
+  - { action: linked_done, from: [waiting], to: ready, by: seyal }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if got := Actions(p, Item{State: "waiting"}); len(got) != 0 {
+		t.Errorf("actions offered to people = %v, want none", got)
+	}
+	if _, err := Transition(p, Item{State: "waiting"}, "linked_done", "", nil, false); !errors.Is(err, ErrNotNow) {
+		t.Errorf("a person took the move: %v", err)
+	}
+	if to, err := Transition(p, Item{State: "waiting"}, "linked_done", "", nil, true); err != nil || to != "ready" {
+		t.Errorf("Seyal's move = %s, %v", to, err)
+	}
+	if IsClosed(p, "waiting") {
+		t.Error("an item waiting for linked work counts as closed")
 	}
 }

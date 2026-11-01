@@ -138,6 +138,48 @@ func NeededKinds(p *Playbook) []string {
 	return slices.Sorted(maps.Keys(set))
 }
 
+// StartsProcesses lists the processes a process starts as linked work (its "start" actions), sorted.
+func StartsProcesses(p *Playbook) []string {
+	set := map[string]bool{}
+	for _, actions := range p.On {
+		for _, a := range actions {
+			if a.Do == "start" {
+				set[a.Process] = true
+			}
+		}
+	}
+	return slices.Sorted(maps.Keys(set))
+}
+
+// EnsureStarted switches on, from the templates, every process that p starts as linked work and the
+// business doesn't have yet (with the lists they need). Processes it already has are left as they are.
+// tx must come from db.WithTenant.
+func EnsureStarted(ctx context.Context, tx pgx.Tx, templates *Library, p *Playbook, by ledger.Actor) error {
+	inUse, err := ListInUse(ctx, tx)
+	if err != nil {
+		return err
+	}
+	for _, id := range StartsProcesses(p) {
+		if slices.ContainsFunc(inUse, func(u InUse) bool { return u.PlaybookID == id }) {
+			continue
+		}
+		var t *Playbook
+		if templates != nil {
+			t = templates.Playbooks[id]
+		}
+		if t == nil {
+			return fmt.Errorf("this process starts %q, which this business doesn't have and there is no template for", id)
+		}
+		if err := EnsureKinds(ctx, tx, templates, t, by); err != nil {
+			return err
+		}
+		if _, err := EnsureUsed(ctx, tx, t, by); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // EnsureKinds gives the business every list process p needs that it doesn't have yet, copied from
 // the templates. Lists it already has are kept as they are. tx must come from db.WithTenant.
 func EnsureKinds(ctx context.Context, tx pgx.Tx, templates *Library, p *Playbook, by ledger.Actor) error {

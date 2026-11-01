@@ -64,6 +64,7 @@ type Transition struct {
 	When   string     `yaml:"when"`  // "" or "required_filled"
 	Needs  string     `yaml:"needs"` // "" or "reason"
 	If     *Condition `yaml:"if"`    // optional: only when this is true
+	By     string     `yaml:"by"`    // "" (anyone) or "seyal": only Seyal takes it, e.g. when linked work is done
 }
 
 // Step says, for one state, who has the item and what Seyal asks for. States without a step keep
@@ -129,10 +130,13 @@ type Deadline struct {
 
 // Action is something Seyal does automatically, e.g. post a message or assign someone.
 type Action struct {
-	Do   string `yaml:"do"`   // post, assign, copy
-	Text string `yaml:"text"` // for post
-	To   string `yaml:"to"`   // person field, for assign; the field to fill, for copy
-	From string `yaml:"from"` // the field to copy from, for copy
+	Do      string            `yaml:"do"`      // post, assign, copy, start, tell_parent
+	Text    string            `yaml:"text"`    // for post
+	To      string            `yaml:"to"`      // person field, for assign; the field to fill, for copy
+	From    string            `yaml:"from"`    // the field to copy from, for copy
+	Process string            `yaml:"process"` // for start: the id of the process to start as linked work
+	Action  string            `yaml:"action"`  // for tell_parent: the parent's action to take
+	Copy    map[string]string `yaml:"copy"`    // for start: child field → this field; for tell_parent: parent field → this field
 }
 
 // Parse reads one playbook from YAML. Unknown keys are errors, so typos are caught.

@@ -54,9 +54,15 @@ const (
 
 func newSite(t *testing.T) *site {
 	t.Helper()
+	return newSiteWith(t, "../testdata/playbooks")
+}
+
+// newSiteWith is newSite with the processes from another folder, e.g. the shipped samples.
+func newSiteWith(t *testing.T, playbooks string) *site {
+	t.Helper()
 	ctx := context.Background()
 	owner, app := testdb.Connect(t)
-	lib, err := playbook.LoadLibrary("../testdata/playbooks", "../../examples/masters")
+	lib, err := playbook.LoadLibrary(playbooks, "../../examples/masters")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,9 +313,9 @@ func TestAJobInTheBrowser(t *testing.T) {
 	t.Run("Priya sees it waiting for her and approves as ops", func(t *testing.T) {
 		p := s.logIn(priya)
 		_, home, _ := s.get(p, base+"/")
-		waiting := home[strings.Index(home, "Waiting for my approval"):]
+		waiting := home[strings.Index(home, "Needs your approval"):]
 		if !strings.Contains(waiting, "Sundaram Textiles") {
-			t.Error("the job isn't in Priya's 'Waiting for my approval'")
+			t.Error("the job isn't in Priya's 'Needs your approval'")
 		}
 		page := s.send(p, item+"/decide", url.Values{"slot": {"ops"}, "decision": {"approve"}})
 		if !strings.Contains(page, "✓ Priya Raman") || !strings.Contains(page, "pending approval") {

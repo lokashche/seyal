@@ -4,6 +4,7 @@ package workitem
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -151,7 +152,7 @@ func Act(ctx context.Context, tx pgx.Tx, id, action, reason string, by ledger.Ac
 	if err != nil {
 		return Item{}, err
 	}
-	to, err := engine.Transition(s.p, s.engineItem(it), action, reason, lookup)
+	to, err := engine.Transition(s.p, s.engineItem(it), action, reason, lookup, by.Kind == ledger.System)
 	if err != nil {
 		return Item{}, err
 	}
@@ -344,6 +345,14 @@ func (s session) enter(it *Item) error {
 			if err := s.copyField(it, a.From, a.To); err != nil {
 				return err
 			}
+		case "start":
+			if err := s.startChild(it, a); err != nil {
+				return err
+			}
+		case "tell_parent":
+			if err := s.tellParent(it, a); err != nil {
+				return err
+			}
 		case "post":
 			text, err := s.render(a.Text, it.Fields)
 			if err != nil {
@@ -467,4 +476,92 @@ func (s session) approvalInputs(it Item) ([]engine.Approval, engine.MasterLookup
 func (s session) isMaster(key string) bool {
 	f := s.field(key)
 	return f != nil && f.Type == "master"
+}
+
+// maxDepth limits how many linked items one action may start or move in a chain, so two processes
+// that start each other can't loop forever.
+const maxDepth = 5
+
+type depthKey struct{}
+
+func deeper(ctx context.Context) (context.Context, error) {
+	d, _ := ctx.Value(depthKey{}).(int)
+	if d >= maxDepth {
+		return ctx, fmt.Errorf("workitem: linked work goes more than %d levels deep; check the processes for a loop", maxDepth)
+	}
+	return context.WithValue(ctx, depthKey{}, d+1), nil
+}
+
+// startChild starts another process as linked work (a child of this item), on the version the
+// business uses now, copying the values the action names. Both threads say so.
+func (s session) startChild(it *Item, a playbook.Action) error {
+	ctx, err := deeper(s.ctx)
+	if err != nil {
+		return err
+	}
+	var versionID string
+	err = s.tx.QueryRow(ctx, `
+		SELECT current_version_id::text FROM tenant_playbooks
+		WHERE tenant_id = current_tenant() AND playbook_id = $1 AND active`, a.Process).Scan(&versionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("this step starts the process %q, which isn't switched on; add it in Settings → Processes", a.Process)
+	}
+	if err != nil {
+		return err
+	}
+	fields := engine.Fields{}
+	for child, from := range a.Copy {
+		if v, ok := it.Fields[from]; ok {
+			fields[child] = v
+		}
+	}
+	child, err := Start(ctx, s.tx, NewItem{PlaybookVersionID: versionID, Via: "event", Ref: it.ID, Fields: fields,
+		Parent: it.ID, StartedBy: it.ID, By: ledger.SystemActor})
+	if err != nil {
+		return fmt.Errorf("starting %s: %w", a.Process, err)
+	}
+	name := strings.ReplaceAll(a.Process, "-", " ")
+	if err := s.record("item.posted", *it, map[string]any{"text": fmt.Sprintf("Started %s %s.", name, child.Number)},
+		ledger.SystemActor); err != nil {
+		return err
+	}
+	cs, err := open(ctx, s.tx, child.PlaybookVersionID)
+	if err != nil {
+		return err
+	}
+	return cs.record("item.posted", child, map[string]any{"text": fmt.Sprintf("Started from %s.", it.Number)}, ledger.SystemActor)
+}
+
+// tellParent reports to the item this one was started from: it copies the values the action names
+// into the parent, then takes the parent's action (as Seyal).
+func (s session) tellParent(it *Item, a playbook.Action) error {
+	ctx, err := deeper(s.ctx)
+	if err != nil {
+		return err
+	}
+	var parentID string
+	err = s.tx.QueryRow(ctx, `
+		SELECT from_item_id::text FROM work_item_links
+		WHERE tenant_id = current_tenant() AND to_item_id::text = $1 AND kind = 'parent'`, it.ID).Scan(&parentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil // started on its own, so there is no one to tell
+	}
+	if err != nil {
+		return err
+	}
+	values := engine.Fields{}
+	for parent, from := range a.Copy {
+		if v, ok := it.Fields[from]; ok {
+			values[parent] = v
+		}
+	}
+	if len(values) > 0 {
+		if _, err := SetFields(ctx, s.tx, parentID, values, ledger.SystemActor); err != nil {
+			return fmt.Errorf("telling the parent item: %w", err)
+		}
+	}
+	if _, err := Act(ctx, s.tx, parentID, a.Action, "", ledger.SystemActor); err != nil {
+		return fmt.Errorf("telling the parent item: %w", err)
+	}
+	return nil
 }

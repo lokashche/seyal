@@ -113,3 +113,19 @@ master:
 		t.Errorf("lists = %v, want only court (nothing from the samples)", got)
 	}
 }
+
+// TestStartedProcessesComeAlong: choosing a process that starts another as linked work brings that
+// one along from the templates.
+func TestStartedProcessesComeAlong(t *testing.T) {
+	lib, err := playbook.LoadLibrary("../../examples/playbooks", "../../examples/masters")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := Load(demoPath, lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.chosen.Playbooks["requirement-study"] == nil {
+		t.Errorf("chosen = %v, want requirement-study brought along by job-evaluation", slices.Sorted(maps.Keys(f.chosen.Playbooks)))
+	}
+}

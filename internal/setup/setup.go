@@ -211,6 +211,23 @@ func (f *File) choose(templates *playbook.Library) []string {
 		f.chosen.Playbooks[p.ID] = p
 	}
 
+	// Processes that the chosen ones start as linked work come from the templates too.
+	for again := true; again; {
+		again = false
+		for _, p := range slices.Collect(maps.Values(f.chosen.Playbooks)) {
+			for _, id := range playbook.StartsProcesses(p) {
+				if f.chosen.Playbooks[id] != nil {
+					continue
+				}
+				if t := templates.Playbooks[id]; t != nil {
+					f.chosen.Playbooks[id], again = t, true
+				} else {
+					add("process %s starts %q, which isn't listed and has no template", p.ID, id)
+				}
+			}
+		}
+	}
+
 	// Lists that the processes or the master data need, and that weren't named, come from the templates.
 	need := slices.Collect(maps.Keys(f.Master))
 	for _, p := range f.chosen.Playbooks {
