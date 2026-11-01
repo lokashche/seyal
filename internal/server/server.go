@@ -100,7 +100,7 @@ func New(cfg Config) (*Server, error) {
 			return m, nil
 		},
 	}
-	for _, name := range []string{"home", "login", "app", "offline", "settings", "password"} {
+	for _, name := range []string{"home", "login", "app", "offline", "settings", "password", "report"} {
 		t, err := template.New(name).Funcs(funcs).ParseFS(web.Files, "templates/layout.html", "templates/"+name+".html")
 		if err != nil {
 			return nil, err
@@ -162,6 +162,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /t/{slug}/tell", s.authed(s.tell))
 	mux.HandleFunc("GET /t/{slug}/items/{id}", s.authed(s.itemPage))
 	mux.HandleFunc("POST /t/{slug}/items/{id}/say", s.authed(s.say))
+	mux.HandleFunc("GET /t/{slug}/items/{id}/report", s.authed(s.report))
+	mux.HandleFunc("GET /t/{slug}/export/{process}", s.admin(s.exportItems))
 	mux.HandleFunc("POST /t/{slug}/items/{id}/act", s.authed(s.act))
 	mux.HandleFunc("POST /t/{slug}/items/{id}/field", s.authed(s.setField))
 	mux.HandleFunc("POST /t/{slug}/items/{id}/decide", s.authed(s.decide))

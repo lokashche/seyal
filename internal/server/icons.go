@@ -17,6 +17,7 @@ var icons = map[string]string{
 	"settings": `<path d="M2.75 5h4.5M10.75 5h2.5M2.75 11h2.5M8.75 11h4.5"/><circle cx="9" cy="5" r="1.75"/><circle cx="7" cy="11" r="1.75"/>`,
 	"logout":   `<path d="M6.5 2.75H4a1 1 0 0 0-1 1v8.5a1 1 0 0 0 1 1h2.5M10 5.25 12.75 8 10 10.75M12.75 8H6.25"/>`,
 	"back":     `<path d="M12.75 8h-9.5M7 4.25 3.25 8 7 11.75"/>`,
+	"download": `<path d="M8 2.75v7.5M4.75 7 8 10.25 11.25 7M3 13.25h10"/>`,
 }
 
 // icon returns the named icon as inline SVG, hidden from screen readers (the text beside it says

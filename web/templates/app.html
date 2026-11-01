@@ -17,6 +17,7 @@
   <section class="pane list-pane" aria-label="My Work">
     <div class="pane-h">
       <b>{{.Data.Work.Title}}</b><span class="count">{{len .Data.Work.Rows}}</span>
+      {{if and $.Admin .Data.Work.Process}}<a class="dl" href="/t/{{$.Slug}}/export/{{.Data.Work.Process}}" hx-boost="false" download title="Download all {{.Data.Work.Title}} work (open and closed) as a spreadsheet" aria-label="Download as a spreadsheet">{{icon "download"}}</a>{{end}}
       <span class="sort"><a href="?{{replaceSort .Data.Work.Query "recent"}}"{{if eq .Data.Work.Sort "recent"}} aria-current="true"{{end}}>Newest</a> · <a href="?{{replaceSort .Data.Work.Query "due"}}"{{if eq .Data.Work.Sort "due"}} aria-current="true"{{end}}>Due</a></span>
     </div>
     <div class="groups">
@@ -153,7 +154,7 @@
   {{end}}
 </section>
 <aside class="pane side-pane" aria-label="Fields and approvals">
-  <div class="pane-h"><b>Details</b><small>version {{.Item.Version}}</small></div>
+  <div class="pane-h"><b>Details</b><small>version {{.Item.Version}}</small><a class="dl" href="/t/{{$.Slug}}/items/{{.Item.ID}}/report" hx-boost="false" title="A printable report of this item; save it as PDF">Report</a></div>
   <div class="side">
     <div><span class="pill {{.Pill}}">{{.Status}}</span>{{with .With}} <span class="why">with {{.}}</span>{{end}}</div>
     {{if .NotMine}}<p class="why">Only {{or .With "whoever has it"}}, whoever started it, or an admin can change this item. You can read it and write a note.</p>{{end}}

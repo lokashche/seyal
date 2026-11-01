@@ -252,6 +252,7 @@
   }
   document.addEventListener("click", function (e) {
     if (e.target.closest("[data-reload]")) location.reload();
+    if (e.target.closest("[data-print]")) window.print(); // the browser offers "Save as PDF"
   });
 
   document.addEventListener("click", function (e) {

@@ -306,4 +306,36 @@ code, .code { font-family: var(--f-mono); font-size: 12.5px; }
   .app:not(.has-item):not(.choosing) .side-pane { display: none; }
   .thread { min-height: 50vh; padding: 14px; }
 }
+/* Printable report of one work item (browser "Save as PDF") */
+body:has(.report) { overflow: auto; display: block; background: var(--bg); }
+.report-bar { max-width: 820px; margin: 16px auto 0; padding: 0 16px; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.report { max-width: 820px; margin: 12px auto 40px; background: #fff; color: #18181b; border: 1px solid var(--line); border-radius: 10px; padding: 36px 44px; font-size: 13.5px; }
+.report header { border-bottom: 2px solid #18181b; padding-bottom: 14px; margin-bottom: 18px; }
+.report h1 { font-size: 22px; margin: 2px 0 6px; }
+.report h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: #52525b; margin: 22px 0 8px; }
+.report .r-biz { margin: 0; font-weight: 600; color: #52525b; }
+.report .r-sub { margin: 2px 0; color: #52525b; font-size: 12.5px; }
+.report .r-fields { display: grid; grid-template-columns: minmax(160px, 34%) 1fr; gap: 6px 16px; margin: 0; }
+.report .r-fields dt { color: #52525b; }
+.report .r-fields dd { margin: 0; font-weight: 500; overflow-wrap: anywhere; }
+.report .r-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.report .r-table th, .report .r-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #e4e4e7; vertical-align: top; }
+.report .r-table th { color: #52525b; font-weight: 500; }
+.report .r-list, .report .r-history { margin: 0; padding-left: 18px; }
+.report .r-history li { margin: 2px 0; }
+.report .r-history span { color: #71717a; font-variant-numeric: tabular-nums; }
+.report .r-foot { margin-top: 28px; padding-top: 10px; border-top: 1px solid #e4e4e7; font-size: 11px; color: #71717a; overflow-wrap: anywhere; }
+.report .r-foot p { margin: 3px 0; }
+.report .why { color: #52525b; }
+@media print {
+  @page { margin: 14mm; }
+  body, body:has(.report) { background: #fff; }
+  .no-print { display: none !important; }
+  .report { border: 0; margin: 0; padding: 0; max-width: none; }
+  .report .pill { border: 1px solid #a1a1aa; background: none; color: #18181b; }
+  .report section { break-inside: avoid; }
+}
+.list-pane .pane-h .dl { color: var(--muted); display: inline-grid; place-items: center; }
+.list-pane .pane-h .dl:hover { color: var(--ink); }
+.side-pane .pane-h .dl { margin-left: 8px; font-size: 12px; text-decoration: none; white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }

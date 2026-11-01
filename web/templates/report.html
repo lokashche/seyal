@@ -1,0 +1,53 @@
+{{define "title"}}{{with .Data}}{{.Item.Item.Number}} report{{end}} · Seyal{{end}}
+{{define "content"}}{{with .Data}}
+<div class="report-bar no-print">
+  <a href="/t/{{$.Slug}}/items/{{.Item.Item.ID}}">← Back to the item</a>
+  <button class="btn" type="button" data-print>Print / Save as PDF</button>
+</div>
+<article class="report">
+  <header>
+    <p class="r-biz">{{$.Business}}</p>
+    <h1>{{.Item.Heading}}</h1>
+    <p class="r-sub">{{.Process}} · {{.Item.Item.Number}} · <span class="pill {{.Item.Pill}}">{{.Item.Status}}</span>{{with .Item.With}} · with {{.}}{{end}}</p>
+    <p class="r-sub">Started by {{or .StartedBy "Seyal"}} on {{.StartedOn}}{{with .Item.Item.DueOn}} · due {{.}}{{end}} · process version {{.Version}} · item version {{.Item.Item.Version}}</p>
+  </header>
+
+  {{with .Item.Links}}
+  <section>
+    <h2>Linked work</h2>
+    <ul class="r-list">{{range .}}<li>{{.Relation}} {{.Number}} {{.Kind}}{{with .Title}} · {{.}}{{end}} · {{.Status}}</li>{{end}}</ul>
+  </section>
+  {{end}}
+
+  <section>
+    <h2>Details</h2>
+    <dl class="r-fields">
+      {{range .Item.Fields}}<dt>{{.Label}}</dt><dd>{{or .Value "—"}}</dd>{{end}}
+    </dl>
+  </section>
+
+  <section>
+    <h2>Approvals of this version</h2>
+    {{with .Approvals}}
+    <table class="r-table">
+      <thead><tr><th>Approval</th><th>Decision</th><th>By</th><th>When</th></tr></thead>
+      <tbody>{{range .}}<tr><td>{{.Name}}</td><td>{{.Decision}}{{with .Reason}}: {{.}}{{end}}</td><td>{{.By}}</td><td>{{.When}}</td></tr>{{end}}</tbody>
+    </table>
+    {{else}}<p class="why">No approvals on this version yet.</p>{{end}}
+    {{with .Item.Slots}}{{range .}}{{if not .Done}}<p class="why">Still needed: {{.Name}} ({{.Why}})</p>{{end}}{{end}}{{end}}
+  </section>
+
+  {{with .History}}
+  <section>
+    <h2>History</h2>
+    <ol class="r-history">{{range .}}<li><span>{{.Time}}</span> {{.Who}}: {{.Text}}</li>{{end}}</ol>
+  </section>
+  {{end}}
+
+  <footer class="r-foot">
+    <p>Printed by {{.PrintedBy}} on {{.PrintedOn}} from Seyal's records.</p>
+    <p>Ledger check: event {{.LedgerSeq}} · {{.LedgerHash}}<br>Details fingerprint: {{.FieldsHash}}</p>
+    <p>These match the record only while nothing has changed since; "seyal verify" checks the record itself.</p>
+  </footer>
+</article>
+{{end}}{{end}}

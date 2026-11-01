@@ -47,6 +47,7 @@ type myWork struct {
 	Processes []folder
 	Rows      []row
 	Title     string
+	Process   string // the chosen process's id, when the list shows one process
 	Sort      string
 	Query     string // "?f=…&p=…&s=…", kept on links so the list stays as chosen
 }
@@ -159,7 +160,7 @@ func (v *view) myWork() (*myWork, error) {
 		}
 	}
 	if proc != "" {
-		w.Title = sentence(proc)
+		w.Title, w.Process = sentence(proc), proc
 	}
 
 	for _, pl := range all {
