@@ -230,6 +230,10 @@ Process definition keys:
   list (needs of: text, number, date or person),
   master (needs kind: a list's kind; may have prefill: { this_field: list_field } to copy details from the chosen entry).
   ask is the question Seyal asks in the chat when the field is still empty; give one for every required field.
+  from_message: true (text fields only) fills the field with the message that starts the item, so Seyal doesn't
+  ask for what was just said; use it for a "what is it about" field.
+- fallback: true (optional) marks the business's catch-all process, suggested when no other process fits.
+  Leave it out for every other process.
 - states: the steps, lowercase_with_underscores. initial: the first state.
 - transitions: each { action, from: [states], to, when: required_filled (optional), needs: reason (optional),
   if: a condition (optional) }. The same action may be listed more than once with different "if"s: the first

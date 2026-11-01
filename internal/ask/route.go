@@ -13,6 +13,7 @@ import (
 
 	"seyal/internal/ai"
 	"seyal/internal/channel"
+	"seyal/internal/engine"
 	"seyal/internal/ledger"
 	"seyal/internal/workitem"
 )
@@ -26,6 +27,7 @@ import (
 type Process struct {
 	VersionID, ID, Name, Description string
 	Examples                         []string
+	Fallback                         bool // suggested when no other process fits
 }
 
 // Routing is what Seyal made of a message on Tell Seyal.
@@ -61,6 +63,14 @@ func Route(ctx context.Context, tx pgx.Tx, env Env, processes []Process, in chan
 		r.Seyal = append(r.Seyal, m)
 		return r, nil
 	}
+	if suggested == "" { // nothing fits: offer the catch-all, if the business has one
+		for _, p := range processes {
+			if p.Fallback {
+				suggested = p.VersionID
+				break
+			}
+		}
+	}
 	r.Suggested = suggested
 	return r, nil
 }
@@ -83,6 +93,9 @@ Processes:
 `)
 	for _, p := range processes {
 		fmt.Fprintf(&b, "- id %s: %s. %s", p.ID, p.Name, p.Description)
+		if p.Fallback {
+			b.WriteString(" Choose this only when no other process fits.")
+		}
 		if len(p.Examples) > 0 {
 			fmt.Fprintf(&b, " Examples: %q", p.Examples)
 		}
@@ -119,11 +132,15 @@ Processes:
 }
 
 // routeByWords suggests the process whose name, description and examples share the most words with
-// the message (words of three letters or more). It returns "" when nothing matches.
+// the message (words of three letters or more). It returns "" when nothing matches. The catch-all
+// takes no part: its words ("anything", "task") would match too much.
 func routeByWords(processes []Process, text string) string {
 	words := wordSet(text)
 	best, bestScore := "", 0
 	for _, p := range processes {
+		if p.Fallback {
+			continue
+		}
 		known := wordSet(strings.Join(append([]string{p.Name, p.Description}, p.Examples...), " "))
 		score := 0
 		for w := range words {
@@ -138,12 +155,21 @@ func routeByWords(processes []Process, text string) string {
 	return best
 }
 
+// commonWords say nothing about which process a message is for, so they never count as a match.
+var commonWords = map[string]bool{
+	"the": true, "and": true, "for": true, "with": true, "this": true, "that": true, "from": true, "into": true,
+	"are": true, "was": true, "were": true, "has": true, "have": true, "had": true, "our": true, "your": true,
+	"you": true, "its": true, "can": true, "will": true, "not": true, "but": true, "all": true, "any": true,
+	"about": true, "please": true, "then": true, "them": true, "they": true, "who": true, "what": true,
+	"when": true, "how": true, "out": true, "off": true, "too": true, "also": true, "again": true,
+}
+
 func wordSet(s string) map[string]bool {
 	set := map[string]bool{}
 	for _, w := range strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r > 127)
 	}) {
-		if len([]rune(w)) >= 3 {
+		if len([]rune(w)) >= 3 && !commonWords[w] {
 			set[w] = true
 		}
 	}
@@ -184,12 +210,36 @@ func (c *conversation) start(pr *proposal) (Reply, error) {
 			return Reply{}, err
 		}
 	}
+	if err := c.fromMessage(strings.TrimSpace(msg.Text)); err != nil {
+		return Reply{}, err
+	}
 	if !offered {
 		if err := c.askNext(false); err != nil {
 			return Reply{}, err
 		}
 	}
 	return c.reply, nil
+}
+
+// fromMessage fills the fields marked from_message that are still empty with the starting message,
+// so Seyal doesn't ask for what the person has just said.
+func (c *conversation) fromMessage(text string) error {
+	if text == "" {
+		return nil
+	}
+	values := engine.Fields{}
+	for _, f := range c.p.Fields {
+		if f.FromMessage && c.reply.Item.Fields[f.Key] == nil {
+			values[f.Key] = text
+		}
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	_, err := c.try(func(sp pgx.Tx) (workitem.Item, error) {
+		return workitem.SetFields(c.ctx, sp, c.reply.Item.ID, values, ledger.PersonActor(c.reply.Message.PersonID))
+	})
+	return err
 }
 
 // Nudge asks the next question, if any, in an item and in the items linked to it (the one it is part

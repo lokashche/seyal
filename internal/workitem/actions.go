@@ -133,6 +133,11 @@ func SetFields(ctx context.Context, tx pgx.Tx, id string, values engine.Fields, 
 		if err := s.enter(&it); err != nil {
 			return Item{}, err
 		}
+	} else if kind, name := engine.Owner(s.p, it.State); kind == "field" && values[name] != nil {
+		// The step belongs to whoever this field names, so a new name hands the item over.
+		if err := s.handOver(&it); err != nil {
+			return Item{}, err
+		}
 	}
 	return it, nil
 }
@@ -375,7 +380,8 @@ func (s session) enter(it *Item) error {
 }
 
 // handOver gives the item to the owner of its current step, if the step names one: whoever started
-// it, a person field, or a role (anyone in it, shown as the item's team).
+// it, a person field, or a role (anyone in it, shown as the item's team). While the person field is
+// empty, the item stays where it is, or with whoever started it if nobody has it yet.
 func (s session) handOver(it *Item) error {
 	kind, name := engine.Owner(s.p, it.State)
 	switch kind {
@@ -386,6 +392,9 @@ func (s session) handOver(it *Item) error {
 	case "field":
 		if id, _ := it.Fields[name].(string); id != "" {
 			return s.assign(it, id, "")
+		}
+		if it.AssigneeID == "" && it.Team == "" && it.CreatedBy != "" {
+			return s.assign(it, it.CreatedBy, "")
 		}
 	case "role":
 		return s.assign(it, "", name)

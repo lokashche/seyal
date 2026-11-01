@@ -29,6 +29,7 @@ func TestValidateFindsMistakes(t *testing.T) {
 		{"choice value not allowed", "eq: fail }", "eq: failed }", "not one of the options"},
 		{"prefill into unknown field", "est_hours: est_hours", "est_hour: est_hours", `prefill: unknown field "est_hour"`},
 		{"numbering without seq", `"J-{yyyy}-{seq:4}"`, `"J-{yyyy}"`, "{seq:N} exactly once"},
+		{"from_message on a number", "label: Advance, type: money,", "label: Advance, type: money, from_message: true,", "only text fields can be filled from the message"},
 		{"title uses unknown field", "{client} —", "{customer} —", `title: unknown field "customer"`},
 		{"deadline from non-date", "due_from: client_data_due", "due_from: reason", "must be a date field"},
 		{"action on unknown state", "on:\n  approved:", "on:\n  aproved:", `unknown state "aproved"`},

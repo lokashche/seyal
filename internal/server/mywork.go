@@ -92,8 +92,10 @@ func (v *view) myWork() (*myWork, error) {
 		pill, status := v.status(p, it)
 		x := extra[it.ID]
 		r := row{ID: it.ID, Number: it.Number, Title: it.Title, Pill: pill, Status: status, Hint: hint,
-			Preview: x.preview, Ago: x.ago, Owner: initials(v.holder(it)), OwnerName: v.holder(it),
-			Mine: bucket <= yourTeam}
+			Preview: x.preview, Ago: x.ago, OwnerName: v.holder(it), Mine: bucket <= yourTeam}
+		if it.AssigneeID != "" || it.Team != "" {
+			r.Owner = initials(r.OwnerName)
+		}
 		if untitled(r.Title) {
 			r.Title, r.Quoted = x.firstWords, x.firstWords != ""
 		}

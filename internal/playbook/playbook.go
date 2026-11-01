@@ -22,6 +22,7 @@ type Playbook struct {
 	Version     string              `yaml:"version"`
 	Description string              `yaml:"description"`
 	Examples    []string            `yaml:"examples"`
+	Fallback    bool                `yaml:"fallback"`  // suggested for work that fits no other process
 	Numbering   string              `yaml:"numbering"` // e.g. "J-{yyyy}-{seq:4}"
 	Title       string              `yaml:"title"`     // e.g. "{who} — {what}", using field keys
 	Roles       []string            `yaml:"roles"`
@@ -52,6 +53,8 @@ type Field struct {
 	Readonly bool              `yaml:"readonly"`
 	Ask      string            `yaml:"ask"`     // question Seyal asks when the field is missing
 	Prefill  map[string]string `yaml:"prefill"` // this playbook's field → master field
+	// FromMessage fills a text field with the message that starts the item, when nothing else did.
+	FromMessage bool `yaml:"from_message"`
 }
 
 // Transition moves a work item from one state to another when someone takes an action. The same

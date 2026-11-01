@@ -111,6 +111,9 @@ func (v *validator) fieldList() {
 		if len(f.Prefill) > 0 && f.Type != "master" {
 			v.add("%s: only master fields can prefill", where)
 		}
+		if f.FromMessage && f.Type != "text" {
+			v.add("%s: only text fields can be filled from the message", where)
+		}
 	}
 	v.unique("fields", keys)
 

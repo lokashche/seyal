@@ -65,6 +65,7 @@ type pendingView struct {
 type tellProcess struct {
 	ID, Name, Description, Example string
 	Search                         string // name, description and examples, for the search box
+	Fallback                       bool   // for work that fits no other process
 }
 
 type itemView struct {
@@ -236,16 +237,26 @@ func (v *view) tell() (*tellView, error) {
 		if err != nil {
 			return nil, err
 		}
-		tp := tellProcess{ID: pv.ID, Name: sentence(p.ID), Description: p.Description,
+		tp := tellProcess{ID: pv.ID, Name: sentence(p.ID), Description: p.Description, Fallback: p.Fallback,
 			Search: strings.ToLower(strings.Join(append([]string{sentence(p.ID), p.Description}, p.Examples...), " "))}
 		if len(p.Examples) > 0 {
 			tp.Example = p.Examples[0]
-			if t.Placeholder == "" {
+			if t.Placeholder == "" && !p.Fallback {
 				t.Placeholder = "For example: " + p.Examples[0]
 			}
 		}
 		t.Processes = append(t.Processes, tp)
 	}
+	// The catch-all comes last: people look for a real process first.
+	slices.SortStableFunc(t.Processes, func(a, b tellProcess) int {
+		switch {
+		case a.Fallback == b.Fallback:
+			return 0
+		case a.Fallback:
+			return 1
+		}
+		return -1
+	})
 	if t.Placeholder == "" {
 		t.Placeholder = "Write the work as you would tell a colleague"
 	}
@@ -487,7 +498,7 @@ func (s *Server) tell(w http.ResponseWriter, r *http.Request, c *call) {
 					return err
 				}
 				processes = append(processes, ask.Process{VersionID: pv.ID, ID: p.ID, Name: sentence(p.ID),
-					Description: p.Description, Examples: p.Examples})
+					Description: p.Description, Examples: p.Examples, Fallback: p.Fallback})
 			}
 			rt, err := ask.Route(r.Context(), tx, s.env(), processes, in)
 			routing = &rt

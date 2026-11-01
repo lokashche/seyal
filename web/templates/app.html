@@ -42,7 +42,7 @@
     {{with .Data.Tell}}{{with .Pending}}
     <div class="msg me"><span class="who">{{$.Session.Name}}</span>{{with .Text}}<p>{{.}}</p>{{end}}{{if .Files}}<p class="why">{{.Files}} file{{if gt .Files 1}}s{{end}} attached</p>{{end}}</div>
     <div class="msg bot"><span class="who">Seyal</span>
-      <p>{{with .Suggested}}This looks like {{.Name}}. Start it?{{else}}Which process is this for?{{end}}</p>
+      <p>{{with .Suggested}}{{if .Fallback}}This doesn't fit any of your processes. Start it as {{.Name}}?{{else}}This looks like {{.Name}}. Start it?{{end}}{{else}}Which process is this for?{{end}}</p>
     </div>
     <form class="quick confirm" method="post" action="/t/{{$.Slug}}/tell">
       <input type="hidden" name="message" value="{{.MessageID}}">
