@@ -56,7 +56,7 @@ func newSite(t *testing.T) *site {
 	t.Helper()
 	ctx := context.Background()
 	owner, app := testdb.Connect(t)
-	lib, err := playbook.LoadLibrary("../../examples/playbooks", "../../examples/masters")
+	lib, err := playbook.LoadLibrary("../testdata/playbooks", "../../examples/masters")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -483,6 +483,71 @@ func TestInstallableApp(t *testing.T) {
 		}
 		if code, page, _ := s.get(s.browser(), "/offline"); code != http.StatusOK || !strings.Contains(page, "You're offline") {
 			t.Errorf("offline page = %d", code)
+		}
+	})
+}
+
+func TestEditFieldsFromSidePanel(t *testing.T) {
+	s := newSite(t)
+	base := "/t/" + s.slug
+	a := s.logIn(arjun)
+	_, home, _ := s.get(a, base+"/")
+	pv := regexp.MustCompile(`name="playbook" value="([^"]+)"`).FindStringSubmatch(home)[1]
+	_, _, h := s.post(a, base+"/tell", url.Values{"playbook": {pv}, "text": {"GST work for Sundaram"}}, nil)
+	item := h.Get("Location")
+	edit := func(key string, values ...string) string {
+		t.Helper()
+		return s.send(a, item+"/field", url.Values{"key": {key}, "value": values})
+	}
+
+	page := edit("nature_of_work", "gst-returns")
+	if !strings.Contains(page, "Fatima Sheikh") || !strings.Contains(page, "from Nature of work") {
+		t.Fatal("choosing the work type should pre-fill the maker and mark it as a suggestion")
+	}
+
+	t.Run("pre-filled maker can be changed for this job", func(t *testing.T) {
+		page := edit("maker", s.people["rahul"])
+		maker := page[strings.Index(page, "<dt>Maker</dt>"):]
+		maker = maker[:strings.Index(maker, "</dd>")]
+		if !strings.Contains(maker, "Rahul Iyer") || strings.Contains(maker, "from Nature of work") {
+			t.Errorf("maker after the change = %s", maker)
+		}
+	})
+
+	t.Run("documents, one per line", func(t *testing.T) {
+		page := edit("required_documents", "Sales register\nBank statement\n")
+		if !strings.Contains(page, "Sales register, Bank statement") {
+			t.Error("documents list not saved")
+		}
+	})
+
+	t.Run("fee in everyday words", func(t *testing.T) {
+		if page := edit("fee_agreed", "2000 per month"); !strings.Contains(page, "₹2,000") {
+			t.Error("fee not understood")
+		}
+	})
+
+	t.Run("bad values and read-only fields are refused", func(t *testing.T) {
+		code, body, _ := s.post(a, item+"/field", url.Values{"key": {"fee_agreed"}, "value": {"lots"}}, nil)
+		if code != http.StatusUnprocessableEntity || !strings.Contains(problem(body), "Fee agreed") {
+			t.Errorf("bad fee = %d: %s", code, problem(body))
+		}
+		code, body, _ = s.post(a, item+"/field", url.Values{"key": {"standard_fee"}, "value": {"1"}}, nil)
+		if code != http.StatusUnprocessableEntity {
+			t.Errorf("editing the standard fee = %d: %s", code, problem(body))
+		}
+	})
+
+	t.Run("an edit after approval resets the approvals", func(t *testing.T) {
+		edit("client", "sundaram-textiles")
+		edit("reason", "Monthly returns")
+		edit("integrity_check", "pass")
+		edit("fee_agreed", "5000")
+		s.send(a, item+"/act", url.Values{"action": {"submit"}})
+		s.send(a, item+"/decide", url.Values{"slot": {"sales"}, "decision": {"approve"}})
+		page := edit("advance", "1000")
+		if strings.Contains(page, "✓ Arjun Mehta") || !strings.Contains(page, "pending approval") {
+			t.Error("the sales approval still counts after the advance changed")
 		}
 	})
 }

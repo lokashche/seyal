@@ -93,8 +93,13 @@ type mediaView struct {
 }
 
 type fieldView struct {
-	Label, Value string
-	Missing      bool
+	Key, Label, Value string
+	Missing           bool   // Seyal asks for it in this step
+	From              string // e.g. "Nature of work" when the value is still what it pre-filled
+	Editable          bool
+	Input             string // "text", "date", "lines", "select" or "multi"
+	Raw               string // current value as the input shows it
+	Options           []option
 }
 
 type slotView struct {
@@ -340,10 +345,18 @@ func (v *view) item(id string) (*itemView, error) {
 	}
 
 	toAsk := engine.ToAsk(p, it.State, it.Fields) // what Seyal asks in this step
+	from, err := v.prefilled(p, it)
+	if err != nil {
+		return nil, err
+	}
 	for _, f := range p.Fields {
-		val := it.Fields[f.Key]
-		iv.Fields = append(iv.Fields, fieldView{Label: ask.Label(f), Value: v.show(f, val),
-			Missing: !iv.Closed && slices.Contains(toAsk, f.Key)})
+		fv, err := v.field(f, it.Fields[f.Key], !iv.Closed)
+		if err != nil {
+			return nil, err
+		}
+		fv.Missing = !iv.Closed && slices.Contains(toAsk, f.Key)
+		fv.From = from[f.Key]
+		iv.Fields = append(iv.Fields, fv)
 	}
 
 	if !iv.Closed {

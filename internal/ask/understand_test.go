@@ -48,6 +48,12 @@ func TestUnderstand(t *testing.T) {
 		{field("money"), "12000/-", 1200000.0, ""},
 		{field("money"), "2 crore", 2000000000.0, ""},
 		{field("money"), "99.999", 10000.0, ""},
+		{field("money"), "2000 per month", 200000.0, ""},
+		{field("money"), "2k/month", 200000.0, ""},
+		{field("money"), "₹24,000 p.a.", 2400000.0, ""},
+		{field("money"), "5000 quarterly", 500000.0, ""},
+		{field("money"), "1500pm", 150000.0, ""},
+		{field("money"), "2 lakh per annum", 20000000.0, ""},
 		{field("money"), "lots", nil, "I need a number"},
 		{field("money"), "12 bananas", nil, `"bananas"`},
 		{field("number"), "7.5", 7.5, ""},
@@ -129,7 +135,7 @@ func TestCommand(t *testing.T) {
 }
 
 func TestQuestions(t *testing.T) {
-	p, err := playbook.LoadFile("../../examples/playbooks/job-evaluation.yaml")
+	p, err := playbook.LoadFile("../testdata/playbooks/job-evaluation.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

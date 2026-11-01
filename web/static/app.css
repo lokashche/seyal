@@ -115,7 +115,15 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .fields { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; font-size: 13.5px; margin: 0; }
 .fields dt { color: var(--muted); }
 .fields dd { margin: 0; font-weight: 500; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.fields dd.miss { color: var(--warn); font-weight: 400; font-style: italic; }
+.fields .miss { color: var(--warn); font-weight: 400; font-style: italic; }
+.fields .from { display: block; font: 400 11px var(--f-mono); color: var(--muted); }
+.edit summary { display: inline-block; cursor: pointer; font: 500 11px var(--f-mono); color: var(--accent-ink); margin-top: 2px; }
+.edit[open] summary { margin-bottom: 4px; }
+.edit form { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.edit input, .edit select, .edit textarea { font: inherit; font-size: 13px; font-weight: 400; border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; background: var(--panel); color: var(--ink); width: 100%; }
+.edit .btn { align-self: flex-start; }
+.edit .checks { flex-direction: column; flex-wrap: nowrap; gap: 3px; max-height: 160px; overflow: auto; }
+.edit .checks input { width: auto; }
 .appr { display: flex; flex-direction: column; gap: 6px; }
 .ap { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px 8px; font-size: 13.5px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
 .ap .r { color: var(--muted); font-size: 12px; display: block; }
@@ -138,7 +146,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .tabs a[aria-current] { background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
 .tabs .back-link { color: var(--accent-ink); margin-bottom: 8px; }
 .panel { padding: 18px 22px; overflow: auto; display: flex; flex-direction: column; gap: 14px; max-width: 860px; }
+.panel > * { flex-shrink: 0; } /* the panel scrolls; its parts keep their height */
 .panel h2 { font-size: 22px; }
+.callout { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.callout p { margin: 0; }
 .rows { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 10px; }
 .rows li { padding: 10px 12px; }
 .rows li + li { border-top: 1px solid var(--line); }

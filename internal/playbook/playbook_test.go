@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-const examplePath = "../../examples/playbooks/job-evaluation.yaml"
+const examplePath = "../testdata/playbooks/job-evaluation.yaml"
 
 func TestLoadExample(t *testing.T) {
 	p, err := LoadFile(examplePath)

@@ -34,10 +34,12 @@ type listRow struct {
 
 type listView struct {
 	listRow
-	Version int
-	Fields  []processField
-	UsedBy  []string // processes that use this list
-	Source  string
+	Version  int
+	Fields   []processField
+	UsedBy   []string // processes that use this list
+	Source   string
+	Template []string // details the template has that this list doesn't, if the template differs
+	Differs  bool     // the template's definition differs from this list's
 }
 
 const blankList = `kind: member
@@ -118,6 +120,14 @@ func (s *Server) showLists(w http.ResponseWriter, r *http.Request, c *call, kind
 				lv.UsedBy = append(lv.UsedBy, sentence(u.PlaybookID))
 			}
 		}
+		if tm := s.lib.Masters[kind]; tm != nil && tm.Hash != mk.Hash {
+			lv.Differs = true
+			for _, f := range tm.Fields {
+				if !slices.ContainsFunc(mk.Fields, func(g playbook.Field) bool { return g.Key == f.Key }) {
+					lv.Template = append(lv.Template, ask.Label(f))
+				}
+			}
+		}
 		if len(draft) > 0 {
 			lv.Source = draft[0]
 		}
@@ -177,6 +187,14 @@ func (s *Server) addList(w http.ResponseWriter, r *http.Request, c *call) {
 func (s *Server) changeList(w http.ResponseWriter, r *http.Request, c *call) {
 	kind := r.PathValue("kind")
 	source := r.PostFormValue("source")
+	if r.PostFormValue("action") == "template" {
+		t := s.lib.Masters[kind]
+		if t == nil {
+			http.NotFound(w, r)
+			return
+		}
+		source = string(t.Source)
+	}
 	changed := false
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		if has, err := playbook.Kind(r.Context(), tx, kind); err != nil || has == nil {

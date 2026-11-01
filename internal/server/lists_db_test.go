@@ -9,6 +9,7 @@ import (
 	"html"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 
@@ -107,5 +108,29 @@ func TestSettingsLists(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestListFromTemplate: when the template has details a business's list lacks, the list page offers
+// the template's definition, and using it brings them in.
+func TestListFromTemplate(t *testing.T) {
+	s := newSite(t)
+	base := "/t/" + s.slug
+	l := s.logIn(lakshmi)
+	b, err := os.ReadFile("../../examples/masters/work_type.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	older := strings.Replace(string(b), "  - { key: fixed_price,", "  # - { key: fixed_price,", 1)
+	if code, page, _ := s.post(l, base+"/settings/lists/work_type", url.Values{"source": {older}}, nil); code != http.StatusOK {
+		t.Fatalf("make the list older = %d: %s", code, problem(page))
+	}
+	_, page, _ := s.get(l, base+"/settings/lists/work_type")
+	if !strings.Contains(page, "Use the template's definition") || !strings.Contains(page, "The template also records: Fixed price") {
+		t.Fatalf("the list page doesn't offer the template:\n%s", problem(page))
+	}
+	code, page, _ := s.post(l, base+"/settings/lists/work_type", url.Values{"action": {"template"}}, nil)
+	if code != http.StatusOK || !strings.Contains(page, "<b>Fixed price") || strings.Contains(page, "Use the template's definition") {
+		t.Errorf("use the template = %d:\n%s", code, problem(page))
 	}
 }

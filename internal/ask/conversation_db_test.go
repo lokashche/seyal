@@ -71,7 +71,7 @@ func newOffice(t *testing.T) *office {
 		t.Fatal(err)
 	}
 
-	lib, err := playbook.LoadLibrary("../../examples/playbooks", "../../examples/masters")
+	lib, err := playbook.LoadLibrary("../testdata/playbooks", "../../examples/masters")
 	if err != nil {
 		t.Fatal(err)
 	}

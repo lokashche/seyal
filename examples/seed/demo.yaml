@@ -58,6 +58,7 @@ master:
         standard_fee: 12000
         est_hours: 8
         is_new: false
+        fixed_price: false
     - key: gst-returns
       name: GST returns (monthly)
       fields:
@@ -69,6 +70,7 @@ master:
         standard_fee: 5000
         est_hours: 4
         is_new: false
+        fixed_price: true
     - key: annual-accounts
       name: Annual accounts
       fields:
@@ -80,6 +82,7 @@ master:
         standard_fee: 35000
         est_hours: 40
         is_new: false
+        fixed_price: false
     - key: tds-returns
       name: TDS returns (quarterly)
       fields:
@@ -91,3 +94,4 @@ master:
         standard_fee: 4000
         est_hours: 3
         is_new: true
+        fixed_price: true

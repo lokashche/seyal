@@ -145,6 +145,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /t/{slug}/items/{id}", s.authed(s.itemPage))
 	mux.HandleFunc("POST /t/{slug}/items/{id}/say", s.authed(s.say))
 	mux.HandleFunc("POST /t/{slug}/items/{id}/act", s.authed(s.act))
+	mux.HandleFunc("POST /t/{slug}/items/{id}/field", s.authed(s.setField))
 	mux.HandleFunc("POST /t/{slug}/items/{id}/decide", s.authed(s.decide))
 	mux.HandleFunc("GET /t/{slug}/media/{id}", s.authed(s.media))
 

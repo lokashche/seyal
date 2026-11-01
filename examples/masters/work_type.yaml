@@ -1,4 +1,6 @@
 # Sample master-data kind. A work type pre-fills a new job (see prefill in the playbook).
+# Fixed price: the standard fee applies to everyone. When it doesn't (e.g. bookkeeping, priced by how
+# much work the client needs), the standard fee is only a guide and the owner approves the fee.
 kind: work_type
 label: Work type
 fields:
@@ -10,3 +12,4 @@ fields:
   - { key: standard_fee, label: Standard fee, type: money }
   - { key: est_hours, label: Estimated hours, type: number }
   - { key: is_new, label: New work type (needs owner approval), type: bool }
+  - { key: fixed_price, label: Fixed price (the standard fee applies to every client), type: bool }

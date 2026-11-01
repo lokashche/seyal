@@ -58,7 +58,7 @@ func TestThreadTellsTheStory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	lib, err := playbook.LoadLibrary("../../examples/playbooks", "../../examples/masters")
+	lib, err := playbook.LoadLibrary("../testdata/playbooks", "../../examples/masters")
 	if err != nil {
 		t.Fatal(err)
 	}

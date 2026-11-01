@@ -25,7 +25,7 @@ import (
 func TestImportDemoBusiness(t *testing.T) {
 	ctx := context.Background()
 	owner, app := testdb.Connect(t)
-	lib, err := playbook.LoadLibrary("../../examples/playbooks", "../../examples/masters")
+	lib, err := playbook.LoadLibrary("../testdata/playbooks", "../../examples/masters")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -20,7 +20,7 @@ import (
 	"seyal/internal/testdb"
 )
 
-const examplePath = "../../examples/playbooks/job-evaluation.yaml"
+const examplePath = "../testdata/playbooks/job-evaluation.yaml"
 
 func TestRegister(t *testing.T) {
 	ctx := context.Background()

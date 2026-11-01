@@ -23,7 +23,7 @@ func TestSaveAndDeactivate(t *testing.T) {
 	ctx := context.Background()
 	owner, app := testdb.Connect(t)
 	tenant, person := testdb.NewTenant(t, owner, "Master Test")
-	lib, err := playbook.LoadLibrary("../../examples/playbooks", "../../examples/masters")
+	lib, err := playbook.LoadLibrary("../testdata/playbooks", "../../examples/masters")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestLookupFeedsTheEngine(t *testing.T) {
 	ctx := context.Background()
 	owner, app := testdb.Connect(t)
 	tenant, person := testdb.NewTenant(t, owner, "Master Test")
-	lib, err := playbook.LoadLibrary("../../examples/playbooks", "../../examples/masters")
+	lib, err := playbook.LoadLibrary("../testdata/playbooks", "../../examples/masters")
 	if err != nil {
 		t.Fatal(err)
 	}

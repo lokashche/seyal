@@ -8,7 +8,7 @@ import (
 	"seyal/internal/playbook"
 )
 
-const examplePath = "../../examples/playbooks/job-evaluation.yaml"
+const examplePath = "../testdata/playbooks/job-evaluation.yaml"
 
 // workTypes is fake master data for the tests.
 var workTypes = map[string]Fields{

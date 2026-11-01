@@ -23,7 +23,7 @@ func TestSettingsProcesses(t *testing.T) {
 	base := "/t/" + s.slug
 	l := s.logIn(lakshmi)
 	proc := base + "/settings/processes/job-evaluation"
-	sample, err := os.ReadFile("../../examples/playbooks/job-evaluation.yaml")
+	sample, err := os.ReadFile("../testdata/playbooks/job-evaluation.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,4 +137,53 @@ func TestSettingsProcesses(t *testing.T) {
 	})
 
 	s.tablesMatchLedger(t)
+}
+
+// TestTemplateNeedsListDetails: when a newer template version needs a detail the business's list
+// lacks, the process page says so and one button adds the detail (keeping the list's own changes)
+// and switches to that version.
+func TestTemplateNeedsListDetails(t *testing.T) {
+	s := newSite(t)
+	base := "/t/" + s.slug
+	l := s.logIn(lakshmi)
+	proc := base + "/settings/processes/job-evaluation"
+	b, err := os.ReadFile("../testdata/playbooks/job-evaluation.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The business runs its own older version that doesn't use "is new", and its work type list has
+	// lost that detail but gained one of its own.
+	older := strings.Replace(string(b), `version: "0.1"`, `version: "0.0"`, 1)
+	older = strings.Replace(older, "          - { field: nature_of_work.is_new, eq: true }\n", "", 1)
+	if code, body, _ := s.post(l, proc, url.Values{"action": {"save"}, "source": {older}}, nil); code != http.StatusOK {
+		t.Fatalf("save the older version = %d: %s", code, problem(body))
+	}
+	w, err := os.ReadFile("../../examples/masters/work_type.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := strings.Replace(string(w), "  - { key: is_new,", "  - { key: region, label: Region, type: text }\n  # - { key: is_new,", 1)
+	if code, body, _ := s.post(l, base+"/settings/lists/work_type", url.Values{"source": {list}}, nil); code != http.StatusOK {
+		t.Fatalf("change the list = %d: %s", code, problem(body))
+	}
+
+	_, page, _ := s.get(l, proc)
+	for _, want := range []string{"Template version 0.1 is available", "Work types → New work type (needs owner approval)",
+		`value="template_lists">Add it and use version 0.1`, `href="` + base + `/settings/lists/work_type">See Work types`} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("process page is missing %q:\n%s", want, problem(page))
+		}
+	}
+	if strings.Contains(page, `value="template">Use template version`) {
+		t.Error("the plain template button shows although it can't work yet")
+	}
+
+	code, page, _ := s.post(l, proc, url.Values{"action": {"template_lists"}}, nil)
+	if code != http.StatusOK || !strings.Contains(page, "version 0.1") || strings.Contains(page, "is available") {
+		t.Fatalf("add and use = %d: %s", code, problem(page))
+	}
+	_, page, _ = s.get(l, base+"/settings/lists/work_type")
+	if !strings.Contains(page, "<b>Region</b>") || !strings.Contains(page, "<b>New work type (needs owner approval)</b>") {
+		t.Errorf("the list should keep Region and get the missing detail back:\n%s", problem(page))
+	}
 }

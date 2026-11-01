@@ -45,9 +45,16 @@ type processView struct {
 	Deadlines         []string
 	Versions          []playbook.VersionInfo
 	CurrentID         string
-	Source            string // the definition, for advanced editing
-	Template          string // a newer template version, if the shipped one differs
-	DraftOn           bool   // AI drafting is switched on
+	Source            string    // the definition, for advanced editing
+	Template          string    // a newer template version, if the shipped one differs
+	ListGaps          []listGap // details the template version needs that the business's lists lack
+	DraftOn           bool      // AI drafting is switched on
+}
+
+// listGap is one of the business's lists that lacks details a template version needs.
+type listGap struct {
+	Kind, List string
+	Details    []string
 }
 
 type processField struct {
@@ -86,6 +93,18 @@ func (s *Server) showProcesses(w http.ResponseWriter, r *http.Request, c *call, 
 		}
 		sv.Process = s.processView(inUse[i], lib)
 		sv.Process.DraftOn = s.draftOn()
+		if t := s.lib.Playbooks[id]; t != nil && sv.Process.Template != "" {
+			for _, kind := range playbook.NeededKinds(t) {
+				tm := s.lib.Masters[kind]
+				if missing := playbook.MissingDetails(lib.Masters[kind], tm); len(missing) > 0 {
+					g := listGap{Kind: kind, List: listLabel(tm) + "s"}
+					for _, f := range missing {
+						g.Details = append(g.Details, ask.Label(f))
+					}
+					sv.Process.ListGaps = append(sv.Process.ListGaps, g)
+				}
+			}
+		}
 		if len(draft) > 0 {
 			sv.Process.Source = draft[0]
 		}
@@ -352,16 +371,37 @@ func (s *Server) changeProcess(w http.ResponseWriter, r *http.Request, c *call) 
 		case "use":
 			notice = "New work now starts on the chosen version."
 			return playbook.Use(r.Context(), tx, r.PostFormValue("version"), by)
-		case "template":
+		case "template", "template_lists":
 			t := s.lib.Playbooks[id]
 			if t == nil {
 				return errors.New("there is no template for this process")
+			}
+			if r.PostFormValue("action") == "template_lists" {
+				// First add the details the template's lists have and the business's lack, keeping
+				// the business's own changes to those lists.
+				kinds, err := playbook.Kinds(r.Context(), tx)
+				if err != nil {
+					return err
+				}
+				for _, kind := range playbook.NeededKinds(t) {
+					missing := playbook.MissingDetails(kinds[kind], s.lib.Masters[kind])
+					if len(missing) == 0 {
+						continue
+					}
+					merged, err := kinds[kind].WithDetails(missing)
+					if err != nil {
+						return err
+					}
+					if _, err := playbook.SaveKind(r.Context(), tx, merged, by); err != nil {
+						return err
+					}
+				}
 			}
 			if err := playbook.EnsureKinds(r.Context(), tx, s.lib, t, by); err != nil {
 				return err
 			}
 			if err := s.checkForBusiness(r, tx, t); err != nil {
-				return err
+				return s.explainListGap(r, tx, t, err)
 			}
 			versionID, _, err := playbook.Register(r.Context(), tx, t)
 			if err != nil {
@@ -414,4 +454,33 @@ func (s *Server) checkForBusiness(r *http.Request, tx pgx.Tx, p *playbook.Playbo
 		return err
 	}
 	return lib.Check(p)
+}
+
+// explainListGap turns a failed check of a template version into advice, when the reason is that the
+// business's lists lack details the template's lists have (e.g. a detail added in a newer sample).
+func (s *Server) explainListGap(r *http.Request, tx pgx.Tx, t *playbook.Playbook, err error) error {
+	kinds, kerr := playbook.Kinds(r.Context(), tx)
+	if kerr != nil {
+		return err
+	}
+	var gaps, lists []string
+	for _, kind := range playbook.NeededKinds(t) {
+		mine, tmpl := kinds[kind], s.lib.Masters[kind]
+		if mine == nil || tmpl == nil {
+			continue
+		}
+		for _, f := range tmpl.Fields {
+			if !slices.ContainsFunc(mine.Fields, func(g playbook.Field) bool { return g.Key == f.Key }) {
+				gaps = append(gaps, listLabel(tmpl)+" → "+ask.Label(f))
+				if !slices.Contains(lists, listLabel(tmpl)+"s") {
+					lists = append(lists, listLabel(tmpl)+"s")
+				}
+			}
+		}
+	}
+	if len(gaps) == 0 {
+		return err
+	}
+	return fmt.Errorf("version %s needs details your lists don't have yet: %s. Open Settings → Lists → %s and press \"Use the template's definition\", then try again",
+		t.Version, strings.Join(gaps, ", "), strings.Join(lists, ", "))
 }

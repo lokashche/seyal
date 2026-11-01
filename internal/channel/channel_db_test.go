@@ -157,7 +157,7 @@ func TestRefusedMessages(t *testing.T) {
 
 func TestThreads(t *testing.T) {
 	e := newEnv(t)
-	p, err := playbook.LoadFile("../../examples/playbooks/job-evaluation.yaml")
+	p, err := playbook.LoadFile("../testdata/playbooks/job-evaluation.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

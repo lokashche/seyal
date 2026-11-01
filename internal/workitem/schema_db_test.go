@@ -105,7 +105,7 @@ func TestSchemaRules(t *testing.T) {
 	_, other := testdb.NewTenant(t, owner, "Schema Test B")
 	second := newPerson(t, owner, tenant)
 
-	p, err := playbook.LoadFile("../../examples/playbooks/job-evaluation.yaml")
+	p, err := playbook.LoadFile("../testdata/playbooks/job-evaluation.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

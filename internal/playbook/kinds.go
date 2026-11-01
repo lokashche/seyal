@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -206,4 +208,44 @@ func AdoptKinds(ctx context.Context, tx pgx.Tx, templates *Library) (added []str
 		return added, fmt.Errorf("no template for the list(s) %v; add them in Settings → Lists", missing)
 	}
 	return added, nil
+}
+
+// MissingDetails returns the fields of a template list that list m doesn't have, in the template's
+// order. A nil list or template has none.
+func MissingDetails(m, template *MasterKind) []Field {
+	if m == nil || template == nil {
+		return nil
+	}
+	var out []Field
+	for _, f := range template.Fields {
+		if m.field(f.Key) == nil {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// WithDetails returns list m with extra fields added at the end, written out again as a definition
+// (Seyal's own layout, one field per line; comments of the old text are not kept).
+func (m *MasterKind) WithDetails(extra []Field) (*MasterKind, error) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "kind: %s\nlabel: %s\nfields:\n", m.Kind, strconv.Quote(m.Label))
+	for _, f := range append(slices.Clone(m.Fields), extra...) {
+		fmt.Fprintf(&b, "  - { key: %s, label: %s, type: %s", f.Key, strconv.Quote(f.Label), f.Type)
+		if f.Of != "" {
+			fmt.Fprintf(&b, ", of: %s", f.Of)
+		}
+		if len(f.Options) > 0 {
+			opts := make([]string, len(f.Options))
+			for i, o := range f.Options {
+				opts[i] = strconv.Quote(o)
+			}
+			fmt.Fprintf(&b, ", options: [%s]", strings.Join(opts, ", "))
+		}
+		if f.Required {
+			b.WriteString(", required: true")
+		}
+		b.WriteString(" }\n")
+	}
+	return ParseMasterKind([]byte(b.String()))
 }

@@ -147,7 +147,33 @@
     <div><span class="pill {{.Pill}}">{{.Status}}</span>{{with .With}} <span class="why">with {{.}}</span>{{end}}</div>
     <h4>{{.Kind}} fields</h4>
     <dl class="fields">
-      {{range .Fields}}<dt>{{.Label}}</dt><dd{{if .Missing}} class="miss"{{end}}>{{if .Missing}}Seyal will ask{{else}}{{or .Value "—"}}{{end}}</dd>{{end}}
+      {{range .Fields}}
+      <dt>{{.Label}}</dt>
+      <dd>
+        {{if .Missing}}<span class="miss">Seyal will ask</span>{{else}}{{or .Value "—"}}{{end}}
+        {{with .From}}<span class="from">from {{.}}</span>{{end}}
+        {{if .Editable}}
+        <details class="edit">
+          <summary aria-label="Edit {{.Label}}">Edit</summary>
+          <form method="post" action="/t/{{$.Slug}}/items/{{$.Data.Item.Item.ID}}/field">
+            <input type="hidden" name="key" value="{{.Key}}">
+            {{if eq .Input "select"}}
+              <select name="value" aria-label="{{.Label}}"><option value="">—</option>{{range .Options}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+            {{else if eq .Input "multi"}}
+              <div class="checks">{{range .Options}}<label><input type="checkbox" name="value" value="{{.Value}}"{{if .Selected}} checked{{end}}> {{.Label}}</label>{{end}}</div>
+            {{else if eq .Input "lines"}}
+              <textarea name="value" rows="4" aria-label="{{.Label}}, one per line">{{.Raw}}</textarea>
+            {{else if eq .Input "date"}}
+              <input type="date" name="value" value="{{.Raw}}" aria-label="{{.Label}}">
+            {{else}}
+              <input name="value" value="{{.Raw}}" aria-label="{{.Label}}">
+            {{end}}
+            <button class="btn sm">Save</button>
+          </form>
+        </details>
+        {{end}}
+      </dd>
+      {{end}}
     </dl>
 
     {{with .Slots}}

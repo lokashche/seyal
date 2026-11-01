@@ -136,11 +136,18 @@ var multipliers = map[string]float64{
 	"cr": 1e7, "crore": 1e7, "crores": 1e7,
 }
 
-var numberPart = regexp.MustCompile(`^(-?[0-9]*\.?[0-9]+)\s*([a-z]*)$`)
+var (
+	numberPart = regexp.MustCompile(`^(-?[0-9]*\.?[0-9]+)\s*([a-z]*)$`)
+	// period is how often an amount repeats ("per month", "/yr", "p.a."). It is accepted and left
+	// out of the number; a playbook that needs the frequency asks for it in its own field.
+	period = regexp.MustCompile(`\s*(?:/|per|a|every|p\.?)\s*(?:month|mon|mo|m|year|yr|annum|a|quarter|qtr|q|week|wk)\.?$|\s*(?:monthly|yearly|annually|quarterly|weekly|pm|pa)$`)
+)
 
-// parseNumber understands "12000", "12,000", "₹12k", "Rs. 1.5 lakh" and "12000/-".
+// parseNumber understands "12000", "12,000", "₹12k", "Rs. 1.5 lakh", "12000/-" and amounts with a
+// period such as "2000 per month" or "₹24,000 p.a.".
 func parseNumber(s string) (float64, error) {
 	s = strings.ToLower(strings.TrimSpace(s))
+	s = period.ReplaceAllString(s, "")
 	s = strings.TrimSuffix(s, "/-")
 	for _, symbol := range []string{"₹", "rs.", "rs", "inr", "$", "€", "£"} {
 		s = strings.TrimSpace(strings.TrimPrefix(s, symbol))

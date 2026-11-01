@@ -67,7 +67,7 @@ func (s *site) count(query string, args ...any) int {
 
 func sample(t *testing.T) string {
 	t.Helper()
-	b, err := os.ReadFile("../../examples/playbooks/job-evaluation.yaml")
+	b, err := os.ReadFile("../testdata/playbooks/job-evaluation.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

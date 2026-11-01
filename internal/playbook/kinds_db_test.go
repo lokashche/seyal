@@ -25,7 +25,7 @@ func TestBusinessLists(t *testing.T) {
 	owner, app := testdb.Connect(t)
 	firm, _ := testdb.NewTenant(t, owner, "Lists Firm")
 	turf, _ := testdb.NewTenant(t, owner, "Lists Turf")
-	lib, err := playbook.LoadLibrary("../../examples/playbooks", "../../examples/masters")
+	lib, err := playbook.LoadLibrary("../testdata/playbooks", "../../examples/masters")
 	if err != nil {
 		t.Fatal(err)
 	}

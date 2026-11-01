@@ -5,5 +5,7 @@
   },
   "gopls": {
     "buildFlags": ["-tags=db"]
-  }
+  },
+  // Seyal's playbooks are not Ansible playbooks; don't apply public schemas by file name.
+  "yaml.schemaStore.enable": false
 }

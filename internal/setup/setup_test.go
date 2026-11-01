@@ -17,7 +17,7 @@ const demoPath = "../../examples/seed/demo.yaml"
 
 func library(t *testing.T) *playbook.Library {
 	t.Helper()
-	lib, err := playbook.LoadLibrary("../../examples/playbooks", "../../examples/masters")
+	lib, err := playbook.LoadLibrary("../testdata/playbooks", "../../examples/masters")
 	if err != nil {
 		t.Fatal(err)
 	}

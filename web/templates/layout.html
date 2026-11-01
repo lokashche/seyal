@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="htmx-config" content='{"includeIndicatorStyles": false}'>
+  <meta name="htmx-config" content='{"includeIndicatorStyles": false, "responseHandling": [{"code": "204", "swap": false}, {"code": "[23]..", "swap": true}, {"code": "4..", "swap": true, "error": false}, {"code": "5..", "swap": true, "error": true}]}'>
   <title>{{block "title" .}}Seyal{{end}}</title>
   <meta name="theme-color" content="#c9861a">
   {{if .Slug}}<link rel="manifest" href="/t/{{.Slug}}/manifest.webmanifest">{{end}}

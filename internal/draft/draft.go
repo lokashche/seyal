@@ -231,15 +231,25 @@ Process definition keys:
   master (needs kind: a list's kind; may have prefill: { this_field: list_field } to copy details from the chosen entry).
   ask is the question Seyal asks in the chat when the field is still empty; give one for every required field.
 - states: the steps, lowercase_with_underscores. initial: the first state.
-- transitions: each { action, from: [states], to, when: required_filled (optional), needs: reason (optional) }.
+- transitions: each { action, from: [states], to, when: required_filled (optional), needs: reason (optional),
+  if: a condition (optional) }. The same action may be listed more than once with different "if"s: the first
+  true one is taken; list the one without "if" (the default) last. Action names are lowercase_with_underscores
+  and people may type them with spaces ("send to ops").
+- steps (optional): who has the item in a state and what Seyal asks there:
+  { state: { owner: starter | "role:<role>" | "field:<person field>", asks: [field keys], needs: [field keys] } }.
+  owner: the person who started it, anyone with the role (shown to them under "For my team"), or the person in
+  a field. asks: the questions Seyal asks in that state, in order. needs: what must be filled before a
+  "when: required_filled" move out of that state. A state without a step asks the required fields.
+  Use steps when work passes from one person or team to another.
 - approvals (optional): { in: state, on_complete: state, on_reject: state, slots: [ { slot, role, required_if } ] }.
   A slot without required_if is always needed. required_if is a condition:
   { field: key, eq|ne|lt|gt: value } where value is a plain value or { field: other_key };
   { any: [conditions] } or { all: [conditions] }. lt and gt work on number, money and date fields.
   key.detail refers to a detail of the chosen list entry, e.g. { field: kind.is_new, eq: true }.
 - deadlines (optional): [ { due_from: a date field } ].
-- on (optional): actions when entering a state: { state: [ { do: post, text: "..." }, { do: assign, to: person_field } ] }.
-  post text may use {field_key}.
+- on (optional): actions when entering a state: { state: [ { do: post, text: "..." }, { do: assign, to: person_field },
+  { do: copy, from: field, to: field } ] }. post text may use {field_key}. copy keeps a value to compare with later
+  (e.g. the amount proposed before someone else changes it); copy into a readonly field of the same type.
 
 List definition: { kind: lowercase_with_underscores, label: Singular label, fields: [ { key, label, type, ... } ] }.
 List fields use the types text, number, money, date, bool, choice, person, list; no ask, kind or prefill.

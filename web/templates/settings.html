@@ -118,8 +118,20 @@
 <form method="post" action="/t/{{$.Slug}}/settings/processes/{{.ID}}" class="sform inline">
   {{if .Active}}<button class="btn ghost sm" name="action" value="disable">Switch off for new work</button>
   {{else}}<button class="btn sm" name="action" value="enable">Switch on</button>{{end}}
-  {{with .Template}}<button class="btn ghost sm" name="action" value="template">Use template version {{.}}</button>{{end}}
+  {{if and .Template (not .ListGaps)}}<button class="btn ghost sm" name="action" value="template">Use template version {{.Template}}</button>{{end}}
 </form>
+{{if .ListGaps}}
+<div class="callout">
+  <p><b>Template version {{.Template}} is available.</b> It needs
+    {{range $i, $g := .ListGaps}}{{if $i}}; {{end}}{{range $j, $d := $g.Details}}{{if $j}}, {{end}}{{$g.List}} → {{$d}}{{end}}{{end}},
+    which your lists don't have yet.</p>
+  <form method="post" action="/t/{{$.Slug}}/settings/processes/{{.ID}}" class="sform inline">
+    <button class="btn sm" name="action" value="template_lists">Add {{if gt (len .ListGaps) 1}}them{{else}}{{with index .ListGaps 0}}{{if gt (len .Details) 1}}them{{else}}it{{end}}{{end}}{{end}} and use version {{.Template}}</button>
+    {{range .ListGaps}}<a class="btn ghost sm" href="/t/{{$.Slug}}/settings/lists/{{.Kind}}">See {{.List}}</a>{{end}}
+  </form>
+  <p class="why">Only the missing details are added; your own changes to the lists stay. Entries get the new details empty, to fill in later.</p>
+</div>
+{{end}}
 {{template "describe" (dict "Action" (print "/t/" $.Slug "/settings/processes/" .ID) "On" .DraftOn "New" false)}}
 {{template "processdetails" .}}
 
@@ -296,6 +308,12 @@
 <p><a href="/t/{{$.Slug}}/settings/lists">← All lists</a></p>
 <h2>{{.Label}}s</h2>
 <p class="why">version {{.Version}} · {{.Summary}} · <a href="/t/{{$.Slug}}/settings/master/{{.Kind}}">see the entries</a>{{with .UsedBy}} · used by {{range $i, $p := .}}{{if $i}}, {{end}}{{$p}}{{end}}{{end}}</p>
+{{if .Differs}}
+<form method="post" action="/t/{{$.Slug}}/settings/lists/{{.Kind}}" class="sform inline">
+  <button class="btn ghost sm" name="action" value="template">Use the template's definition</button>
+  <span class="why">{{with .Template}}The template also records: {{range $i, $f := .}}{{if $i}}, {{end}}{{$f}}{{end}}.{{else}}The template's definition is worded differently.{{end}} It replaces any changes made to this list here; entries keep their values.</span>
+</form>
+{{end}}
 <h3>What each entry records</h3>
 <ul class="rows plain">
   <li><b>Name</b> <span class="r">text · always</span></li>
