@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"seyal/internal/ai"
 	"seyal/internal/config"
 	"seyal/internal/db"
 	"seyal/internal/media"
@@ -52,7 +53,14 @@ func runServe(out io.Writer) error {
 	if mediaDir == "" {
 		mediaDir = "data/media"
 	}
-	srv, err := server.New(app, media.Disk{Dir: mediaDir}, lib, os.Getenv("SEYAL_SECURE_COOKIES") == "true")
+	aiSetup, err := ai.FromEnv(os.Getenv)
+	if err != nil {
+		return err
+	}
+	srv, err := server.New(server.Config{
+		App: app, Store: media.Disk{Dir: mediaDir}, Library: lib, AI: aiSetup,
+		SecureCookies: os.Getenv("SEYAL_SECURE_COOKIES") == "true",
+	})
 	if err != nil {
 		return err
 	}

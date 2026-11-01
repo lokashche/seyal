@@ -24,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"seyal/internal/ai"
 	"seyal/internal/channel"
 	"seyal/internal/db"
 	"seyal/internal/media"
@@ -42,6 +43,7 @@ type site struct {
 	store     media.Disk
 	passwords map[string]string // email → password
 	people    map[string]string // demo key → person id
+	ai        *ai.Setup         // AI is off unless a test sets a (fake) model
 }
 
 const (
@@ -68,13 +70,13 @@ func newSite(t *testing.T) *site {
 		t.Fatal(err)
 	}
 	s := &site{t: t, slug: f.Business.Slug, tenant: sum.TenantID, store: media.Disk{Dir: t.TempDir()},
-		passwords: map[string]string{}, people: sum.People}
+		passwords: map[string]string{}, people: sum.People, ai: &ai.Setup{USDtoINR: 88}}
 	for _, email := range []string{arjun, priya, lakshmi} {
 		if s.passwords[email], err = setup.NewPassword(ctx, app, sum.TenantID, email); err != nil {
 			t.Fatal(err)
 		}
 	}
-	srv, err := server.New(app, s.store, lib, false)
+	srv, err := server.New(server.Config{App: app, Store: s.store, Library: lib, AI: s.ai})
 	if err != nil {
 		t.Fatal(err)
 	}

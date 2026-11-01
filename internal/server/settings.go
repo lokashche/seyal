@@ -38,6 +38,7 @@ type settingsView struct {
 	Master    *masterView
 	Processes *processList
 	Process   *processView
+	AI        *aiView
 }
 
 type tab struct {
@@ -151,6 +152,7 @@ func (s *Server) tabs(c *call, current string) []tab {
 		{Label: "People", URL: base + "people", Current: current == "people"},
 		{Label: "Roles", URL: base + "roles", Current: current == "roles"},
 		{Label: "Processes", URL: base + "processes", Current: current == "processes"},
+		{Label: "AI usage", URL: base + "ai", Current: current == "ai"},
 	}
 	for _, kind := range slices.Sorted(maps.Keys(s.lib.Masters)) {
 		label := s.lib.Masters[kind].Label

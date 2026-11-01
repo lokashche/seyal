@@ -26,6 +26,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"seyal/internal/ai"
 	"seyal/internal/auth"
 	"seyal/internal/db"
 	"seyal/internal/media"
@@ -40,7 +41,8 @@ type Server struct {
 	app     *pgxpool.Pool
 	store   media.Store
 	lib     *playbook.Library // master-kind definitions, for the Settings forms
-	secure  bool              // send cookies only over HTTPS
+	ai      *ai.Setup
+	secure  bool // send cookies only over HTTPS
 	pages   map[string]*template.Template
 	static  http.Handler
 	asset   string // fingerprint of the static files, added to their addresses
@@ -48,13 +50,42 @@ type Server struct {
 	limiter *limiter
 }
 
-// New prepares the web app. lib holds the master-kind definitions used by the Settings forms.
-// secureCookies must be true when the app is reached over HTTPS.
-func New(app *pgxpool.Pool, store media.Store, lib *playbook.Library, secureCookies bool) (*Server, error) {
-	s := &Server{app: app, store: store, lib: lib, secure: secureCookies, pages: map[string]*template.Template{},
-		limiter: newLimiter(10, 15*time.Minute)}
+// Config is what the web app needs.
+type Config struct {
+	App           *pgxpool.Pool     // the app role's connections
+	Store         media.Store       // voice notes and files
+	Library       *playbook.Library // templates and master-kind definitions (Settings forms)
+	AI            *ai.Setup         // models per purpose; nil means AI is off
+	SecureCookies bool              // true when the app is reached over HTTPS
+}
+
+// New prepares the web app.
+func New(cfg Config) (*Server, error) {
+	s := &Server{app: cfg.App, store: cfg.Store, lib: cfg.Library, ai: cfg.AI, secure: cfg.SecureCookies,
+		pages: map[string]*template.Template{}, limiter: newLimiter(10, 15*time.Minute)}
+	if s.ai == nil {
+		s.ai = &ai.Setup{USDtoINR: 88}
+	}
+	funcs := template.FuncMap{
+		// dict builds a map from key, value pairs, so one template block can be reused with
+		// different data: {{template "x" (dict "Title" "…" "Lines" .Lines)}}.
+		"dict": func(kv ...any) (map[string]any, error) {
+			if len(kv)%2 != 0 {
+				return nil, errors.New("dict needs key, value pairs")
+			}
+			m := make(map[string]any, len(kv)/2)
+			for i := 0; i < len(kv); i += 2 {
+				k, ok := kv[i].(string)
+				if !ok {
+					return nil, errors.New("dict keys must be text")
+				}
+				m[k] = kv[i+1]
+			}
+			return m, nil
+		},
+	}
 	for _, name := range []string{"home", "login", "app", "offline", "settings"} {
-		t, err := template.ParseFS(web.Files, "templates/layout.html", "templates/"+name+".html")
+		t, err := template.New(name).Funcs(funcs).ParseFS(web.Files, "templates/layout.html", "templates/"+name+".html")
 		if err != nil {
 			return nil, err
 		}
@@ -129,6 +160,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /t/{slug}/settings/processes", s.admin(s.addProcess))
 	mux.HandleFunc("GET /t/{slug}/settings/processes/{id}", s.admin(s.processPage))
 	mux.HandleFunc("POST /t/{slug}/settings/processes/{id}", s.admin(s.changeProcess))
+	mux.HandleFunc("GET /t/{slug}/settings/ai", s.admin(s.aiPage))
 	mux.HandleFunc("GET /t/{slug}/settings/master/{kind}", s.admin(s.masterPage))
 	mux.HandleFunc("POST /t/{slug}/settings/master/{kind}", s.admin(s.saveMaster))
 	return securityHeaders(http.NewCrossOriginProtection().Handler(mux))

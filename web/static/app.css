@@ -152,6 +152,12 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .sform fieldset { border: 0; padding: 0; margin: 0; }
 .sform legend { font-size: 13px; font-weight: 500; margin-bottom: 4px; }
 .panel h3 { font: 600 15px/1.2 var(--f-display); margin: 6px 0 0; }
+.table { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+.table table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.table th, .table td { padding: 7px 10px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.table th:first-child, .table td:first-child { text-align: left; }
+.table th { font: 500 11px var(--f-mono); color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.table tfoot td { font-weight: 600; border-bottom: 0; }
 .rows.plain li { font-size: 14px; }
 .sform.wide { max-width: none; }
 .code { font: 13px/1.5 var(--f-mono); white-space: pre; tab-size: 2; }
