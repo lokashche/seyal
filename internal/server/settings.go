@@ -31,11 +31,13 @@ import (
 // definitions, so a new kind gets its form without new code. Every change is a ledger event.
 
 type settingsView struct {
-	Tab    string
-	Tabs   []tab
-	People *peopleView
-	Roles  []roleRow
-	Master *masterView
+	Tab       string
+	Tabs      []tab
+	People    *peopleView
+	Roles     []roleRow
+	Master    *masterView
+	Processes *processList
+	Process   *processView
 }
 
 type tab struct {
@@ -148,6 +150,7 @@ func (s *Server) tabs(c *call, current string) []tab {
 	tabs := []tab{
 		{Label: "People", URL: base + "people", Current: current == "people"},
 		{Label: "Roles", URL: base + "roles", Current: current == "roles"},
+		{Label: "Processes", URL: base + "processes", Current: current == "processes"},
 	}
 	for _, kind := range slices.Sorted(maps.Keys(s.lib.Masters)) {
 		label := s.lib.Masters[kind].Label
@@ -578,7 +581,7 @@ func (s *Server) settingsProblem(w http.ResponseWriter, r *http.Request, c *call
 		s.fail(w, r, err)
 		return
 	}
-	s.showSettings(w, r, c, tabKey, http.StatusUnprocessableEntity, "", sentence(err.Error())+".")
+	s.showSettings(w, r, c, tabKey, http.StatusUnprocessableEntity, "", capital(err.Error())+".")
 }
 
 func str(v any) string {

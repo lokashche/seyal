@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"html"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -140,9 +141,10 @@ func (s *site) send(c *http.Client, path string, form url.Values) string {
 
 var banner = regexp.MustCompile(`(?s)<p class="banner error" role="alert">(.*?)</p>`)
 
+// problem returns the problem shown on a page, as people read it (HTML entities decoded).
 func problem(body string) string {
 	if m := banner.FindStringSubmatch(body); m != nil {
-		return m[1]
+		return html.UnescapeString(m[1])
 	}
 	return "(no problem shown)"
 }

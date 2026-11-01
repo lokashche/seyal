@@ -21,8 +21,8 @@ import (
 	"seyal/internal/server"
 )
 
-// runServe starts the web app. Before serving, it registers the current playbooks for every
-// business; a playbook changed without a new version stops the start (see decision D13).
+// runServe starts the web app. The playbook folder is loaded as templates (and its master kinds as
+// the Settings forms); each business manages its own processes in Settings → Processes.
 func runServe(out io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -42,23 +42,10 @@ func runServe(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	rows, _ := app.Query(ctx, "SELECT id::text, slug FROM tenants ORDER BY slug")
-	tenants, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ ID, Slug string }])
+	rows, _ := app.Query(ctx, "SELECT slug FROM tenants ORDER BY slug")
+	tenants, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
 		return err
-	}
-	for _, t := range tenants {
-		err := db.WithTenant(ctx, app, t.ID, func(tx pgx.Tx) error {
-			for _, p := range lib.Playbooks {
-				if _, _, err := playbook.Register(ctx, tx, p); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			return fmt.Errorf("business %s: %w", t.Slug, err)
-		}
 	}
 
 	mediaDir := os.Getenv("SEYAL_MEDIA_DIR")
@@ -86,8 +73,8 @@ func runServe(out io.Writer) error {
 	}()
 
 	fmt.Fprintf(out, "Seyal is running. Press Ctrl+C to stop.\n")
-	for _, t := range tenants {
-		fmt.Fprintf(out, "  http://%s/t/%s/\n", addr, t.Slug)
+	for _, slug := range tenants {
+		fmt.Fprintf(out, "  http://%s/t/%s/\n", addr, slug)
 	}
 	if err := hs.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err

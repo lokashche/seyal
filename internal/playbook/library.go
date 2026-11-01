@@ -69,6 +69,15 @@ func LoadLibrary(playbooksDir, mastersDir string) (*Library, error) {
 	return lib, nil
 }
 
+// Check validates a playbook on its own and against the library's master kinds, for a playbook
+// that comes from somewhere other than the library folder (e.g. edited in Settings).
+func (lib *Library) Check(p *Playbook) error {
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	return lib.checkMasterUse(p)
+}
+
 // checkMasterUse checks every place where a playbook uses master data.
 func (lib *Library) checkMasterUse(p *Playbook) error {
 	var problems []string

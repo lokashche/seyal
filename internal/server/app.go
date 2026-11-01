@@ -238,12 +238,20 @@ func (v *view) status(p *playbook.Playbook, it workitem.Item) (pill, status stri
 	return "p-wait", status
 }
 
-// tellView offers the newest version of each playbook the business uses.
-func (v *view) tell() (*tellView, error) {
+// current lists the version new work starts on, for each process the business has switched on.
+func (v *view) current() ([]struct{ ID, Source string }, error) {
 	rows, _ := v.tx.Query(v.ctx, `
-		SELECT DISTINCT ON (playbook_id) id::text, source FROM playbook_versions
-		WHERE tenant_id = current_tenant() ORDER BY playbook_id, registered_at DESC`)
-	list, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ ID, Source string }])
+		SELECT pv.id::text, pv.source
+		FROM tenant_playbooks tp
+		JOIN playbook_versions pv ON pv.tenant_id = tp.tenant_id AND pv.id = tp.current_version_id
+		WHERE tp.tenant_id = current_tenant() AND tp.active
+		ORDER BY tp.playbook_id`)
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ ID, Source string }])
+}
+
+// tellView offers the current version of each process the business has switched on.
+func (v *view) tell() (*tellView, error) {
+	list, err := v.current()
 	if err != nil || len(list) == 0 {
 		return nil, err
 	}
@@ -424,11 +432,19 @@ func (s *Server) tell(w http.ResponseWriter, r *http.Request, c *call) {
 		err = errors.New("please write or record what the work is")
 	}
 	if err != nil {
-		s.showScreen(w, r, c, "", http.StatusUnprocessableEntity, sentence(err.Error())+".")
+		s.showScreen(w, r, c, "", http.StatusUnprocessableEntity, capital(err.Error())+".")
 		return
 	}
 	var itemID string
 	err = db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
+		// New work may only start on the current version of a process that is switched on.
+		current, err := (&view{ctx: r.Context(), tx: tx}).current()
+		if err != nil {
+			return err
+		}
+		if !slices.ContainsFunc(current, func(p struct{ ID, Source string }) bool { return p.ID == r.FormValue("playbook") }) {
+			return errors.New("that process isn't in use any more; reload the page")
+		}
 		reply, err := ask.Begin(r.Context(), tx, s.store, r.FormValue("playbook"), in)
 		itemID = reply.Item.ID
 		return err
@@ -447,7 +463,7 @@ func (s *Server) say(w http.ResponseWriter, r *http.Request, c *call) {
 		err = errors.New("please write a message, record a voice note or attach a file")
 	}
 	if err != nil {
-		s.showScreen(w, r, c, id, http.StatusUnprocessableEntity, sentence(err.Error())+".")
+		s.showScreen(w, r, c, id, http.StatusUnprocessableEntity, capital(err.Error())+".")
 		return
 	}
 	err = db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
@@ -543,7 +559,7 @@ func (s *Server) problem(w http.ResponseWriter, r *http.Request, c *call, itemID
 	if errors.As(err, &missing) {
 		msg = "Still needed: " + strings.Join(s.labels(r, c, itemID, missing.Keys), ", ") + "."
 	}
-	s.showScreen(w, r, c, itemID, http.StatusUnprocessableEntity, sentence(msg))
+	s.showScreen(w, r, c, itemID, http.StatusUnprocessableEntity, capital(msg))
 }
 
 func (s *Server) labels(r *http.Request, c *call, itemID string, keys []string) []string {
@@ -606,9 +622,14 @@ func (s *Server) media(w http.ResponseWriter, r *http.Request, c *call) {
 // human makes a key like "pending_approval" readable: "pending approval".
 func human(s string) string { return strings.NewReplacer("_", " ", "-", " ").Replace(s) }
 
-// sentence is human with a capital first letter: "leave-request" → "Leave request".
+// sentence is human with a capital first letter: "leave-request" → "Leave request". Use it for keys,
+// never for messages (it would hide the exact name of a misspelt key).
 func sentence(s string) string {
-	s = human(s)
+	return capital(human(s))
+}
+
+// capital gives a message a capital first letter and changes nothing else.
+func capital(s string) string {
 	if s == "" {
 		return s
 	}

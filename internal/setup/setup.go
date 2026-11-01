@@ -218,8 +218,13 @@ func Import(ctx context.Context, owner, app *pgxpool.Pool, lib *playbook.Library
 				}
 			}
 		}
+		// The business starts using each process from the folder; one it already has keeps the
+		// version it uses (changing that is done in Settings → Processes).
 		for _, id := range slices.Sorted(maps.Keys(lib.Playbooks)) {
 			_, isNew, err := playbook.Register(ctx, tx, lib.Playbooks[id])
+			if err == nil {
+				_, err = playbook.EnsureUsed(ctx, tx, lib.Playbooks[id], by)
+			}
 			if err := count(isNew, err); err != nil {
 				return err
 			}

@@ -46,7 +46,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .brand { font: 800 19px/1 var(--f-display); color: var(--ink); text-decoration: none; }
 .biz { color: var(--muted); font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .who { margin-left: auto; display: flex; align-items: center; gap: 10px; font-size: 13.5px; color: var(--muted); }
-.banner { margin: 0; padding: 9px 16px; font-size: 14px; }
+.banner { margin: 0; padding: 9px 16px; font-size: 14px; white-space: pre-line; }
 .banner.error { background: var(--warn-soft); color: var(--warn); }
 .banner.notice { background: var(--ok-soft); color: var(--ok); }
 .who form { margin: 0; }
@@ -151,6 +151,11 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .sform input:not([type="checkbox"]), .sform select, .sform textarea { font: inherit; font-size: 14px; font-weight: 400; border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; background: var(--panel); color: var(--ink); }
 .sform fieldset { border: 0; padding: 0; margin: 0; }
 .sform legend { font-size: 13px; font-weight: 500; margin-bottom: 4px; }
+.panel h3 { font: 600 15px/1.2 var(--f-display); margin: 6px 0 0; }
+.rows.plain li { font-size: 14px; }
+.sform.wide { max-width: none; }
+.code { font: 13px/1.5 var(--f-mono); white-space: pre; tab-size: 2; }
+.advanced > summary { cursor: pointer; font: 500 13px var(--f-mono); color: var(--accent-ink); }
 .checks { display: flex; flex-wrap: wrap; gap: 4px 14px; font-weight: 400; }
 .checks label { flex-direction: row; align-items: center; gap: 6px; font-weight: 400; }
 @media (max-width: 760px) {

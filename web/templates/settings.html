@@ -9,6 +9,8 @@
   <section class="panel">
     {{if eq .Data.Tab "people"}}{{template "people" .}}
     {{else if eq .Data.Tab "roles"}}{{template "roles" .}}
+    {{else if .Data.Process}}{{template "process" .}}
+    {{else if .Data.Processes}}{{template "processes" .}}
     {{else}}{{template "masterdata" .}}{{end}}
   </section>
 </div>
@@ -71,6 +73,83 @@
   <button class="btn sm">Add role</button>
 </form>
 {{end}}
+
+{{define "processes"}}{{with .Data.Processes}}
+<h2>Processes</h2>
+<p class="why">Each process says what details a piece of work needs, who approves it and what happens next. Changing one makes a new version, live at once for new work. Work already started keeps the version it started with.</p>
+<ul class="rows">
+  {{range .InUse}}
+  <li class="{{if not .Active}}off{{end}}">
+    <div class="row-head"><div>
+      <a href="/t/{{$.Slug}}/settings/processes/{{.ID}}"><b>{{.Name}}</b></a>
+      <span class="pill {{if .Active}}p-ok{{else}}p-closed{{end}}">{{if .Active}}in use{{else}}switched off{{end}}</span>
+      <span class="r">version {{.Version}} · {{.Summary}}</span>
+      <span class="r">{{.Description}}</span>
+    </div></div>
+  </li>
+  {{else}}
+  <li class="none">No processes yet. Add one from the templates below.</li>
+  {{end}}
+</ul>
+{{with .Templates}}
+<h3>Templates you can add</h3>
+<ul class="rows">
+  {{range .}}
+  <li><div class="row-head"><div><b>{{.Name}}</b> <span class="r">{{.Description}} · {{.Summary}}</span></div></div>
+    <form method="post" action="/t/{{$.Slug}}/settings/processes" class="sform inline">
+      <input type="hidden" name="template" value="{{.ID}}"><button class="btn sm">Add and use</button>
+    </form>
+  </li>
+  {{end}}
+</ul>
+{{end}}
+{{end}}{{end}}
+
+{{define "process"}}{{with .Data.Process}}
+<p><a href="/t/{{$.Slug}}/settings/processes">← All processes</a></p>
+<h2>{{.Name}} <span class="pill {{if .Active}}p-ok{{else}}p-closed{{end}}">{{if .Active}}in use{{else}}switched off{{end}}</span></h2>
+<p class="why">{{.Description}} · version {{.Version}} · numbered {{.Numbering}}</p>
+
+<form method="post" action="/t/{{$.Slug}}/settings/processes/{{.ID}}" class="sform inline">
+  {{if .Active}}<button class="btn ghost sm" name="action" value="disable">Switch off for new work</button>
+  {{else}}<button class="btn sm" name="action" value="enable">Switch on</button>{{end}}
+  {{with .Template}}<button class="btn ghost sm" name="action" value="template">Use template version {{.}}</button>{{end}}
+</form>
+
+<h3>Details it collects</h3>
+<ul class="rows plain">
+  {{range .Fields}}<li><b>{{.Label}}</b> <span class="r">{{.Type}}{{if .Required}} · required{{end}}{{if .Fixed}} · filled automatically{{end}}{{with .Ask}} · Seyal asks: “{{.}}”{{end}}</span></li>{{end}}
+</ul>
+
+<h3>Steps</h3>
+<p class="why">{{.States}}</p>
+<ul class="rows plain">{{range .Actions}}<li>{{.}}</li>{{end}}</ul>
+
+{{with .Approvals}}<h3>Approvals</h3><ul class="rows plain">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
+{{with .OnState}}<h3>What Seyal does by itself</h3><ul class="rows plain">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
+{{with .Deadlines}}<h3>Deadlines</h3><ul class="rows plain">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
+
+<h3>Versions</h3>
+<ul class="rows plain">
+  {{range .Versions}}
+  <li>version {{.Version}} <span class="r">saved {{.RegisteredAt.Format "2 Jan 2006, 15:04"}}</span>
+    {{if eq .ID $.Data.Process.CurrentID}}<span class="pill p-ok">new work starts here</span>
+    {{else}}<form method="post" action="/t/{{$.Slug}}/settings/processes/{{$.Data.Process.ID}}" class="sform inline">
+      <input type="hidden" name="version" value="{{.ID}}"><button class="btn ghost sm" name="action" value="use">Use this version</button>
+    </form>{{end}}
+  </li>
+  {{end}}
+</ul>
+
+<details class="advanced">
+  <summary>Edit the definition (advanced)</summary>
+  <p class="why">Change the text below, give it a new version number, and save. It's checked before it goes live. Soon you'll be able to describe changes in plain words and let Seyal draft this for you.</p>
+  <form method="post" action="/t/{{$.Slug}}/settings/processes/{{.ID}}" class="sform wide">
+    <textarea name="source" rows="24" spellcheck="false" class="code">{{.Source}}</textarea>
+    <button class="btn sm" name="action" value="save">Check and save as a new version</button>
+  </form>
+</details>
+{{end}}{{end}}
 
 {{define "masterdata"}}{{with .Data.Master}}
 <h2>{{.Label}}s</h2>
