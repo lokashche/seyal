@@ -69,6 +69,14 @@ func LoadLibrary(playbooksDir, mastersDir string) (*Library, error) {
 	return lib, nil
 }
 
+// MasterKind returns the master kind with this name, or nil. A nil library has none.
+func (lib *Library) MasterKind(kind string) *MasterKind {
+	if lib == nil {
+		return nil
+	}
+	return lib.Masters[kind]
+}
+
 // Check validates a playbook on its own and against the library's master kinds, for a playbook
 // that comes from somewhere other than the library folder (e.g. edited in Settings).
 func (lib *Library) Check(p *Playbook) error {

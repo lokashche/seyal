@@ -396,6 +396,11 @@ func (s *Server) itemPage(w http.ResponseWriter, r *http.Request, c *call) {
 
 // showScreen renders the three panes, with an item open or not, and an optional problem to show.
 func (s *Server) showScreen(w http.ResponseWriter, r *http.Request, c *call, itemID string, status int, problem string) {
+	s.show(w, r, c, itemID, status, problem, "")
+}
+
+// show is showScreen with an optional notice too, e.g. Seyal's reply to a greeting on Tell Seyal.
+func (s *Server) show(w http.ResponseWriter, r *http.Request, c *call, itemID string, status int, problem, notice string) {
 	var sc screen
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		v, err := s.newView(r, tx, c)
@@ -422,7 +427,7 @@ func (s *Server) showScreen(w http.ResponseWriter, r *http.Request, c *call, ite
 		return
 	}
 	p := c.page(sc)
-	p.Error = problem
+	p.Error, p.Notice = problem, notice
 	s.render(w, r, status, "app", p)
 }
 
@@ -435,7 +440,7 @@ func (s *Server) tell(w http.ResponseWriter, r *http.Request, c *call) {
 		s.showScreen(w, r, c, "", http.StatusUnprocessableEntity, capital(err.Error())+".")
 		return
 	}
-	var itemID string
+	var reply ask.Reply
 	err = db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		// New work may only start on the current version of a process that is switched on.
 		current, err := (&view{ctx: r.Context(), tx: tx}).current()
@@ -445,15 +450,22 @@ func (s *Server) tell(w http.ResponseWriter, r *http.Request, c *call) {
 		if !slices.ContainsFunc(current, func(p struct{ ID, Source string }) bool { return p.ID == r.FormValue("playbook") }) {
 			return errors.New("that process isn't in use any more; reload the page")
 		}
-		reply, err := ask.Begin(r.Context(), tx, s.store, r.FormValue("playbook"), in)
-		itemID = reply.Item.ID
+		reply, err = ask.Begin(r.Context(), tx, s.env(), r.FormValue("playbook"), in)
 		return err
 	})
 	if err != nil {
 		s.problem(w, r, c, "", err)
 		return
 	}
-	http.Redirect(w, r, "/t/"+c.tenant.Slug+"/items/"+itemID, http.StatusSeeOther)
+	if reply.Item.ID == "" { // a greeting or a question: nothing started, Seyal just answers
+		var said []string
+		for _, m := range reply.Seyal {
+			said = append(said, m.Text)
+		}
+		s.show(w, r, c, "", http.StatusOK, "", strings.Join(said, "\n"))
+		return
+	}
+	http.Redirect(w, r, "/t/"+c.tenant.Slug+"/items/"+reply.Item.ID, http.StatusSeeOther)
 }
 
 func (s *Server) say(w http.ResponseWriter, r *http.Request, c *call) {
@@ -467,10 +479,15 @@ func (s *Server) say(w http.ResponseWriter, r *http.Request, c *call) {
 		return
 	}
 	err = db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
-		_, err := ask.Converse(r.Context(), tx, s.store, id, in)
+		_, err := ask.Converse(r.Context(), tx, s.env(), id, in)
 		return err
 	})
 	s.done(w, r, c, id, err)
+}
+
+// env is what the chat needs besides the database.
+func (s *Server) env() ask.Env {
+	return ask.Env{Store: s.store, AI: s.ai, Library: s.lib}
 }
 
 // maxFiles is how many files one message may carry.

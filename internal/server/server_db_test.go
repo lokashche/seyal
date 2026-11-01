@@ -259,6 +259,11 @@ func TestAJobInTheBrowser(t *testing.T) {
 		t.Fatal("no playbook to tell Seyal about")
 	}
 
+	code, hello, _ := s.post(a, base+"/tell", url.Values{"playbook": {pv[1]}, "text": {"Hello"}}, nil)
+	if code != http.StatusOK || !strings.Contains(hello, "Tell me about the work you want to start") {
+		t.Fatalf("a greeting on Tell Seyal = %d; want the screen again with Seyal's reply", code)
+	}
+
 	code, _, h := s.post(a, base+"/tell", url.Values{"playbook": {pv[1]}, "text": {"New monthly books job for Sundaram"}}, nil)
 	if code != http.StatusSeeOther || !strings.Contains(h.Get("Location"), "/items/") {
 		t.Fatalf("tell = %d to %q", code, h.Get("Location"))

@@ -503,7 +503,7 @@ func (s *Server) saveMaster(w http.ResponseWriter, r *http.Request, c *call) {
 		}
 		if key == "" {
 			var err error
-			if key, err = freeKey(r, tx, mk.Kind, name); err != nil {
+			if key, err = master.FreeKey(r.Context(), tx, mk.Kind, name); err != nil {
 				return err
 			}
 		}
@@ -526,26 +526,6 @@ func (s *Server) saveMaster(w http.ResponseWriter, r *http.Request, c *call) {
 		return
 	}
 	s.showSettings(w, r, c, mk.Kind, http.StatusOK, notice, "")
-}
-
-func freeKey(r *http.Request, tx pgx.Tx, kind, name string) (string, error) {
-	base := strings.Trim(nonKey.ReplaceAllString(strings.ToLower(name), "-"), "-")
-	if base == "" {
-		return "", errors.New("please give it a name")
-	}
-	for i := 1; ; i++ {
-		key := base
-		if i > 1 {
-			key = base + "-" + strconv.Itoa(i)
-		}
-		_, err := master.Get(r.Context(), tx, kind, key)
-		if errors.Is(err, master.ErrNotFound) {
-			return key, nil
-		}
-		if err != nil {
-			return "", err
-		}
-	}
 }
 
 // parseValue turns a form input into a stored value, understood like a chat answer ("12k",

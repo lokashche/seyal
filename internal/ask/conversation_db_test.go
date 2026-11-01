@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"seyal/internal/ai"
 	"seyal/internal/ask"
 	"seyal/internal/audit"
 	"seyal/internal/channel"
@@ -31,15 +32,19 @@ type office struct {
 	tenant         string
 	pv             string
 	store          media.Disk
+	ai             *ai.Setup // AI is off unless a test sets a (fake) model
+	lib            *playbook.Library
 	sam, olga, mia string // Sam (sales), Olga (ops), Mia (maker, no approval role)
 }
+
+func (o *office) env() ask.Env { return ask.Env{Store: o.store, AI: o.ai, Library: o.lib} }
 
 func newOffice(t *testing.T) *office {
 	t.Helper()
 	ctx := context.Background()
 	owner, app := testdb.Connect(t)
 	tenant, sam := testdb.NewTenant(t, owner, "Chat Test")
-	o := &office{t: t, ctx: ctx, app: app, tenant: tenant, sam: sam, store: media.Disk{Dir: t.TempDir()}}
+	o := &office{t: t, ctx: ctx, app: app, tenant: tenant, sam: sam, store: media.Disk{Dir: t.TempDir()}, ai: &ai.Setup{}}
 
 	err := db.WithTenant(ctx, owner, tenant, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, "INSERT INTO roles (tenant_id, key, name) VALUES ($1, 'sales', 'Sales'), ($1, 'ops', 'Ops')", tenant); err != nil {
@@ -71,6 +76,7 @@ func newOffice(t *testing.T) *office {
 	if err != nil {
 		t.Fatal(err)
 	}
+	o.lib = lib
 	by := ledger.PersonActor(sam)
 	o.in(func(tx pgx.Tx) error {
 		var err error
@@ -116,7 +122,7 @@ func (o *office) write(item, person, text string) ask.Reply {
 	var r ask.Reply
 	o.in(func(tx pgx.Tx) error {
 		var err error
-		r, err = ask.Converse(o.ctx, tx, o.store, item, channel.Incoming{Channel: "web", PersonID: person, Text: text})
+		r, err = ask.Converse(o.ctx, tx, o.env(), item, channel.Incoming{Channel: "web", PersonID: person, Text: text})
 		return err
 	})
 	return r
@@ -130,7 +136,7 @@ func TestFillAJobByChat(t *testing.T) {
 	var r ask.Reply
 	o.in(func(tx pgx.Tx) error {
 		var err error
-		r, err = ask.Begin(o.ctx, tx, o.store, o.pv, channel.Incoming{Channel: "web", PersonID: o.sam,
+		r, err = ask.Begin(o.ctx, tx, o.env(), o.pv, channel.Incoming{Channel: "web", PersonID: o.sam,
 			Text: "New monthly bookkeeping job for Acme"})
 		return err
 	})
@@ -181,7 +187,7 @@ func TestRepeatedMessageGetsNoSecondReply(t *testing.T) {
 	o := newOffice(t)
 	var job string
 	o.in(func(tx pgx.Tx) error {
-		r, err := ask.Begin(o.ctx, tx, o.store, o.pv, channel.Incoming{Channel: "web", PersonID: o.sam, Text: "New job"})
+		r, err := ask.Begin(o.ctx, tx, o.env(), o.pv, channel.Incoming{Channel: "web", PersonID: o.sam, Text: "New job"})
 		job = r.Item.ID
 		return err
 	})
@@ -189,7 +195,7 @@ func TestRepeatedMessageGetsNoSecondReply(t *testing.T) {
 		var r ask.Reply
 		o.in(func(tx pgx.Tx) error {
 			var err error
-			r, err = ask.Converse(o.ctx, tx, o.store, job, channel.Incoming{Channel: "web", ExternalID: "m-1",
+			r, err = ask.Converse(o.ctx, tx, o.env(), job, channel.Incoming{Channel: "web", ExternalID: "m-1",
 				PersonID: o.sam, Text: "acme"})
 			return err
 		})

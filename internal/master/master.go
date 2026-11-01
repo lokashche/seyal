@@ -111,6 +111,30 @@ func Get(ctx context.Context, tx pgx.Tx, kind, key string) (Item, error) {
 	return it, nil
 }
 
+var nonKey = regexp.MustCompile(`[^a-z0-9]+`)
+
+// FreeKey makes a key from a name ("Acme & Sons" → "acme-sons"), adding "-2", "-3", … if the key is
+// taken. tx must come from db.WithTenant.
+func FreeKey(ctx context.Context, tx pgx.Tx, kind, name string) (string, error) {
+	base := strings.Trim(nonKey.ReplaceAllString(strings.ToLower(name), "-"), "-")
+	if base == "" {
+		return "", errors.New("please give it a name")
+	}
+	for i := 1; ; i++ {
+		key := base
+		if i > 1 {
+			key = fmt.Sprintf("%s-%d", base, i)
+		}
+		_, err := Get(ctx, tx, kind, key)
+		if errors.Is(err, ErrNotFound) {
+			return key, nil
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+}
+
 // LookupFor loads the master items a work item's fields point at, and returns a lookup the
 // engine can use. Items that don't exist are simply missing from the lookup, so rules that need
 // them answer "unknown". tx must come from db.WithTenant.

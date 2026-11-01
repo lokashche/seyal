@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"seyal/internal/ai"
 	"seyal/internal/channel"
 	"seyal/internal/engine"
 	"seyal/internal/ledger"
@@ -28,11 +29,23 @@ type Reply struct {
 	Item    workitem.Item     // the work item afterwards
 }
 
-// Begin starts a work item from a chat message: the message becomes the first entry of the new
-// item's thread, and Seyal asks the first question. tx must come from db.WithTenant.
-func Begin(ctx context.Context, tx pgx.Tx, store media.Store, playbookVersionID string, in channel.Incoming) (Reply, error) {
+// Env is what a conversation uses besides the database.
+type Env struct {
+	Store   media.Store       // voice notes and files
+	AI      *ai.Setup         // nil, or AI off for "understand": Seyal asks question by question
+	Library *playbook.Library // master kinds, to add a new master item from the chat (may be nil)
+}
+
+// greetingReply answers a greeting on Tell Seyal without starting anything.
+const greetingReply = "Hello! Tell me about the work you want to start, and I'll take it from there."
+
+// Begin handles a message on Tell Seyal. New work starts a work item: the message becomes the first
+// entry of its thread, the details it gives are filled in (when AI is on), and Seyal asks for the
+// next missing one. A greeting or a question starts nothing; Seyal just replies, and the returned
+// Reply has no Item. tx must come from db.WithTenant.
+func Begin(ctx context.Context, tx pgx.Tx, env Env, playbookVersionID string, in channel.Incoming) (Reply, error) {
 	in.ThreadID = ""
-	msg, isNew, err := channel.Receive(ctx, tx, store, in)
+	msg, isNew, err := channel.Receive(ctx, tx, env.Store, in)
 	if err != nil {
 		return Reply{}, err
 	}
@@ -40,31 +53,66 @@ func Begin(ctx context.Context, tx pgx.Tx, store media.Store, playbookVersionID 
 		it, err := workitem.Get(ctx, tx, msg.ThreadID)
 		return Reply{Message: msg, Item: it}, err
 	}
+
+	c, err := newConversation(ctx, tx, env, playbookVersionID, workitem.Item{}, msg)
+	if err != nil {
+		return Reply{}, err
+	}
+	text := strings.TrimSpace(msg.Text)
+	pr := c.understand(text, "")
+	switch {
+	case pr != nil && (pr.Kind == "greeting" || pr.Kind == "question" || pr.Kind == "note") && len(msg.Media) == 0:
+		reply := strings.TrimSpace(pr.Reply)
+		if reply == "" {
+			reply = greetingReply
+		}
+		return c.replyWithoutItem(limit(reply, 600))
+	case pr == nil && isGreeting(text) && len(msg.Media) == 0:
+		return c.replyWithoutItem(greetingReply)
+	}
+
 	by := ledger.PersonActor(msg.PersonID)
 	it, err := workitem.Start(ctx, tx, workitem.NewItem{PlaybookVersionID: playbookVersionID, Via: "chat", Ref: msg.ID, By: by})
 	if err != nil {
 		return Reply{}, err
 	}
-	if msg, err = channel.FileInto(ctx, tx, msg.ID, it.ID, by); err != nil {
+	if c.reply.Message, err = channel.FileInto(ctx, tx, msg.ID, it.ID, by); err != nil {
 		return Reply{}, err
 	}
-	c, err := newConversation(ctx, tx, it, msg)
-	if err != nil {
-		return Reply{}, err
+	c.reply.Item = it
+	offered := false
+	if pr != nil {
+		if _, offered, err = c.apply(pr, text, nil); err != nil {
+			return Reply{}, err
+		}
 	}
-	if err := c.askNext(false); err != nil {
-		return Reply{}, err
+	if !offered {
+		if err := c.askNext(false); err != nil {
+			return Reply{}, err
+		}
 	}
 	return c.reply, nil
 }
 
-// Converse handles a message a person writes in a work item's thread. If Seyal asked a question,
-// the message is the answer; otherwise it may be a short command ("submit", "approve", "reject
-// because ...", or any action of the playbook). Anything else is simply a note in the thread.
-// Then Seyal asks the next question, if any. tx must come from db.WithTenant.
-func Converse(ctx context.Context, tx pgx.Tx, store media.Store, itemID string, in channel.Incoming) (Reply, error) {
+// replyWithoutItem answers a message that starts nothing. Both stay unfiled (not in any thread).
+func (c *conversation) replyWithoutItem(text string) (Reply, error) {
+	m, err := channel.Post(c.ctx, c.tx, "", text)
+	if err != nil {
+		return Reply{}, err
+	}
+	c.reply.Seyal = append(c.reply.Seyal, m)
+	return c.reply, nil
+}
+
+// Converse handles a message a person writes in a work item's thread. If Seyal asked whether to add
+// a new master item, the message is the yes or no. Otherwise, with AI on, the model reads it (details
+// for several fields, a command, a question, a note); without AI, or if AI can't help, an answer to
+// Seyal's last question or a short command ("submit", "approve", "reject because ...") is
+// recognised, and anything else is a note. Then Seyal asks the next question, if any.
+// tx must come from db.WithTenant.
+func Converse(ctx context.Context, tx pgx.Tx, env Env, itemID string, in channel.Incoming) (Reply, error) {
 	in.ThreadID = itemID
-	msg, isNew, err := channel.Receive(ctx, tx, store, in)
+	msg, isNew, err := channel.Receive(ctx, tx, env.Store, in)
 	if err != nil {
 		return Reply{}, err
 	}
@@ -72,20 +120,32 @@ func Converse(ctx context.Context, tx pgx.Tx, store media.Store, itemID string, 
 	if err != nil || !isNew {
 		return Reply{Message: msg, Item: it}, err
 	}
-	c, err := newConversation(ctx, tx, it, msg)
+	c, err := newConversation(ctx, tx, env, it.PlaybookVersionID, it, msg)
 	if err != nil {
 		return Reply{}, err
 	}
 
-	answered := false
+	answered, offered := false, false
 	if text := strings.TrimSpace(msg.Text); text != "" {
-		f, err := c.pending()
-		switch {
-		case err != nil:
+		f, offer, err := c.pending()
+		if err != nil {
 			return Reply{}, err
+		}
+		pendingKey := ""
+		if f != nil {
+			pendingKey = f.Key
+		}
+		var pr *proposal
+		if offer == "" && !c.isCommand(text) {
+			pr = c.understand(text, pendingKey)
+		}
+		switch {
+		case offer != "": // offer is only set when f is
+			answered, err = true, c.answerOffer(*f, offer, text)
+		case pr != nil:
+			answered, offered, err = c.apply(pr, text, f)
 		case f != nil:
-			answered = true
-			err = c.answer(*f, text)
+			answered, err = true, c.answer(*f, text)
 		default:
 			err = c.command(text)
 		}
@@ -93,8 +153,10 @@ func Converse(ctx context.Context, tx pgx.Tx, store media.Store, itemID string, 
 			return Reply{}, err
 		}
 	}
-	if err := c.askNext(answered); err != nil {
-		return Reply{}, err
+	if !offered {
+		if err := c.askNext(answered); err != nil {
+			return Reply{}, err
+		}
 	}
 	return c.reply, nil
 }
@@ -107,20 +169,22 @@ func Pending(ctx context.Context, tx pgx.Tx, it workitem.Item) (*playbook.Field,
 		return nil, err
 	}
 	c := &conversation{ctx: ctx, tx: tx, p: p, reply: Reply{Item: it}}
-	return c.pending()
+	f, _, err := c.pending()
+	return f, err
 }
 
 type conversation struct {
 	ctx    context.Context
 	tx     pgx.Tx
+	env    Env
 	p      *playbook.Playbook
 	person string
 	today  time.Time
 	reply  Reply
 }
 
-func newConversation(ctx context.Context, tx pgx.Tx, it workitem.Item, msg channel.Message) (*conversation, error) {
-	p, err := workitem.PlaybookFor(ctx, tx, it)
+func newConversation(ctx context.Context, tx pgx.Tx, env Env, versionID string, it workitem.Item, msg channel.Message) (*conversation, error) {
+	p, err := workitem.PlaybookFor(ctx, tx, workitem.Item{PlaybookVersionID: versionID})
 	if err != nil {
 		return nil, err
 	}
@@ -132,48 +196,54 @@ func newConversation(ctx context.Context, tx pgx.Tx, it workitem.Item, msg chann
 	if err != nil {
 		return nil, err
 	}
-	return &conversation{ctx: ctx, tx: tx, p: p, person: msg.PersonID, today: time.Now().In(loc),
+	return &conversation{ctx: ctx, tx: tx, env: env, p: p, person: msg.PersonID, today: time.Now().In(loc),
 		reply: Reply{Message: msg, Item: it}}, nil
 }
 
-// pending returns the field Seyal last asked about, if it is still empty.
-func (c *conversation) pending() (*playbook.Field, error) {
-	key, err := c.lastAsked()
+// pending returns the field Seyal last asked about, if it is still empty, and the name it offered to
+// add as a new master item, if the question was such an offer.
+func (c *conversation) pending() (*playbook.Field, string, error) {
+	key, offer, err := c.lastAsked()
 	if err != nil || key == "" {
-		return nil, err
+		return nil, "", err
 	}
 	for i := range c.p.Fields {
 		if f := &c.p.Fields[i]; f.Key == key && isEmpty(c.reply.Item.Fields[key]) {
-			return f, nil
+			return f, offer, nil
 		}
 	}
-	return nil, nil
+	return nil, "", nil
 }
 
-func (c *conversation) lastAsked() (string, error) {
+// lastAsked returns the field of Seyal's last question, and the offered name if it was an offer.
+func (c *conversation) lastAsked() (field, offer string, err error) {
+	if c.reply.Item.ID == "" {
+		return "", "", nil
+	}
 	var body string
-	err := c.tx.QueryRow(c.ctx, `
+	err = c.tx.QueryRow(c.ctx, `
 		SELECT body FROM ledger
 		WHERE tenant_id = current_tenant() AND subject_type = 'work_item' AND subject_id::text = $1
 			AND kind = 'item.asked'
 		ORDER BY seq DESC LIMIT 1`, c.reply.Item.ID).Scan(&body)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil
+		return "", "", nil
 	}
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	var e struct {
 		Payload struct {
 			Change struct {
 				Field string `json:"field"`
+				Offer string `json:"offer_new"`
 			} `json:"change"`
 		} `json:"payload"`
 	}
 	if err := json.Unmarshal([]byte(body), &e); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return e.Payload.Change.Field, nil
+	return e.Payload.Change.Field, e.Payload.Change.Offer, nil
 }
 
 // answer fills field f from the person's answer, or says what was wrong with it.
@@ -280,7 +350,7 @@ func (c *conversation) askNext(answered bool) error {
 		return nil
 	}
 	if f := NextField(c.p, it.Fields); f != nil {
-		last, err := c.lastAsked()
+		last, _, err := c.lastAsked()
 		if err != nil || (last == f.Key && !answered) {
 			return err
 		}
