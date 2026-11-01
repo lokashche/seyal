@@ -35,7 +35,7 @@ func TestImportDemoBusiness(t *testing.T) {
 	}
 	f.Business.Slug = "test-" + strings.ToLower(rand.Text()[:10]) // a fresh business for each run
 
-	first, err := setup.Import(ctx, owner, app, lib, f)
+	first, err := setup.Import(ctx, owner, app, f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,10 +80,25 @@ func TestImportDemoBusiness(t *testing.T) {
 		})
 	})
 
+	t.Run("it has the processes and lists it chose", func(t *testing.T) {
+		in(func(tx pgx.Tx) error {
+			inUse, err := playbook.ListInUse(ctx, tx)
+			if err != nil {
+				return err
+			}
+			kinds, err := playbook.Kinds(ctx, tx)
+			if len(inUse) != 1 || inUse[0].PlaybookID != "job-evaluation" || len(kinds) != 2 ||
+				kinds["client"] == nil || kinds["work_type"] == nil {
+				t.Errorf("processes %v, lists %v; want job-evaluation with client and work_type", inUse, kinds)
+			}
+			return err
+		})
+	})
+
 	t.Run("importing again changes nothing", func(t *testing.T) {
 		var before, after int64
 		in(func(tx pgx.Tx) error { return tx.QueryRow(ctx, "SELECT max(seq) FROM ledger").Scan(&before) })
-		again, err := setup.Import(ctx, owner, app, lib, f)
+		again, err := setup.Import(ctx, owner, app, f)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -95,7 +110,7 @@ func TestImportDemoBusiness(t *testing.T) {
 
 	t.Run("a changed fee is updated", func(t *testing.T) {
 		f.Master["work_type"][0].Fields["standard_fee"] = 15000
-		again, err := setup.Import(ctx, owner, app, lib, f)
+		again, err := setup.Import(ctx, owner, app, f)
 		if err != nil || again.Changes != 1 {
 			t.Errorf("import after a fee change = %+v, %v; want exactly 1 change", again, err)
 		}

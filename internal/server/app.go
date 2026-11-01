@@ -487,7 +487,7 @@ func (s *Server) say(w http.ResponseWriter, r *http.Request, c *call) {
 
 // env is what the chat needs besides the database.
 func (s *Server) env() ask.Env {
-	return ask.Env{Store: s.store, AI: s.ai, Library: s.lib}
+	return ask.Env{Store: s.store, AI: s.ai}
 }
 
 // maxFiles is how many files one message may carry.

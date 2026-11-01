@@ -78,7 +78,11 @@ func (s *Server) showProcesses(w http.ResponseWriter, r *http.Request, c *call, 
 		if i < 0 {
 			return errNoTab
 		}
-		sv.Process = s.processView(inUse[i])
+		lib, err := playbook.ForBusiness(r.Context(), tx, s.lib)
+		if err != nil {
+			return err
+		}
+		sv.Process = s.processView(inUse[i], lib)
 		if len(draft) > 0 {
 			sv.Process.Source = draft[0]
 		}
@@ -122,9 +126,9 @@ func (s *Server) row(p *playbook.Playbook, active bool) processRow {
 }
 
 // processView describes one process in plain words.
-func (s *Server) processView(u playbook.InUse) *processView {
+func (s *Server) processView(u playbook.InUse, lib *playbook.Library) *processView {
 	p := u.Playbook
-	d := describer{p: p, lib: s.lib}
+	d := describer{p: p, lib: lib}
 	pv := &processView{processRow: s.row(p, u.Active), Numbering: p.Numbering, Versions: u.Versions,
 		CurrentID: u.Current.ID, Source: u.Current.Source}
 	if t := s.lib.Playbooks[p.ID]; t != nil && t.Version != p.Version {
@@ -303,7 +307,14 @@ func (s *Server) addProcess(w http.ResponseWriter, r *http.Request, c *call) {
 		return
 	}
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
-		_, err := playbook.EnsureUsed(r.Context(), tx, t, ledger.PersonActor(c.session.PersonID))
+		by := ledger.PersonActor(c.session.PersonID)
+		if err := playbook.EnsureKinds(r.Context(), tx, s.lib, t, by); err != nil {
+			return err
+		}
+		if err := s.checkForBusiness(r, tx, t); err != nil {
+			return err
+		}
+		_, err := playbook.EnsureUsed(r.Context(), tx, t, by)
 		return err
 	})
 	if err != nil {
@@ -335,6 +346,12 @@ func (s *Server) changeProcess(w http.ResponseWriter, r *http.Request, c *call) 
 			if t == nil {
 				return errors.New("there is no template for this process")
 			}
+			if err := playbook.EnsureKinds(r.Context(), tx, s.lib, t, by); err != nil {
+				return err
+			}
+			if err := s.checkForBusiness(r, tx, t); err != nil {
+				return err
+			}
 			versionID, _, err := playbook.Register(r.Context(), tx, t)
 			if err != nil {
 				return err
@@ -349,7 +366,7 @@ func (s *Server) changeProcess(w http.ResponseWriter, r *http.Request, c *call) 
 			if p.ID != id {
 				return fmt.Errorf("the id must stay %q (a different id is a different process)", id)
 			}
-			if err := s.lib.Check(p); err != nil {
+			if err := s.checkForBusiness(r, tx, p); err != nil {
 				return err
 			}
 			versionID, isNew, err := playbook.Register(r.Context(), tx, p)
@@ -377,4 +394,13 @@ func (s *Server) changeProcess(w http.ResponseWriter, r *http.Request, c *call) 
 		return
 	}
 	s.showProcesses(w, r, c, id, http.StatusOK, notice, "")
+}
+
+// checkForBusiness checks a process against the business's own lists.
+func (s *Server) checkForBusiness(r *http.Request, tx pgx.Tx, p *playbook.Playbook) error {
+	lib, err := playbook.ForBusiness(r.Context(), tx, s.lib)
+	if err != nil {
+		return err
+	}
+	return lib.Check(p)
 }

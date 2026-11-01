@@ -5,7 +5,6 @@ package server
 import (
 	"errors"
 	"fmt"
-	"maps"
 	"net/http"
 	"regexp"
 	"slices"
@@ -38,6 +37,8 @@ type settingsView struct {
 	Master    *masterView
 	Processes *processList
 	Process   *processView
+	Lists     *listsView
+	List      *listView
 	AI        *aiView
 }
 
@@ -114,6 +115,9 @@ var errNoTab = errors.New("no such settings page")
 // showSettings renders one tab, with an optional notice (e.g. a new password) or problem.
 func (s *Server) showSettings(w http.ResponseWriter, r *http.Request, c *call, tabKey string, status int, notice, problem string) {
 	sv := settingsView{Tab: tabKey, Tabs: s.tabs(c, tabKey)}
+	if tabKey != "people" && tabKey != "roles" {
+		sv.Tabs = s.tabs(c, "lists") // a list's entries
+	}
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		v, err := s.newView(r, tx, c)
 		if err != nil {
@@ -125,11 +129,15 @@ func (s *Server) showSettings(w http.ResponseWriter, r *http.Request, c *call, t
 		case "roles":
 			sv.Roles, err = v.roleRows()
 		default:
-			mk := s.lib.Masters[tabKey]
+			mk, err := playbook.Kind(r.Context(), tx, tabKey)
+			if err != nil {
+				return err
+			}
 			if mk == nil {
 				return errNoTab
 			}
 			sv.Master, err = v.masterView(mk)
+			return err
 		}
 		return err
 	})
@@ -152,14 +160,8 @@ func (s *Server) tabs(c *call, current string) []tab {
 		{Label: "People", URL: base + "people", Current: current == "people"},
 		{Label: "Roles", URL: base + "roles", Current: current == "roles"},
 		{Label: "Processes", URL: base + "processes", Current: current == "processes"},
+		{Label: "Lists", URL: base + "lists", Current: current == "lists"},
 		{Label: "AI usage", URL: base + "ai", Current: current == "ai"},
-	}
-	for _, kind := range slices.Sorted(maps.Keys(s.lib.Masters)) {
-		label := s.lib.Masters[kind].Label
-		if label == "" {
-			label = sentence(kind)
-		}
-		tabs = append(tabs, tab{Label: label + "s", URL: base + "master/" + kind, Current: current == kind})
 	}
 	return tabs
 }
@@ -330,7 +332,10 @@ func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request, c *call) 
 		fmt.Sprintf("New password for %s (shown only now): %s", name, password), "")
 }
 
-var roleKey = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+var (
+	roleKey = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+	nonKey  = regexp.MustCompile(`[^a-z0-9]+`)
+)
 
 func (s *Server) addRole(w http.ResponseWriter, r *http.Request, c *call) {
 	name := strings.TrimSpace(r.PostFormValue("name"))
@@ -470,24 +475,25 @@ func (v *view) activePeople() ([]option, error) {
 	return opts, err
 }
 
-var nonKey = regexp.MustCompile(`[^a-z0-9]+`)
-
 // saveMaster adds, edits, retires or brings back a master item. A new item's key is made from its
 // name ("Rasi Textiles" → "rasi-textiles"), with a number added if that key is taken.
 func (s *Server) saveMaster(w http.ResponseWriter, r *http.Request, c *call) {
-	mk := s.lib.Masters[r.PathValue("kind")]
-	if mk == nil {
-		http.NotFound(w, r)
-		return
-	}
+	kind := r.PathValue("kind")
 	if err := r.ParseForm(); err != nil {
-		s.showSettings(w, r, c, mk.Kind, http.StatusBadRequest, "", "That form couldn't be read.")
+		s.showSettings(w, r, c, kind, http.StatusBadRequest, "", "That form couldn't be read.")
 		return
 	}
 	key, name, action := r.PostForm.Get("key"), strings.TrimSpace(r.PostForm.Get("name")), r.PostForm.Get("action")
 	notice := ""
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		by := ledger.PersonActor(c.session.PersonID)
+		mk, err := playbook.Kind(r.Context(), tx, kind)
+		if err != nil {
+			return err
+		}
+		if mk == nil {
+			return errNoTab
+		}
 		switch action {
 		case "retire":
 			notice = name + " retired: it can't be chosen for new work any more. Existing work keeps it."
@@ -498,7 +504,13 @@ func (s *Server) saveMaster(w http.ResponseWriter, r *http.Request, c *call) {
 				return err
 			}
 			notice = it.Name + " is back in use."
-			_, _, err = master.Save(r.Context(), tx, mk, key, it.Name, it.Fields, by)
+			fields := engine.Fields{} // only the details the list still records
+			for _, f := range mk.Fields {
+				if v, ok := it.Fields[f.Key]; ok {
+					fields[f.Key] = v
+				}
+			}
+			_, _, err = master.Save(r.Context(), tx, mk, key, it.Name, fields, by)
 			return err
 		}
 		if key == "" {
@@ -518,14 +530,18 @@ func (s *Server) saveMaster(w http.ResponseWriter, r *http.Request, c *call) {
 			}
 		}
 		notice = name + " saved."
-		_, _, err := master.Save(r.Context(), tx, mk, key, name, fields, by)
+		_, _, err = master.Save(r.Context(), tx, mk, key, name, fields, by)
 		return err
 	})
-	if err != nil {
-		s.settingsProblem(w, r, c, mk.Kind, err)
+	if errors.Is(err, errNoTab) {
+		http.NotFound(w, r)
 		return
 	}
-	s.showSettings(w, r, c, mk.Kind, http.StatusOK, notice, "")
+	if err != nil {
+		s.settingsProblem(w, r, c, kind, err)
+		return
+	}
+	s.showSettings(w, r, c, kind, http.StatusOK, notice, "")
 }
 
 // parseValue turns a form input into a stored value, understood like a chat answer ("12k",

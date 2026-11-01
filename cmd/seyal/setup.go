@@ -103,7 +103,7 @@ func importFile(path string, out io.Writer) (*setup.File, error) {
 	}
 	defer owner.Close()
 	defer app.Close()
-	sum, err := setup.Import(ctx, owner, app, lib, f)
+	sum, err := setup.Import(ctx, owner, app, f)
 	if err != nil {
 		return nil, err
 	}

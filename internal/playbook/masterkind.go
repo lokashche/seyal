@@ -4,6 +4,7 @@ package playbook
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +21,9 @@ type MasterKind struct {
 	Kind   string  `yaml:"kind"`
 	Label  string  `yaml:"label"`
 	Fields []Field `yaml:"fields"`
+
+	Source []byte   `yaml:"-"` // the definition as written
+	Hash   [32]byte `yaml:"-"` // sha256 of Source
 }
 
 var masterFieldTypes = []string{"text", "number", "money", "date", "bool", "choice", "person", "list"}
@@ -30,18 +34,28 @@ func LoadMasterKindFile(path string) (*MasterKind, error) {
 	if err != nil {
 		return nil, err
 	}
+	m, err := ParseMasterKind(data)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return m, nil
+}
+
+// ParseMasterKind reads and validates a master kind definition.
+func ParseMasterKind(data []byte) (*MasterKind, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	var m MasterKind
 	if err := dec.Decode(&m); err != nil {
 		if errors.Is(err, io.EOF) {
-			err = errors.New("file is empty")
+			err = errors.New("the definition is empty")
 		}
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, err
 	}
 	if err := m.Validate(); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, err
 	}
+	m.Source, m.Hash = data, sha256.Sum256(data)
 	return &m, nil
 }
 

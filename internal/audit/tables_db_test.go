@@ -55,6 +55,9 @@ func newBusiness(t *testing.T) business {
 	}
 	by := ledger.PersonActor(sales)
 	err = db.WithTenant(ctx, app, tenant, func(tx pgx.Tx) error {
+		if err := playbook.EnsureKinds(ctx, tx, lib, lib.Playbooks["job-evaluation"], by); err != nil {
+			return err
+		}
 		pv, _, err := playbook.Register(ctx, tx, lib.Playbooks["job-evaluation"])
 		if err != nil {
 			return err
@@ -130,6 +133,8 @@ func TestTamperingWithTablesIsFound(t *testing.T) {
 		{"link removed", "", "DELETE FROM work_item_links WHERE from_item_id = $1", "work_item_links", "missing"},
 		{"standard fee changed in master data", "", `UPDATE master_items SET fields = '{"standard_fee": 1}' WHERE key = 'monthly-books' AND $1::text <> ''`,
 			"master_items", "differs from the ledger"},
+		{"list definition edited", "", `UPDATE master_kinds SET source = source || '  - { key: secret, label: Secret, type: text }' || chr(10) WHERE kind = 'client' AND $1::text <> ''`,
+			"master_kinds", "changed outside Seyal"},
 		{"playbook rules edited", "", `UPDATE playbook_versions SET source = replace(source, 'role: ops', 'role: sales') WHERE $1::text <> ''`,
 			"playbook_versions", "text was changed"},
 		// The child item is the only other item; its link must go first, as an attacker would do.

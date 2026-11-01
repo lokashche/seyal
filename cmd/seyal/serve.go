@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -22,8 +23,8 @@ import (
 	"seyal/internal/server"
 )
 
-// runServe starts the web app. The playbook folder is loaded as templates (and its master kinds as
-// the Settings forms); each business manages its own processes in Settings → Processes.
+// runServe starts the web app. The playbook and master-data folders are loaded as templates; each
+// business manages its own processes and lists in Settings.
 func runServe(out io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -43,10 +44,25 @@ func runServe(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	rows, _ := app.Query(ctx, "SELECT slug FROM tenants ORDER BY slug")
-	tenants, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	rows, _ := app.Query(ctx, "SELECT id::text, slug FROM tenants ORDER BY slug")
+	tenants, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ ID, Slug string }])
 	if err != nil {
 		return err
+	}
+	// Businesses from before lists were kept per business get the lists they use from the templates.
+	for _, t := range tenants {
+		var added []string
+		err := db.WithTenant(ctx, app, t.ID, func(tx pgx.Tx) error {
+			var err error
+			added, err = playbook.AdoptKinds(ctx, tx, lib)
+			return err
+		})
+		if err != nil {
+			fmt.Fprintf(out, "Warning: %s: %v\n", t.Slug, err)
+		}
+		if len(added) > 0 {
+			fmt.Fprintf(out, "%s: lists now kept per business: %s\n", t.Slug, strings.Join(added, ", "))
+		}
 	}
 
 	mediaDir := os.Getenv("SEYAL_MEDIA_DIR")
@@ -81,8 +97,8 @@ func runServe(out io.Writer) error {
 	}()
 
 	fmt.Fprintf(out, "Seyal is running. Press Ctrl+C to stop.\n")
-	for _, slug := range tenants {
-		fmt.Fprintf(out, "  http://%s/t/%s/\n", addr, slug)
+	for _, t := range tenants {
+		fmt.Fprintf(out, "  http://%s/t/%s/\n", addr, t.Slug)
 	}
 	if err := hs.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err

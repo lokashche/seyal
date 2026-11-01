@@ -31,9 +31,8 @@ type Reply struct {
 
 // Env is what a conversation uses besides the database.
 type Env struct {
-	Store   media.Store       // voice notes and files
-	AI      *ai.Setup         // nil, or AI off for "understand": Seyal asks question by question
-	Library *playbook.Library // master kinds, to add a new master item from the chat (may be nil)
+	Store media.Store // voice notes and files
+	AI    *ai.Setup   // nil, or AI off for "understand": Seyal asks question by question
 }
 
 // greetingReply answers a greeting on Tell Seyal without starting anything.

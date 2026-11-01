@@ -65,7 +65,7 @@ func newSite(t *testing.T) *site {
 		t.Fatal(err)
 	}
 	f.Business.Slug = "test-" + strings.ToLower(rand.Text()[:10])
-	sum, err := setup.Import(ctx, owner, app, lib, f)
+	sum, err := setup.Import(ctx, owner, app, f)
 	if err != nil {
 		t.Fatal(err)
 	}

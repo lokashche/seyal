@@ -12,6 +12,8 @@
     {{else if eq .Data.Tab "ai"}}{{template "ai" .}}
     {{else if .Data.Process}}{{template "process" .}}
     {{else if .Data.Processes}}{{template "processes" .}}
+    {{else if .Data.List}}{{template "list" .}}
+    {{else if .Data.Lists}}{{template "lists" .}}
     {{else}}{{template "masterdata" .}}{{end}}
   </section>
 </div>
@@ -188,7 +190,62 @@
 </div>
 {{end}}
 
+{{define "lists"}}{{with .Data.Lists}}
+<h2>Lists</h2>
+<p class="why">The things your work refers to: the people or businesses you serve, kinds of work, places, and so on. Each list is your business's own: change what it records here, at once, without a restart. Processes choose from these lists.</p>
+<ul class="rows">
+  {{range .Lists}}
+  <li><div class="row-head"><div>
+    <a href="/t/{{$.Slug}}/settings/master/{{.Kind}}"><b>{{.Label}}s</b></a>
+    <span class="r">{{.Summary}} · <a href="/t/{{$.Slug}}/settings/lists/{{.Kind}}">what it records</a></span>
+  </div></div></li>
+  {{else}}
+  <li class="none">No lists yet. Add one from the templates below, or make a new one.</li>
+  {{end}}
+</ul>
+{{with .Templates}}
+<h3>Templates you can add</h3>
+<ul class="rows">
+  {{range .}}
+  <li><div class="row-head"><div><b>{{.Label}}s</b> <span class="r">{{.Summary}}</span></div></div>
+    <form method="post" action="/t/{{$.Slug}}/settings/lists" class="sform inline">
+      <input type="hidden" name="template" value="{{.Kind}}"><button class="btn sm">Add</button>
+    </form>
+  </li>
+  {{end}}
+</ul>
+{{end}}
+<details class="advanced">
+  <summary>Make a new list (advanced)</summary>
+  <p class="why">Give it a short kind (lowercase, e.g. member), a label people see, and the details it records. Types: text, number, money, date, bool, choice (with options), person, list (with of). Every entry also has a name.</p>
+  <form method="post" action="/t/{{$.Slug}}/settings/lists" class="sform wide">
+    <textarea name="source" rows="10" spellcheck="false" class="code">{{.Blank}}</textarea>
+    <button class="btn sm">Check and add</button>
+  </form>
+</details>
+{{end}}{{end}}
+
+{{define "list"}}{{with .Data.List}}
+<p><a href="/t/{{$.Slug}}/settings/lists">← All lists</a></p>
+<h2>{{.Label}}s</h2>
+<p class="why">version {{.Version}} · {{.Summary}} · <a href="/t/{{$.Slug}}/settings/master/{{.Kind}}">see the entries</a>{{with .UsedBy}} · used by {{range $i, $p := .}}{{if $i}}, {{end}}{{$p}}{{end}}{{end}}</p>
+<h3>What each entry records</h3>
+<ul class="rows plain">
+  <li><b>Name</b> <span class="r">text · always</span></li>
+  {{range .Fields}}<li><b>{{.Label}}</b> <span class="r">{{.Type}}</span></li>{{end}}
+</ul>
+<details class="advanced">
+  <summary>Edit the definition (advanced)</summary>
+  <p class="why">Add, rename or remove details, then save. It's checked first: a detail a process still uses can't be removed. Entries keep their values; a removed detail simply isn't shown any more.</p>
+  <form method="post" action="/t/{{$.Slug}}/settings/lists/{{.Kind}}" class="sform wide">
+    <textarea name="source" rows="16" spellcheck="false" class="code">{{.Source}}</textarea>
+    <button class="btn sm">Check and save</button>
+  </form>
+</details>
+{{end}}{{end}}
+
 {{define "masterdata"}}{{with .Data.Master}}
+<p><a href="/t/{{$.Slug}}/settings/lists">← All lists</a> · <a href="/t/{{$.Slug}}/settings/lists/{{.Kind}}">what it records</a></p>
 <h2>{{.Label}}s</h2>
 <p class="why">Changes apply to new work at once. Work already started keeps what it was given. Retired entries can't be chosen for new work, but nothing is deleted.</p>
 <details class="add">

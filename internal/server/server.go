@@ -40,7 +40,7 @@ const cookieName = "seyal_session"
 type Server struct {
 	app     *pgxpool.Pool
 	store   media.Store
-	lib     *playbook.Library // master-kind definitions, for the Settings forms
+	lib     *playbook.Library // templates: sample processes and lists a business can start from
 	ai      *ai.Setup
 	secure  bool // send cookies only over HTTPS
 	pages   map[string]*template.Template
@@ -54,7 +54,7 @@ type Server struct {
 type Config struct {
 	App           *pgxpool.Pool     // the app role's connections
 	Store         media.Store       // voice notes and files
-	Library       *playbook.Library // templates and master-kind definitions (Settings forms)
+	Library       *playbook.Library // templates a business can start from (its own are in the database)
 	AI            *ai.Setup         // models per purpose; nil means AI is off
 	SecureCookies bool              // true when the app is reached over HTTPS
 }
@@ -160,6 +160,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /t/{slug}/settings/processes", s.admin(s.addProcess))
 	mux.HandleFunc("GET /t/{slug}/settings/processes/{id}", s.admin(s.processPage))
 	mux.HandleFunc("POST /t/{slug}/settings/processes/{id}", s.admin(s.changeProcess))
+	mux.HandleFunc("GET /t/{slug}/settings/lists", s.admin(s.listsPage))
+	mux.HandleFunc("POST /t/{slug}/settings/lists", s.admin(s.addList))
+	mux.HandleFunc("GET /t/{slug}/settings/lists/{kind}", s.admin(s.listPage))
+	mux.HandleFunc("POST /t/{slug}/settings/lists/{kind}", s.admin(s.changeList))
 	mux.HandleFunc("GET /t/{slug}/settings/ai", s.admin(s.aiPage))
 	mux.HandleFunc("GET /t/{slug}/settings/master/{kind}", s.admin(s.masterPage))
 	mux.HandleFunc("POST /t/{slug}/settings/master/{kind}", s.admin(s.saveMaster))

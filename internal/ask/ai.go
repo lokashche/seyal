@@ -307,7 +307,11 @@ func (c *conversation) isCommand(text string) bool {
 // offerNew asks whether to add a name that isn't in a field's list yet as a new master item.
 func (c *conversation) offerNew(f playbook.Field, name string) error {
 	label := strings.ToLower(Label(f))
-	if mk := c.env.Library.MasterKind(f.Kind); mk != nil && mk.Label != "" {
+	mk, err := playbook.Kind(c.ctx, c.tx, f.Kind)
+	if err != nil {
+		return err
+	}
+	if mk != nil && mk.Label != "" {
 		label = strings.ToLower(mk.Label)
 	}
 	m, err := c.post(fmt.Sprintf("%s isn't in the list yet. Add it as a new %s? (yes / no)", name, label))
@@ -333,7 +337,10 @@ func (c *conversation) answerOffer(f playbook.Field, name, text string) error {
 	case !yes:
 		return nil // the field is still empty, so askNext asks its question again
 	}
-	mk := c.env.Library.MasterKind(f.Kind)
+	mk, err := playbook.Kind(c.ctx, c.tx, f.Kind)
+	if err != nil {
+		return err
+	}
 	if mk == nil {
 		return c.say("I can't add new entries here. Please ask an admin to add it in Settings.")
 	}

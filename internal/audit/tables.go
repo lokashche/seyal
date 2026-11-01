@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Package audit checks that the tables Seyal keeps for screens (work items, approvals, links,
-// master items, playbook versions and messages) match what the ledger says happened. The ledger is the
+// master items, lists, playbook versions and messages) match what the ledger says happened. The ledger is the
 // record; the tables are a convenient copy. Anyone who edits a table directly, bypassing Seyal,
 // is caught here.
 package audit
@@ -40,7 +40,7 @@ func CheckTables(ctx context.Context, tx pgx.Tx) ([]Problem, error) {
 		return nil, err
 	}
 	c := &checker{ctx: ctx, tx: tx, want: want}
-	for _, check := range []func() error{c.items, c.approvals, c.links, c.masters, c.playbooks, c.messages} {
+	for _, check := range []func() error{c.items, c.approvals, c.links, c.masters, c.kinds, c.playbooks, c.messages} {
 		if err := check(); err != nil {
 			return nil, err
 		}
@@ -54,6 +54,7 @@ type expected struct {
 	approvals map[string]approval      // by "item/version/slot"
 	links     map[string]bool          // by "from/to/kind"
 	masters   map[string]masterRow     // by id
+	kinds     map[string]kindRow       // lists, by id
 	playbooks map[string]string        // id → sha256 of the file, in hex
 	messages  map[string]channel.Message
 }
@@ -63,6 +64,13 @@ type approval struct {
 	Decision   string `json:"decision"`
 	FieldsHash string `json:"fields_sha256"`
 	Reason     string `json:"reason"`
+}
+
+type kindRow struct {
+	Kind    string `json:"kind"`
+	Label   string `json:"label"`
+	Version int    `json:"version"`
+	SHA256  string `json:"sha256"`
 }
 
 type masterRow struct {
@@ -81,6 +89,7 @@ func replay(ctx context.Context, tx pgx.Tx) (expected, error) {
 		approvals: map[string]approval{},
 		links:     map[string]bool{},
 		masters:   map[string]masterRow{},
+		kinds:     map[string]kindRow{},
 		playbooks: map[string]string{},
 		messages:  map[string]channel.Message{},
 	}
@@ -126,6 +135,13 @@ func (w expected) apply(kind, subject, actor string, payload json.RawMessage) er
 			return err
 		}
 		w.masters[subject] = m
+		return nil
+	case "master_kind.changed":
+		var k kindRow
+		if err := json.Unmarshal(payload, &k); err != nil {
+			return err
+		}
+		w.kinds[subject] = k
 		return nil
 	case "playbook.registered":
 		var p struct {
@@ -342,6 +358,41 @@ func (c *checker) masters() error {
 		return err
 	}
 	leftovers(c, "master_items", c.want.masters)
+	return nil
+}
+
+func (c *checker) kinds() error {
+	rows, err := c.tx.Query(c.ctx, `
+		SELECT id::text, kind, label, version, content_sha256, source FROM master_kinds
+		WHERE tenant_id = current_tenant() ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, source string
+		var g kindRow
+		var stored []byte
+		if err := rows.Scan(&id, &g.Kind, &g.Label, &g.Version, &stored, &source); err != nil {
+			return err
+		}
+		w, ok := c.want.kinds[id]
+		delete(c.want.kinds, id)
+		sum := sha256.Sum256([]byte(source))
+		g.SHA256 = hex.EncodeToString(stored)
+		switch {
+		case !ok:
+			c.add("master_kinds", id, "not in the ledger (added outside Seyal)")
+		case w != g:
+			c.add("master_kinds", id, "list %q differs from the ledger", g.Kind)
+		case hex.EncodeToString(sum[:]) != w.SHA256:
+			c.add("master_kinds", id, "the definition of list %q was changed outside Seyal", g.Kind)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	leftovers(c, "master_kinds", c.want.kinds)
 	return nil
 }
 

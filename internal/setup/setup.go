@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package setup creates or updates a business from one YAML file: its settings, roles, people,
-// master data, and the playbooks it uses. Importing the same file again changes nothing, so a file
-// can be kept as the business's set-up and re-imported after edits.
+// Package setup creates or updates a business from one YAML file: its settings, roles, people, the
+// processes and lists it uses, and its master data. Importing the same file again changes nothing,
+// so a file can be kept as the business's set-up and re-imported after edits.
 package setup
 
 import (
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -35,8 +36,17 @@ type File struct {
 	Business Business `yaml:"business"`
 	Roles    []Role   `yaml:"roles"`
 	People   []Person `yaml:"people"`
+	// The processes the business uses: template ids, or paths (ending in .yaml, relative to this
+	// file) to the business's own definitions. Required; [] means none yet.
+	Processes []string `yaml:"processes"`
+	// Lists (master kinds) the business uses, the same way. Optional: the lists its processes and its
+	// master data need are added from the templates anyway.
+	Lists []string `yaml:"lists"`
 	// Master items by kind. Money is in normal units (12000 = 12,000.00); "@key" is a person.
 	Master map[string][]Item `yaml:"master"`
+
+	dir    string            // the file's folder, for relative paths
+	chosen *playbook.Library // the processes and lists above, read and checked
 }
 
 type Business struct {
@@ -87,16 +97,18 @@ func Load(path string, lib *playbook.Library) (*File, error) {
 	if err := dec.Decode(&f); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
+	f.dir = filepath.Dir(path)
 	if err := f.Check(lib); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return &f, nil
 }
 
-// Check reports every problem in the file at once.
+// Check reports every problem in the file at once. lib holds the templates.
 func (f *File) Check(lib *playbook.Library) error {
 	var problems []string
 	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+	problems = append(problems, f.choose(lib)...)
 
 	b := f.Business
 	if !slugPattern.MatchString(b.Slug) {
@@ -141,10 +153,9 @@ func (f *File) Check(lib *playbook.Library) error {
 		}
 	}
 	for _, kind := range slices.Sorted(maps.Keys(f.Master)) {
-		mk := lib.Masters[kind]
+		mk := f.chosen.Masters[kind]
 		if mk == nil {
-			add("master kind %q is not defined in the master-data files", kind)
-			continue
+			continue // reported by choose
 		}
 		for _, it := range f.Master[kind] {
 			if _, err := f.fields(mk, it, map[string]string{}, keys); err != nil {
@@ -158,9 +169,77 @@ func (f *File) Check(lib *playbook.Library) error {
 	return errors.New("set-up file has problems:\n  - " + strings.Join(problems, "\n  - "))
 }
 
+// choose reads the processes and lists the file names, from the templates or the business's own
+// files, adds the lists they need, and checks that they fit together. It returns the problems.
+func (f *File) choose(templates *playbook.Library) []string {
+	var problems []string
+	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+	f.chosen = &playbook.Library{Playbooks: map[string]*playbook.Playbook{}, Masters: map[string]*playbook.MasterKind{}}
+	own := func(entry string) bool { return strings.HasSuffix(entry, ".yaml") }
+
+	for _, entry := range f.Lists {
+		mk := templates.Masters[entry]
+		if own(entry) {
+			var err error
+			if mk, err = playbook.LoadMasterKindFile(filepath.Join(f.dir, entry)); err != nil {
+				add("list %s: %v", entry, err)
+				continue
+			}
+		}
+		if mk == nil {
+			add("list %q: there is no such template (or give the path to your own .yaml file)", entry)
+			continue
+		}
+		f.chosen.Masters[mk.Kind] = mk
+	}
+	if f.Processes == nil {
+		add("processes: list the processes this business uses (template ids or .yaml files), or [] for none yet")
+	}
+	for _, entry := range f.Processes {
+		p := templates.Playbooks[entry]
+		if own(entry) {
+			var err error
+			if p, err = playbook.LoadFile(filepath.Join(f.dir, entry)); err != nil {
+				add("process %s: %v", entry, err)
+				continue
+			}
+		}
+		if p == nil {
+			add("process %q: there is no such template (or give the path to your own .yaml file)", entry)
+			continue
+		}
+		f.chosen.Playbooks[p.ID] = p
+	}
+
+	// Lists that the processes or the master data need, and that weren't named, come from the templates.
+	need := slices.Collect(maps.Keys(f.Master))
+	for _, p := range f.chosen.Playbooks {
+		need = append(need, playbook.NeededKinds(p)...)
+	}
+	slices.Sort(need)
+	for _, kind := range slices.Compact(need) {
+		if f.chosen.Masters[kind] != nil {
+			continue
+		}
+		if mk := templates.Masters[kind]; mk != nil {
+			f.chosen.Masters[kind] = mk
+		} else {
+			add("list %q is used but not defined; add it under lists", kind)
+		}
+	}
+	for _, id := range slices.Sorted(maps.Keys(f.chosen.Playbooks)) {
+		if err := f.chosen.Check(f.chosen.Playbooks[id]); err != nil {
+			add("process %s: %v", id, err)
+		}
+	}
+	return problems
+}
+
 // Import creates or updates the business described by f. The owner pool creates the business
 // (the app role may not); everything else goes through the app pool, with ledger events.
-func Import(ctx context.Context, owner, app *pgxpool.Pool, lib *playbook.Library, f *File) (Summary, error) {
+// Lists and processes the business already has keep their current definitions (those are changed in
+// Settings); new ones are added.
+func Import(ctx context.Context, owner, app *pgxpool.Pool, f *File) (Summary, error) {
 	sum := Summary{People: map[string]string{}}
 	by := ledger.SystemActor
 	b := f.Business
@@ -218,19 +297,30 @@ func Import(ctx context.Context, owner, app *pgxpool.Pool, lib *playbook.Library
 				}
 			}
 		}
-		// The business starts using each process from the folder; one it already has keeps the
-		// version it uses (changing that is done in Settings → Processes).
-		for _, id := range slices.Sorted(maps.Keys(lib.Playbooks)) {
-			_, isNew, err := playbook.Register(ctx, tx, lib.Playbooks[id])
+		kinds, err := playbook.Kinds(ctx, tx)
+		if err != nil {
+			return err
+		}
+		for _, kind := range slices.Sorted(maps.Keys(f.chosen.Masters)) {
+			if kinds[kind] == nil {
+				if err := count(playbook.SaveKind(ctx, tx, f.chosen.Masters[kind], by)); err != nil {
+					return err
+				}
+				kinds[kind] = f.chosen.Masters[kind]
+			}
+		}
+		// A process the business already has keeps the version it uses (changed in Settings).
+		for _, id := range slices.Sorted(maps.Keys(f.chosen.Playbooks)) {
+			_, isNew, err := playbook.Register(ctx, tx, f.chosen.Playbooks[id])
 			if err == nil {
-				_, err = playbook.EnsureUsed(ctx, tx, lib.Playbooks[id], by)
+				_, err = playbook.EnsureUsed(ctx, tx, f.chosen.Playbooks[id], by)
 			}
 			if err := count(isNew, err); err != nil {
 				return err
 			}
 		}
 		for _, kind := range slices.Sorted(maps.Keys(f.Master)) {
-			mk := lib.Masters[kind]
+			mk := kinds[kind] // the business's own definition, which may differ from the file's
 			for _, it := range f.Master[kind] {
 				fields, err := f.fields(mk, it, sum.People, nil)
 				if err != nil {

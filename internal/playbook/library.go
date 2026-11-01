@@ -58,7 +58,7 @@ func LoadLibrary(playbooksDir, mastersDir string) (*Library, error) {
 			continue
 		}
 		lib.Playbooks[p.ID] = p
-		if err := lib.checkMasterUse(p); err != nil {
+		if err := lib.checkMasterUse(p, ""); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", path, err))
 		}
 	}
@@ -69,25 +69,18 @@ func LoadLibrary(playbooksDir, mastersDir string) (*Library, error) {
 	return lib, nil
 }
 
-// MasterKind returns the master kind with this name, or nil. A nil library has none.
-func (lib *Library) MasterKind(kind string) *MasterKind {
-	if lib == nil {
-		return nil
-	}
-	return lib.Masters[kind]
-}
-
 // Check validates a playbook on its own and against the library's master kinds, for a playbook
 // that comes from somewhere other than the library folder (e.g. edited in Settings).
 func (lib *Library) Check(p *Playbook) error {
 	if err := p.Validate(); err != nil {
 		return err
 	}
-	return lib.checkMasterUse(p)
+	return lib.checkMasterUse(p, "")
 }
 
-// checkMasterUse checks every place where a playbook uses master data.
-func (lib *Library) checkMasterUse(p *Playbook) error {
+// checkMasterUse checks every place where a playbook uses master data, or only the places that use
+// master kind only, if given.
+func (lib *Library) checkMasterUse(p *Playbook, only string) error {
 	var problems []string
 	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 
@@ -96,7 +89,7 @@ func (lib *Library) checkMasterUse(p *Playbook) error {
 		fields[p.Fields[i].Key] = &p.Fields[i]
 	}
 	for _, f := range p.Fields {
-		if f.Type != "master" {
+		if f.Type != "master" || (only != "" && f.Kind != only) {
 			continue
 		}
 		kind := lib.Masters[f.Kind]
@@ -117,6 +110,9 @@ func (lib *Library) checkMasterUse(p *Playbook) error {
 	}
 	for _, r := range p.masterRefs {
 		kind := lib.Masters[fields[r.field].Kind]
+		if only != "" && fields[r.field].Kind != only {
+			continue
+		}
 		if kind != nil && kind.field(r.sub) == nil {
 			add("%s: %s has no field %q", r.where, kind.Kind, r.sub)
 		}

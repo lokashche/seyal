@@ -12,6 +12,11 @@ business:
   timezone: Asia/Kolkata
   fiscal_year_start_month: 4
 
+# The processes this business uses: sample templates by id, or your own files ("my-process.yaml",
+# relative to this file). The lists they need (clients, work types) come with them. Use "lists:" to
+# add more lists, the same way.
+processes: [job-evaluation]
+
 roles:
   - { key: sales, name: Sales }
   - { key: ops, name: Operations }

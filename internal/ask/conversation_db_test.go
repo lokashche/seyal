@@ -33,11 +33,10 @@ type office struct {
 	pv             string
 	store          media.Disk
 	ai             *ai.Setup // AI is off unless a test sets a (fake) model
-	lib            *playbook.Library
-	sam, olga, mia string // Sam (sales), Olga (ops), Mia (maker, no approval role)
+	sam, olga, mia string    // Sam (sales), Olga (ops), Mia (maker, no approval role)
 }
 
-func (o *office) env() ask.Env { return ask.Env{Store: o.store, AI: o.ai, Library: o.lib} }
+func (o *office) env() ask.Env { return ask.Env{Store: o.store, AI: o.ai} }
 
 func newOffice(t *testing.T) *office {
 	t.Helper()
@@ -76,9 +75,12 @@ func newOffice(t *testing.T) *office {
 	if err != nil {
 		t.Fatal(err)
 	}
-	o.lib = lib
+
 	by := ledger.PersonActor(sam)
 	o.in(func(tx pgx.Tx) error {
+		if err := playbook.EnsureKinds(ctx, tx, lib, lib.Playbooks["job-evaluation"], by); err != nil {
+			return err
+		}
 		var err error
 		if o.pv, _, err = playbook.Register(ctx, tx, lib.Playbooks["job-evaluation"]); err != nil {
 			return err
