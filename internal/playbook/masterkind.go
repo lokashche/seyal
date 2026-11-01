@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -21,6 +22,10 @@ type MasterKind struct {
 	Kind   string  `yaml:"kind"`
 	Label  string  `yaml:"label"`
 	Fields []Field `yaml:"fields"`
+	// NewEntries are values an entry gets when someone adds it from the chat ("Add it as a new …?"),
+	// e.g. { is_new: true } so an admin checks it and processes can treat it as new. Yes/no, text,
+	// choice and number details only.
+	NewEntries map[string]any `yaml:"new_entries"`
 
 	Source []byte   `yaml:"-"` // the definition as written
 	Hash   [32]byte `yaml:"-"` // sha256 of Source
@@ -92,14 +97,52 @@ func (m *MasterKind) Validate() error {
 		if (f.Type == "choice") != (len(f.Options) > 0) {
 			add(`%s: "options" is required for choices and only allowed for choices`, where)
 		}
-		if f.Kind != "" || len(f.Prefill) > 0 || f.Ask != "" {
-			add("%s: kind, prefill and ask are only for playbooks", where)
+		if f.Kind != "" || len(f.Prefill) > 0 || f.Ask != "" || f.FromMessage {
+			add("%s: kind, prefill, ask and from_message are only for playbooks", where)
+		}
+	}
+	for _, k := range slices.Sorted(maps.Keys(m.NewEntries)) {
+		f, v := m.field(k), m.NewEntries[k]
+		if f == nil {
+			add("new_entries: unknown field %q", k)
+			continue
+		}
+		ok := false
+		switch f.Type {
+		case "bool":
+			_, ok = v.(bool)
+		case "text":
+			_, ok = v.(string)
+		case "choice":
+			s, isText := v.(string)
+			ok = isText && slices.Contains(f.Options, s)
+		case "number":
+			switch v.(type) {
+			case int, float64:
+				ok = true
+			}
+		}
+		if !ok {
+			add("new_entries: %s: give a %s value (new entries can only preset yes/no, text, choice and number details)", k, f.Type)
 		}
 	}
 	if len(problems) == 0 {
 		return nil
 	}
 	return &ValidationError{Name: fmt.Sprintf("master kind %q", m.Kind), Problems: problems}
+}
+
+// NewEntryFields returns the preset values for an entry added from the chat, as stored values (numbers
+// as float64).
+func (m *MasterKind) NewEntryFields() map[string]any {
+	out := map[string]any{}
+	for k, v := range m.NewEntries {
+		if n, ok := v.(int); ok {
+			v = float64(n)
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // field returns the master field with the given key, or nil.

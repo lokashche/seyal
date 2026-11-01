@@ -96,7 +96,7 @@ func New(cfg Config) (*Server, error) {
 			return m, nil
 		},
 	}
-	for _, name := range []string{"home", "login", "app", "offline", "settings"} {
+	for _, name := range []string{"home", "login", "app", "offline", "settings", "password"} {
 		t, err := template.New(name).Funcs(funcs).ParseFS(web.Files, "templates/layout.html", "templates/"+name+".html")
 		if err != nil {
 			return nil, err
@@ -152,6 +152,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /t/{slug}/login", s.loginPage)
 	mux.HandleFunc("POST /t/{slug}/login", s.login)
 	mux.HandleFunc("POST /t/{slug}/logout", s.authed(s.logout))
+	mux.HandleFunc("GET /t/{slug}/password", s.authed(s.passwordPage))
+	mux.HandleFunc("POST /t/{slug}/password", s.authed(s.changePassword))
 	mux.HandleFunc("GET /t/{slug}/{$}", s.authed(s.tellPage))
 	mux.HandleFunc("POST /t/{slug}/tell", s.authed(s.tell))
 	mux.HandleFunc("GET /t/{slug}/items/{id}", s.authed(s.itemPage))
@@ -278,6 +280,16 @@ func (s *Server) authed(h func(http.ResponseWriter, *http.Request, *call)) http.
 			s.fail(w, r, err)
 			return
 		}
+		// With a password an admin made, the person chooses their own before anything else.
+		if pw := "/t/" + t.Slug + "/password"; c.session.MustChange && r.URL.Path != pw && !strings.HasSuffix(r.URL.Path, "/logout") {
+			if r.Header.Get("HX-Request") == "true" {
+				w.Header().Set("HX-Redirect", pw)
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			http.Redirect(w, r, pw, http.StatusSeeOther)
+			return
+		}
 		h(w, r, c)
 	}
 }
@@ -371,10 +383,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Value: token, Path: "/t/" + t.Slug + "/", Expires: sess.ExpiresAt,
-		HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode,
-	})
+	s.setSession(w, t.Slug, token, sess.ExpiresAt)
 	http.Redirect(w, r, "/t/"+t.Slug+"/", http.StatusSeeOther)
 }
 

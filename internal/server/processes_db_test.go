@@ -163,6 +163,7 @@ func TestTemplateNeedsListDetails(t *testing.T) {
 		t.Fatal(err)
 	}
 	list := strings.Replace(string(w), "  - { key: is_new,", "  - { key: region, label: Region, type: text }\n  # - { key: is_new,", 1)
+	list = strings.Replace(list, "new_entries: { is_new: true }\n", "", 1) // it presets the detail that is gone
 	if code, body, _ := s.post(l, base+"/settings/lists/work_type", url.Values{"source": {list}}, nil); code != http.StatusOK {
 		t.Fatalf("change the list = %d: %s", code, problem(body))
 	}

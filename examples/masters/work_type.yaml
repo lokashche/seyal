@@ -3,6 +3,8 @@
 # much work the client needs), the standard fee is only a guide and the owner approves the fee.
 kind: work_type
 label: Work type
+# A work type added from the chat is new for the team: it is studied first and the owner approves it.
+new_entries: { is_new: true }
 fields:
   - { key: documents, label: Documents required, type: list, of: text }
   - { key: timeline_days, label: Timeline (days), type: number }

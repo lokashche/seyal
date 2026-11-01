@@ -105,6 +105,10 @@ type Condition struct {
 	Ne    *Value      `yaml:"ne"`
 	Lt    *Value      `yaml:"lt"`
 	Gt    *Value      `yaml:"gt"`
+	// IfMissing is the answer when a value the comparison needs isn't filled in. Without it the
+	// answer is "unknown", and approvals then take the safe side (they ask). Give it when a missing
+	// value has a clear meaning, e.g. a list entry never marked new isn't new: if_missing: false.
+	IfMissing *bool `yaml:"if_missing"`
 }
 
 // Value is what a field is compared with: a literal (fail, true, 100) or another field

@@ -36,7 +36,7 @@
   {{if and .Admin $.Settings}}<a class="fold" href="/t/{{.Slug}}/settings/people">{{icon "settings"}}<span class="ft">Settings</span></a>{{end}}
   <div class="me-row">
     <span class="avatar" aria-hidden="true">{{initials .Session.Name}}</span>
-    <span class="me-name" title="{{.Session.Name}}">{{.Session.Name}}</span>
+    <a class="me-name" href="/t/{{.Slug}}/password" title="{{.Session.Name}}: change your password">{{.Session.Name}}</a>
     <form method="post" action="/t/{{.Slug}}/logout"><button class="icon-btn" title="Log out" aria-label="Log out">{{icon "logout"}}</button></form>
   </div>
 </div>

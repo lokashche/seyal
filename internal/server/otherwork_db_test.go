@@ -13,6 +13,27 @@ import (
 	"testing"
 )
 
+// TestNewFromChatIsNew: an entry added from the chat gets its list's presets (new_entries), so a client
+// added this way is marked new (not checked yet) and the sample process asks the owner to approve.
+func TestNewFromChatIsNew(t *testing.T) {
+	s := newSiteWith(t, "../../examples/playbooks")
+	base := "/t/" + s.slug
+	a := s.logIn(arjun)
+	_, home, _ := s.get(a, base+"/")
+	pv := regexp.MustCompile(`value="([^"]+)" form="tell-form" data-name="Job evaluation"`).FindStringSubmatch(home)[1]
+	_, _, h := s.post(a, base+"/tell", url.Values{"playbook": {pv}, "text": {"Books for a new firm"}}, nil)
+	item := h.Get("Location")
+	if page := html.UnescapeString(s.send(a, item+"/say", url.Values{"text": {"Rasi Textiles"}})); !strings.Contains(page, "Rasi Textiles") ||
+		!strings.Contains(page, "as a new client") {
+		t.Fatalf("an unknown client should be offered as new:\n%s", page)
+	}
+	s.send(a, item+"/say", url.Values{"text": {"yes"}})
+	_, list, _ := s.get(s.logIn(lakshmi), base+"/settings/master/client")
+	if !strings.Contains(list, "Rasi Textiles") || !strings.Contains(list, "New (not checked yet): yes") {
+		t.Errorf("Rasi Textiles should be in the list, marked new:\n%s", list)
+	}
+}
+
 // TestOtherWork: work that fits no process is offered as Other work (the catch-all), which takes its
 // "what" from the message instead of asking for it again; naming who does it hands it to them. Work
 // that fits a real process is still offered that process.

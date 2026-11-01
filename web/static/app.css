@@ -261,6 +261,9 @@ code, .code { font-family: var(--f-mono); font-size: 12.5px; }
 .card input { font: inherit; border: 1px solid var(--line); border-radius: var(--r); padding: 8px 11px; background: var(--panel); color: var(--ink); }
 .card .error { background: var(--warn-soft); color: var(--warn); padding: 8px 11px; border-radius: var(--r); margin: 0; font-size: 13.5px; }
 .card .btn { justify-content: center; padding: 9px 14px; }
+.card .small { font-size: 12.5px; }
+.me-name { color: var(--ink); text-decoration: none; }
+.me-name:hover { text-decoration: underline; }
 
 /* Choosing what to start on Tell Seyal */
 .proc-search { font: inherit; font-size: 13.5px; border: 1px solid var(--line); border-radius: var(--r); padding: 7px 11px; background: var(--panel); color: var(--ink); }

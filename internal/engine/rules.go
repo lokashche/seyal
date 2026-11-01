@@ -82,6 +82,9 @@ func (e evaluator) eval(c playbook.Condition) (Result, error) {
 		right = e.value(want.Field)
 	}
 	if isEmpty(left) || isEmpty(right) {
+		if c.IfMissing != nil { // the process says what a missing value means
+			return toResult(*c.IfMissing), nil
+		}
 		return Unknown, nil
 	}
 

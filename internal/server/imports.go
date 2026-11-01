@@ -685,7 +685,7 @@ func (s *Server) importPeople(w http.ResponseWriter, r *http.Request, c *call) {
 	case apply && iv.Problems == 0:
 		notice := imported(iv)
 		if len(passwords) > 0 {
-			notice += "\nPasswords for the new people (shown only now; pass each on privately):\n" + strings.Join(passwords, "\n")
+			notice += "\nFirst passwords for the new people (shown only now; pass each on privately; they choose their own when they log in):\n" + strings.Join(passwords, "\n")
 		}
 		s.showSettings(w, r, c, "people", http.StatusOK, notice, "")
 	default:

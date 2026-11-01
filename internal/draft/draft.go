@@ -251,6 +251,8 @@ Process definition keys:
   { field: key, eq|ne|lt|gt: value } where value is a plain value or { field: other_key };
   { any: [conditions] } or { all: [conditions] }. lt and gt work on number, money and date fields.
   key.detail refers to a detail of the chosen list entry, e.g. { field: kind.is_new, eq: true }.
+  A condition whose value isn't filled in answers "unknown", and approvals then ask (the safe side). Add
+  if_missing: false (or true) when a missing value has a clear meaning, e.g. an entry never marked new isn't new.
 - deadlines (optional): [ { due_from: a date field } ].
 - on (optional): actions when entering a state: { state: [ { do: post, text: "..." }, { do: assign, to: person_field },
   { do: copy, from: field, to: field } ] }. post text may use {field_key}. copy keeps a value to compare with later
@@ -263,4 +265,6 @@ Process definition keys:
 List definition: { kind: lowercase_with_underscores, label: Singular label, fields: [ { key, label, type, ... } ] }.
 List fields use the types text, number, money, date, bool, choice, person, list; no ask, kind or prefill.
 Every list entry also has a built-in key and name; don't add those as fields.
+A list may have new_entries: { field: value }: the values an entry gets when someone adds it from the chat,
+e.g. { is_new: true } so it is checked later (yes/no, text, choice and number details only).
 `

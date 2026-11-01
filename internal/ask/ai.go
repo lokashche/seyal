@@ -387,7 +387,8 @@ func (c *conversation) addOffered(f playbook.Field, name string) error {
 		if err != nil {
 			return workitem.Item{}, err
 		}
-		if _, _, err := master.Save(c.ctx, sp, mk, key, name, engine.Fields{}, by); err != nil {
+		// The list's preset values for entries added this way, e.g. "new, not checked yet".
+		if _, _, err := master.Save(c.ctx, sp, mk, key, name, engine.Fields(mk.NewEntryFields()), by); err != nil {
 			return workitem.Item{}, err
 		}
 		return workitem.SetFields(c.ctx, sp, c.reply.Item.ID, engine.Fields{f.Key: key}, by)

@@ -253,7 +253,7 @@ func (s *Server) addPerson(w http.ResponseWriter, r *http.Request, c *call) {
 		return
 	}
 	s.showSettings(w, r, c, "people", http.StatusOK,
-		fmt.Sprintf("Added %s. Their password (shown only now): %s", name, password), "")
+		fmt.Sprintf("Added %s. Their first password (shown only now): %s. They choose their own when they log in with it.", name, password), "")
 }
 
 // updatePerson saves name, email, roles and active/disabled. Admins can't lock themselves out, and
@@ -332,7 +332,7 @@ func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request, c *call) 
 		return
 	}
 	s.showSettings(w, r, c, "people", http.StatusOK,
-		fmt.Sprintf("New password for %s (shown only now): %s", name, password), "")
+		fmt.Sprintf("New password for %s (shown only now): %s. They choose their own when they log in with it.", name, password), "")
 }
 
 var (

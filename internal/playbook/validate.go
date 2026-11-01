@@ -256,8 +256,8 @@ func (v *validator) condition(c Condition, where string) {
 		v.condition(sub, fmt.Sprintf("%s: all[%d]", where, i))
 	}
 	if c.Field == "" {
-		if len(used) > 0 {
-			v.add("%s: eq, ne, lt and gt need a field", where)
+		if len(used) > 0 || c.IfMissing != nil {
+			v.add("%s: eq, ne, lt, gt and if_missing need a field", where)
 		}
 		return
 	}

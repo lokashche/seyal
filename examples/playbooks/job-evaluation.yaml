@@ -3,7 +3,7 @@
 # job is approved. Work the team hasn't done before is studied first (a linked Requirement study).
 # Generic example only. Real playbooks live in each business's own set-up.
 id: job-evaluation
-version: "0.3"
+version: "0.4"
 description: Evaluate a new piece of client work. Sales agrees the basics, Operations plans it and confirms the fee, then it is approved before work starts.
 examples:
   - "New monthly bookkeeping job for Acme Traders, fee 12000"
@@ -80,6 +80,7 @@ approvals:
           - { field: nature_of_work.fixed_price, ne: true }
           - { field: fee_agreed, lt: { field: standard_fee } }
           - { field: nature_of_work.is_new, eq: true }
+          - { field: client.is_new, eq: true, if_missing: false } # a client never marked new isn't new
           - { field: integrity_check, eq: fail }
 
 deadlines:

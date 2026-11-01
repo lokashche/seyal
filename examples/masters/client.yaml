@@ -1,7 +1,11 @@
 # Sample master-data kind. Every item also has a built-in key and name.
 kind: client
 label: Client
+# Someone who adds a client from the chat makes a new, unchecked client: the owner approves its first job,
+# and an admin switches "New" off in Settings once the client is checked.
+new_entries: { is_new: true }
 fields:
   - { key: contact_person, label: Contact person, type: text }
   - { key: email, label: Email, type: text }
   - { key: phone, label: Phone, type: text }
+  - { key: is_new, label: New (not checked yet), type: bool }

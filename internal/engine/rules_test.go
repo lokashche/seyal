@@ -113,6 +113,12 @@ func TestComparisons(t *testing.T) {
 		{"all with one unknown", playbook.Condition{All: []playbook.Condition{
 			leaf("fee_agreed", "gt", 0), leaf("integrity_check", "eq", "pass")}},
 			Fields{"fee_agreed": 10.0}, Unknown},
+		{"missing detail, if_missing false", ifMissing(leaf("nature_of_work.is_new", "eq", true), false),
+			Fields{"nature_of_work": "unflagged"}, False},
+		{"missing detail, if_missing true", ifMissing(leaf("nature_of_work.is_new", "eq", true), true),
+			Fields{"nature_of_work": "unflagged"}, True},
+		{"present detail ignores if_missing", ifMissing(leaf("nature_of_work.is_new", "eq", true), false),
+			Fields{"nature_of_work": "new-service"}, True},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -125,6 +131,12 @@ func TestComparisons(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ifMissing returns c with if_missing set to b.
+func ifMissing(c playbook.Condition, b bool) playbook.Condition {
+	c.IfMissing = &b
+	return c
 }
 
 func TestCannotCompareTextWithNumber(t *testing.T) {

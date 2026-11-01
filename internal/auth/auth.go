@@ -44,6 +44,9 @@ type Session struct {
 	Name      string
 	Roles     []string
 	ExpiresAt time.Time
+	// MustChange is true while the person logs in with a password an admin made: they choose their own
+	// before anything else.
+	MustChange bool
 }
 
 // dummyHash is compared against when an email is unknown, so a wrong email takes as long as a
@@ -54,20 +57,18 @@ var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("not a real password"), bc
 // the password or its hash. tx must come from db.WithTenant.
 func SetPassword(ctx context.Context, tx pgx.Tx, personID, email, password string, by ledger.Actor) error {
 	email = strings.ToLower(strings.TrimSpace(email))
-	switch {
-	case !strings.Contains(email, "@"):
+	if !strings.Contains(email, "@") {
 		return errors.New("that doesn't look like an email address")
-	case utf8.RuneCountInString(password) < MinPassword:
-		return fmt.Errorf("a password needs at least %d characters", MinPassword)
-	case len(password) > maxPassword:
-		return fmt.Errorf("a password can be at most %d bytes", maxPassword)
+	}
+	if err := CheckNew(password); err != nil {
+		return err
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return err
 	}
 	tag, err := tx.Exec(ctx, `
-		UPDATE persons SET login_email = $2, password_hash = $3
+		UPDATE persons SET login_email = $2, password_hash = $3, password_temporary = false
 		WHERE tenant_id = current_tenant() AND id::text = $1`, personID, email, string(hash))
 	if err != nil {
 		return fmt.Errorf("auth: set password: %w", err)
@@ -94,9 +95,9 @@ func Login(ctx context.Context, tx pgx.Tx, email, password, userAgent string) (t
 	email = strings.ToLower(strings.TrimSpace(email))
 	var hash string
 	err = tx.QueryRow(ctx, `
-		SELECT id::text, display_name, coalesce(password_hash, '') FROM persons
+		SELECT id::text, display_name, coalesce(password_hash, ''), password_temporary FROM persons
 		WHERE tenant_id = current_tenant() AND login_email = $1 AND status = 'active'`, email).
-		Scan(&s.PersonID, &s.Name, &hash)
+		Scan(&s.PersonID, &s.Name, &hash, &s.MustChange)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows) || (err == nil && hash == ""):
 		bcrypt.CompareHashAndPassword(dummyHash, []byte(password)) // same time as a wrong password
@@ -149,7 +150,56 @@ func NewPassword(ctx context.Context, tx pgx.Tx, personID string, by ledger.Acto
 		return "", errors.New("this person has no login email yet")
 	}
 	password := rand.Text()[:16]
-	return password, SetPassword(ctx, tx, personID, email, password, by)
+	if err := SetPassword(ctx, tx, personID, email, password, by); err != nil {
+		return "", err
+	}
+	// Made by an admin (a person), it is temporary: whoever logs in with it chooses their own first.
+	// Made by Seyal itself (the demo seed, `seyal set-password`), it is the person's password.
+	if by.Kind == ledger.Human {
+		if _, err := tx.Exec(ctx, `
+			UPDATE persons SET password_temporary = true WHERE tenant_id = current_tenant() AND id::text = $1`,
+			personID); err != nil {
+			return "", fmt.Errorf("auth: mark temporary: %w", err)
+		}
+	}
+	return password, nil
+}
+
+// ErrWrongPassword means the current password given to change it was wrong.
+var ErrWrongPassword = errors.New("the current password is wrong")
+
+// ChangePassword lets a person replace their password, after giving the current one. Like every
+// new password, it ends all their sessions; the caller logs them in again on this device.
+// tx must come from db.WithTenant.
+func ChangePassword(ctx context.Context, tx pgx.Tx, personID, current, next string) error {
+	var email, hash string
+	err := tx.QueryRow(ctx, `
+		SELECT coalesce(login_email, ''), coalesce(password_hash, '') FROM persons
+		WHERE tenant_id = current_tenant() AND id::text = $1 AND status = 'active'`, personID).Scan(&email, &hash)
+	if err != nil {
+		return fmt.Errorf("auth: change password: %w", err)
+	}
+	if hash == "" || bcrypt.CompareHashAndPassword([]byte(hash), []byte(current)) != nil {
+		return ErrWrongPassword
+	}
+	if next == current {
+		return ErrSamePassword
+	}
+	return SetPassword(ctx, tx, personID, email, next, ledger.PersonActor(personID))
+}
+
+// ErrSamePassword means the new password is the current one.
+var ErrSamePassword = errors.New("please choose a password different from the current one")
+
+// CheckNew says what is wrong with a new password, or nil if it may be used.
+func CheckNew(password string) error {
+	switch {
+	case utf8.RuneCountInString(password) < MinPassword:
+		return fmt.Errorf("a password needs at least %d characters", MinPassword)
+	case len(password) > maxPassword:
+		return fmt.Errorf("a password can be at most %d bytes", maxPassword)
+	}
+	return nil
 }
 
 // Pretend spends as long as checking a real password. Use it for a login to an address that
@@ -166,11 +216,11 @@ func Check(ctx context.Context, tx pgx.Tx, token string) (Session, error) {
 	}
 	var s Session
 	err := tx.QueryRow(ctx, `
-		SELECT s.person_id::text, p.display_name, s.expires_at
+		SELECT s.person_id::text, p.display_name, s.expires_at, p.password_temporary
 		FROM sessions s JOIN persons p ON p.tenant_id = s.tenant_id AND p.id = s.person_id
 		WHERE s.tenant_id = current_tenant() AND s.token_sha256 = $1
 			AND s.ended_at IS NULL AND s.expires_at > now() AND p.status = 'active'`,
-		fingerprint(token)).Scan(&s.PersonID, &s.Name, &s.ExpiresAt)
+		fingerprint(token)).Scan(&s.PersonID, &s.Name, &s.ExpiresAt, &s.MustChange)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Session{}, ErrNoSession
 	}
