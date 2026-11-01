@@ -9,12 +9,14 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"html/template"
 	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,6 +41,7 @@ type Server struct {
 	pages   map[string]*template.Template
 	static  http.Handler
 	asset   string // fingerprint of the static files, added to their addresses
+	worker  []byte // the service worker script, with the fingerprint filled in
 	limiter *limiter
 }
 
@@ -46,7 +49,7 @@ type Server struct {
 func New(app *pgxpool.Pool, store media.Store, secureCookies bool) (*Server, error) {
 	s := &Server{app: app, store: store, secure: secureCookies, pages: map[string]*template.Template{},
 		limiter: newLimiter(10, 15*time.Minute)}
-	for _, name := range []string{"home", "login", "app"} {
+	for _, name := range []string{"home", "login", "app", "offline"} {
 		t, err := template.ParseFS(web.Files, "templates/layout.html", "templates/"+name+".html")
 		if err != nil {
 			return nil, err
@@ -61,6 +64,11 @@ func New(app *pgxpool.Pool, store media.Store, secureCookies bool) (*Server, err
 	if s.asset, err = fingerprint(static); err != nil {
 		return nil, err
 	}
+	sw, err := fs.ReadFile(web.Files, "templates/sw.js")
+	if err != nil {
+		return nil, err
+	}
+	s.worker = bytes.ReplaceAll(sw, []byte("__VERSION__"), []byte(s.asset))
 	return s, nil
 }
 
@@ -91,6 +99,9 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", cacheFor(time.Hour, s.static))
 	mux.HandleFunc("GET /{$}", s.home)
+	mux.HandleFunc("GET /sw.js", s.serviceWorker)
+	mux.HandleFunc("GET /offline", s.offline)
+	mux.HandleFunc("GET /t/{slug}/manifest.webmanifest", s.manifest)
 	mux.HandleFunc("GET /t/{slug}/login", s.loginPage)
 	mux.HandleFunc("POST /t/{slug}/login", s.login)
 	mux.HandleFunc("POST /t/{slug}/logout", s.authed(s.logout))
@@ -194,6 +205,45 @@ func (s *Server) authed(h func(http.ResponseWriter, *http.Request, *call)) http.
 
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, http.StatusOK, "home", page{})
+}
+
+// serviceWorker is served from the root so it can look after every page. It is never cached
+// long, so a new version reaches browsers on their next visit.
+func (s *Server) serviceWorker(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Write(s.worker)
+}
+
+func (s *Server) offline(w http.ResponseWriter, r *http.Request) {
+	s.render(w, r, http.StatusOK, "offline", page{})
+}
+
+var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
+
+// manifest describes the installable app for one business address. Like the login page, it is
+// the same for every address and never names the business (D29). Browsers fetch it without the
+// login cookie, so it can't require a login.
+func (s *Server) manifest(w http.ResponseWriter, r *http.Request) {
+	slug := r.PathValue("slug")
+	if !slugPattern.MatchString(slug) {
+		http.NotFound(w, r)
+		return
+	}
+	base := "/t/" + slug + "/"
+	m := map[string]any{
+		"name": "Seyal", "short_name": "Seyal", "description": "No forms. Just tell Seyal.",
+		"id": base, "start_url": base, "scope": base, "display": "standalone",
+		"background_color": "#f4f5f1", "theme_color": "#c9861a",
+		"icons": []map[string]string{
+			{"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png"},
+			{"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"},
+			{"src": "/static/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+		},
+	}
+	w.Header().Set("Content-Type", "application/manifest+json")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	json.NewEncoder(w).Encode(m)
 }
 
 // loginPage looks the same for every address, real or not, and never shows the business's name.

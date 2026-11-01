@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -162,7 +163,9 @@ func TestLoginPage(t *testing.T) {
 		if strings.Contains(real, "Kaveri") {
 			t.Error("the login page shows the business's name")
 		}
-		if real != fake {
+		// The page contains the address you typed (for the app manifest); apart from that it
+		// must be identical, so it can't tell real addresses from made-up ones.
+		if strings.ReplaceAll(fake, "no-such-firm", s.slug) != real {
 			t.Error("a real address and a made-up one give different login pages")
 		}
 		if csp := h.Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") ||
@@ -419,6 +422,56 @@ func TestVoiceNotesAndAttachments(t *testing.T) {
 		code, body, _ := s.upload(a, base+"/tell", map[string]string{"playbook": pv, "text": "  "}, nil)
 		if code != http.StatusUnprocessableEntity || !strings.Contains(problem(body), "record") {
 			t.Errorf("empty tell = %d: %s", code, problem(body))
+		}
+	})
+}
+
+func TestInstallableApp(t *testing.T) {
+	s := newSite(t)
+	base := "/t/" + s.slug + "/"
+
+	t.Run("pages point at the manifest and icons", func(t *testing.T) {
+		_, page, _ := s.get(s.browser(), base+"login")
+		for _, want := range []string{`rel="manifest" href="` + base + `manifest.webmanifest"`,
+			`name="theme-color"`, `rel="apple-touch-icon"`} {
+			if !strings.Contains(page, want) {
+				t.Errorf("login page is missing %s", want)
+			}
+		}
+	})
+
+	t.Run("manifest opens the business's own address, without naming it", func(t *testing.T) {
+		code, body, h := s.get(s.browser(), base+"manifest.webmanifest")
+		var m struct {
+			Name, StartURL, Scope, Display string
+			Icons                          []struct{ Src, Sizes, Purpose string }
+		}
+		if err := json.Unmarshal([]byte(strings.NewReplacer(`"start_url"`, `"StartURL"`).Replace(body)), &m); err != nil {
+			t.Fatal(err)
+		}
+		if code != http.StatusOK || h.Get("Content-Type") != "application/manifest+json" || m.Name != "Seyal" ||
+			m.StartURL != base || m.Scope != base || m.Display != "standalone" || strings.Contains(body, "Kaveri") {
+			t.Errorf("manifest = %d %s", code, body)
+		}
+		for _, icon := range m.Icons {
+			if code, _, _ := s.get(s.browser(), icon.Src); code != http.StatusOK {
+				t.Errorf("icon %s = %d", icon.Src, code)
+			}
+		}
+		_, fake, _ := s.get(s.browser(), "/t/no-such-firm/manifest.webmanifest")
+		if strings.ReplaceAll(fake, "no-such-firm", s.slug) != body {
+			t.Error("a made-up address gets a different manifest")
+		}
+	})
+
+	t.Run("service worker and offline page", func(t *testing.T) {
+		code, body, h := s.get(s.browser(), "/sw.js")
+		if code != http.StatusOK || h.Get("Cache-Control") != "no-cache" || strings.Contains(body, "__VERSION__") ||
+			!regexp.MustCompile(`const VERSION = "[0-9a-f]{12}"`).MatchString(body) {
+			t.Errorf("sw.js = %d, cache %q", code, h.Get("Cache-Control"))
+		}
+		if code, page, _ := s.get(s.browser(), "/offline"); code != http.StatusOK || !strings.Contains(page, "You're offline") {
+			t.Errorf("offline page = %d", code)
 		}
 	})
 }

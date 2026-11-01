@@ -121,6 +121,16 @@
       .catch(function () { status(form, "Couldn't send. Check the connection and try again."); });
   }
 
+  // --- Installable app ----------------------------------------------------------------------
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("/sw.js").catch(function () { /* the app works without it */ });
+    });
+  }
+  document.addEventListener("click", function (e) {
+    if (e.target.closest("[data-reload]")) location.reload();
+  });
+
   document.addEventListener("click", function (e) {
     var b = e.target.closest("[data-voice]");
     if (!b) return;
