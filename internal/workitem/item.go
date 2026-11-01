@@ -35,6 +35,7 @@ type Item struct {
 	StartedVia        string        `json:"started_via"`
 	StartedRef        string        `json:"started_ref,omitempty"`
 	CreatedBy         string        `json:"created_by,omitempty"`
+	Team              string        `json:"team,omitempty"` // a role that has the item, while no one person does
 }
 
 // ErrNotFound means there is no work item with that id.
@@ -44,7 +45,7 @@ const selectItems = `
 	SELECT id::text, number, playbook_version_id::text, title, state,
 		coalesce(assignee_id::text, ''), coalesce(to_char(due_on, 'YYYY-MM-DD'), ''),
 		version, fields, fields_sha256, started_via, coalesce(started_ref, ''),
-		coalesce(created_by::text, '')
+		coalesce(created_by::text, ''), coalesce(team, '')
 	FROM work_items WHERE tenant_id = current_tenant()`
 
 const selectItem = selectItems + ` AND id::text = $1`
@@ -82,7 +83,7 @@ func getForUpdate(ctx context.Context, tx pgx.Tx, id string) (Item, error) {
 func scanItem(row pgx.Row) (Item, error) {
 	var it Item
 	err := row.Scan(&it.ID, &it.Number, &it.PlaybookVersionID, &it.Title, &it.State, &it.AssigneeID,
-		&it.DueOn, &it.Version, &it.Fields, &it.FieldsHash, &it.StartedVia, &it.StartedRef, &it.CreatedBy)
+		&it.DueOn, &it.Version, &it.Fields, &it.FieldsHash, &it.StartedVia, &it.StartedRef, &it.CreatedBy, &it.Team)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Item{}, ErrNotFound
 	}
@@ -130,12 +131,12 @@ func open(ctx context.Context, tx pgx.Tx, versionID string) (session, error) {
 func (s session) insert(it *Item) error {
 	err := s.tx.QueryRow(s.ctx, `
 		INSERT INTO work_items (tenant_id, number, playbook_version_id, title, state, assignee_id, due_on,
-			version, fields, fields_sha256, started_via, started_ref, created_by)
+			version, fields, fields_sha256, started_via, started_ref, created_by, team)
 		VALUES (current_tenant(), $1, $2, $3, $4, nullif($5::text, '')::uuid, nullif($6::text, '')::date,
-			$7, $8, $9, $10, nullif($11::text, ''), nullif($12::text, '')::uuid)
+			$7, $8, $9, $10, nullif($11::text, ''), nullif($12::text, '')::uuid, nullif($13::text, ''))
 		RETURNING id::text`,
 		it.Number, it.PlaybookVersionID, it.Title, it.State, it.AssigneeID, it.DueOn,
-		it.Version, it.Fields, it.FieldsHash, it.StartedVia, it.StartedRef, it.CreatedBy).Scan(&it.ID)
+		it.Version, it.Fields, it.FieldsHash, it.StartedVia, it.StartedRef, it.CreatedBy, it.Team).Scan(&it.ID)
 	if err != nil {
 		return fmt.Errorf("workitem: insert: %w", err)
 	}
@@ -146,9 +147,9 @@ func (s session) update(it Item) error {
 	_, err := s.tx.Exec(s.ctx, `
 		UPDATE work_items SET title = $2, state = $3, assignee_id = nullif($4::text, '')::uuid,
 			due_on = nullif($5::text, '')::date, version = $6, fields = $7, fields_sha256 = $8,
-			updated_at = now()
+			team = nullif($9::text, ''), updated_at = now()
 		WHERE tenant_id = current_tenant() AND id::text = $1`,
-		it.ID, it.Title, it.State, it.AssigneeID, it.DueOn, it.Version, it.Fields, it.FieldsHash)
+		it.ID, it.Title, it.State, it.AssigneeID, it.DueOn, it.Version, it.Fields, it.FieldsHash, it.Team)
 	if err != nil {
 		return fmt.Errorf("workitem: update: %w", err)
 	}

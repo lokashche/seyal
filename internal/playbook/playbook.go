@@ -29,6 +29,7 @@ type Playbook struct {
 	States      []string            `yaml:"states"`
 	Initial     string              `yaml:"initial"`
 	Transitions []Transition        `yaml:"transitions"`
+	Steps       map[string]Step     `yaml:"steps"` // state → who owns it and what Seyal asks in it
 	Approvals   *Approvals          `yaml:"approvals"`
 	Deadlines   []Deadline          `yaml:"deadlines"`
 	On          map[string][]Action `yaml:"on"` // state → actions to run on entering it
@@ -53,13 +54,26 @@ type Field struct {
 	Prefill  map[string]string `yaml:"prefill"` // this playbook's field → master field
 }
 
-// Transition moves a work item from one state to another when someone takes an action.
+// Transition moves a work item from one state to another when someone takes an action. The same
+// action may be listed more than once with an If condition: the first one whose condition is true
+// is taken, and one without If is the default.
 type Transition struct {
-	Action string   `yaml:"action"`
-	From   []string `yaml:"from"`
-	To     string   `yaml:"to"`
-	When   string   `yaml:"when"`  // "" or "required_filled"
-	Needs  string   `yaml:"needs"` // "" or "reason"
+	Action string     `yaml:"action"`
+	From   []string   `yaml:"from"`
+	To     string     `yaml:"to"`
+	When   string     `yaml:"when"`  // "" or "required_filled"
+	Needs  string     `yaml:"needs"` // "" or "reason"
+	If     *Condition `yaml:"if"`    // optional: only when this is true
+}
+
+// Step says, for one state, who has the item and what Seyal asks for. States without a step keep
+// the item with whoever has it, and Seyal asks for the required fields.
+type Step struct {
+	// Owner is who the item goes to on entering the state: "starter" (who started it),
+	// "role:<role>" (anyone with the role), or "field:<person field>".
+	Owner string   `yaml:"owner"`
+	Asks  []string `yaml:"asks"`  // fields Seyal asks for in this state, in this order
+	Needs []string `yaml:"needs"` // fields a required_filled move out of this state needs
 }
 
 // Approvals says who must approve, while the item is in state In.
@@ -115,9 +129,10 @@ type Deadline struct {
 
 // Action is something Seyal does automatically, e.g. post a message or assign someone.
 type Action struct {
-	Do   string `yaml:"do"`   // post, assign
+	Do   string `yaml:"do"`   // post, assign, copy
 	Text string `yaml:"text"` // for post
-	To   string `yaml:"to"`   // person field, for assign
+	To   string `yaml:"to"`   // person field, for assign; the field to fill, for copy
+	From string `yaml:"from"` // the field to copy from, for copy
 }
 
 // Parse reads one playbook from YAML. Unknown keys are errors, so typos are caught.

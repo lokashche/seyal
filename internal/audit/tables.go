@@ -214,7 +214,7 @@ func (c *checker) items() error {
 		SELECT id::text, number, playbook_version_id::text, title, state,
 			coalesce(assignee_id::text, ''), coalesce(to_char(due_on, 'YYYY-MM-DD'), ''),
 			version, fields, fields_sha256, started_via, coalesce(started_ref, ''),
-			coalesce(created_by::text, '')
+			coalesce(created_by::text, ''), coalesce(team, '')
 		FROM work_items WHERE tenant_id = current_tenant() ORDER BY id`)
 	if err != nil {
 		return err
@@ -258,6 +258,7 @@ func diffItem(w, g workitem.Item) string {
 		{"started via", w.StartedVia, g.StartedVia},
 		{"started ref", w.StartedRef, g.StartedRef},
 		{"created by", w.CreatedBy, g.CreatedBy},
+		{"team", w.Team, g.Team},
 	}
 	if err1 != nil || err2 != nil {
 		return "fields can't be read"

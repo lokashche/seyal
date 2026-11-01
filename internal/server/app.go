@@ -3,6 +3,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -45,18 +46,31 @@ type row struct {
 }
 
 type tellView struct {
-	Name    string
-	Fields  []string
-	Choices []choice
+	Processes   []tellProcess // shown in the right pane; "let Seyal decide" is chosen until the person picks one
+	Placeholder string        // an example message from the processes
+	Pending     *pendingView  // a saved message waiting for the person to confirm its process
 }
 
-type choice struct{ ID, Name string }
+// pendingView asks the person to confirm the process Seyal suggests for their message.
+type pendingView struct {
+	MessageID, Text string
+	Files           int
+	Suggested       *tellProcess // nil when Seyal isn't sure
+	Others          []tellProcess
+}
+
+// tellProcess is one process people can start on Tell Seyal: chosen in the right pane, searchable.
+type tellProcess struct {
+	ID, Name, Description, Example string
+	Search                         string // name, description and examples, for the search box
+}
 
 type itemView struct {
 	Item    workitem.Item
 	Kind    string
 	Pill    string
 	Status  string
+	With    string // who has it now: a person, or a team
 	Closed  bool
 	Thread  []entryView
 	Quick   []string
@@ -145,7 +159,7 @@ func (v *view) groups() ([]group, error) {
 	if err != nil {
 		return nil, err
 	}
-	titles := []string{"Waiting for my approval", "Overdue", "Assigned to me", "My drafts", "Other open work"}
+	titles := []string{"Waiting for my approval", "Overdue", "My drafts", "Assigned to me", "For my team", "Other open work"}
 	buckets := make([][]row, len(titles))
 	kinds := map[string]bool{}
 	type placed struct {
@@ -166,16 +180,18 @@ func (v *view) groups() ([]group, error) {
 		kinds[p.ID] = true
 		pill, status := v.status(p, it)
 		r := row{ID: it.ID, Number: it.Number, Title: it.Title, Pill: pill, Status: status}
-		bucket := 4
+		bucket := 5
 		switch {
 		case p.Approvals != nil && it.State == p.Approvals.In && v.mine(it):
 			bucket = 0
 		case it.DueOn != "" && it.DueOn < v.today && (it.AssigneeID == me || it.CreatedBy == me):
 			bucket = 1
-		case it.AssigneeID == me:
-			bucket = 2
 		case it.CreatedBy == me && it.State == p.Initial:
+			bucket = 2
+		case it.AssigneeID == me:
 			bucket = 3
+		case it.AssigneeID == "" && it.Team != "" && slices.Contains(v.c.session.Roles, it.Team):
+			bucket = 4
 		}
 		all = append(all, placed{r, bucket, p.ID})
 	}
@@ -256,18 +272,23 @@ func (v *view) tell() (*tellView, error) {
 		return nil, err
 	}
 	t := &tellView{}
-	for i, pv := range list {
+	for _, pv := range list {
 		p, err := playbook.Parse([]byte(pv.Source))
 		if err != nil {
 			return nil, err
 		}
-		t.Choices = append(t.Choices, choice{ID: pv.ID, Name: sentence(p.ID)})
-		if i == 0 {
-			t.Name = sentence(p.ID)
-			for _, f := range p.Fields {
-				t.Fields = append(t.Fields, ask.Label(f))
+		tp := tellProcess{ID: pv.ID, Name: sentence(p.ID), Description: p.Description,
+			Search: strings.ToLower(strings.Join(append([]string{sentence(p.ID), p.Description}, p.Examples...), " "))}
+		if len(p.Examples) > 0 {
+			tp.Example = p.Examples[0]
+			if t.Placeholder == "" {
+				t.Placeholder = "For example: " + p.Examples[0]
 			}
 		}
+		t.Processes = append(t.Processes, tp)
+	}
+	if t.Placeholder == "" {
+		t.Placeholder = "Write the work as you would tell a colleague"
 	}
 	return t, nil
 }
@@ -283,6 +304,17 @@ func (v *view) item(id string) (*itemView, error) {
 	}
 	iv := &itemView{Item: it, Kind: sentence(p.ID), Closed: engine.IsClosed(p, it.State)}
 	iv.Pill, iv.Status = v.status(p, it)
+	switch {
+	case it.AssigneeID != "":
+		iv.With = v.show(playbook.Field{Type: "person"}, it.AssigneeID)
+	case it.Team != "":
+		var name string
+		if err := v.tx.QueryRow(v.ctx, `SELECT name FROM roles WHERE tenant_id = current_tenant() AND key = $1`,
+			it.Team).Scan(&name); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return nil, err
+		}
+		iv.With = cmp.Or(name, it.Team) + " team"
+	}
 
 	entries, err := thread.For(v.ctx, v.tx, id)
 	if err != nil {
@@ -307,10 +339,11 @@ func (v *view) item(id string) (*itemView, error) {
 		iv.Thread = append(iv.Thread, ev)
 	}
 
+	toAsk := engine.ToAsk(p, it.State, it.Fields) // what Seyal asks in this step
 	for _, f := range p.Fields {
 		val := it.Fields[f.Key]
 		iv.Fields = append(iv.Fields, fieldView{Label: ask.Label(f), Value: v.show(f, val),
-			Missing: f.Required && v.show(f, val) == ""})
+			Missing: !iv.Closed && slices.Contains(toAsk, f.Key)})
 	}
 
 	if !iv.Closed {
@@ -404,7 +437,9 @@ func (s *Server) showScreen(w http.ResponseWriter, r *http.Request, c *call, ite
 }
 
 // show is showScreen with an optional notice too, e.g. Seyal's reply to a greeting on Tell Seyal.
-func (s *Server) show(w http.ResponseWriter, r *http.Request, c *call, itemID string, status int, problem, notice string) {
+// more, if given, adds to the screen inside the same transaction (e.g. a process to confirm).
+func (s *Server) show(w http.ResponseWriter, r *http.Request, c *call, itemID string, status int, problem, notice string,
+	more ...func(sc *screen)) {
 	var sc screen
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		v, err := s.newView(r, tx, c)
@@ -416,6 +451,9 @@ func (s *Server) show(w http.ResponseWriter, r *http.Request, c *call, itemID st
 		}
 		if itemID == "" {
 			sc.Tell, err = v.tell()
+			for _, m := range more {
+				m(&sc)
+			}
 			return err
 		}
 		sc.Current = itemID
@@ -435,7 +473,14 @@ func (s *Server) show(w http.ResponseWriter, r *http.Request, c *call, itemID st
 	s.render(w, r, status, "app", p)
 }
 
+// tell starts work from Tell Seyal. With one process, or one the person picked, it starts at once.
+// With "let Seyal decide", the message is saved, Seyal suggests a process, and the person confirms
+// it (a second post with the saved message's id).
 func (s *Server) tell(w http.ResponseWriter, r *http.Request, c *call) {
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") && r.PostFormValue("message") != "" {
+		s.confirmTell(w, r, c)
+		return
+	}
 	in, err := s.incoming(w, r, c)
 	if err == nil && in.Text == "" && len(in.Files) == 0 {
 		err = errors.New("please write or record what the work is")
@@ -445,20 +490,46 @@ func (s *Server) tell(w http.ResponseWriter, r *http.Request, c *call) {
 		return
 	}
 	var reply ask.Reply
+	var routing *ask.Routing
 	err = db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		// New work may only start on the current version of a process that is switched on.
 		current, err := (&view{ctx: r.Context(), tx: tx}).current()
 		if err != nil {
 			return err
 		}
-		if !slices.ContainsFunc(current, func(p struct{ ID, Source string }) bool { return p.ID == r.FormValue("playbook") }) {
+		chosen := r.FormValue("playbook")
+		if (chosen == "" || chosen == "auto") && len(current) > 1 {
+			processes := make([]ask.Process, 0, len(current))
+			for _, pv := range current {
+				p, err := playbook.Parse([]byte(pv.Source))
+				if err != nil {
+					return err
+				}
+				processes = append(processes, ask.Process{VersionID: pv.ID, ID: p.ID, Name: sentence(p.ID),
+					Description: p.Description, Examples: p.Examples})
+			}
+			rt, err := ask.Route(r.Context(), tx, s.env(), processes, in)
+			routing = &rt
+			return err
+		}
+		if chosen == "" || chosen == "auto" {
+			if len(current) == 0 {
+				return errors.New("no process is switched on yet")
+			}
+			chosen = current[0].ID
+		}
+		if !slices.ContainsFunc(current, func(p struct{ ID, Source string }) bool { return p.ID == chosen }) {
 			return errors.New("that process isn't in use any more; reload the page")
 		}
-		reply, err = ask.Begin(r.Context(), tx, s.env(), r.FormValue("playbook"), in)
+		reply, err = ask.Begin(r.Context(), tx, s.env(), chosen, in)
 		return err
 	})
 	if err != nil {
 		s.problem(w, r, c, "", err)
+		return
+	}
+	if routing != nil {
+		s.askWhichProcess(w, r, c, *routing)
 		return
 	}
 	if reply.Item.ID == "" { // a greeting or a question: nothing started, Seyal just answers
@@ -467,6 +538,54 @@ func (s *Server) tell(w http.ResponseWriter, r *http.Request, c *call) {
 			said = append(said, m.Text)
 		}
 		s.show(w, r, c, "", http.StatusOK, "", strings.Join(said, "\n"))
+		return
+	}
+	http.Redirect(w, r, "/t/"+c.tenant.Slug+"/items/"+reply.Item.ID, http.StatusSeeOther)
+}
+
+// askWhichProcess shows Seyal's suggestion for a saved message, or its reply to a greeting.
+func (s *Server) askWhichProcess(w http.ResponseWriter, r *http.Request, c *call, rt ask.Routing) {
+	if len(rt.Seyal) > 0 {
+		var said []string
+		for _, m := range rt.Seyal {
+			said = append(said, m.Text)
+		}
+		s.show(w, r, c, "", http.StatusOK, "", strings.Join(said, "\n"))
+		return
+	}
+	s.show(w, r, c, "", http.StatusOK, "", "", func(sc *screen) {
+		if sc.Tell == nil {
+			return
+		}
+		pv := &pendingView{MessageID: rt.Message.ID, Text: rt.Message.Text, Files: len(rt.Message.Media)}
+		for i := range sc.Tell.Processes {
+			if p := sc.Tell.Processes[i]; p.ID == rt.Suggested {
+				pv.Suggested = &p
+			} else {
+				pv.Others = append(pv.Others, p)
+			}
+		}
+		sc.Tell.Pending = pv
+	})
+}
+
+// confirmTell starts the process the person confirmed for a message saved earlier.
+func (s *Server) confirmTell(w http.ResponseWriter, r *http.Request, c *call) {
+	var reply ask.Reply
+	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
+		current, err := (&view{ctx: r.Context(), tx: tx}).current()
+		if err != nil {
+			return err
+		}
+		chosen := r.PostFormValue("playbook")
+		if !slices.ContainsFunc(current, func(p struct{ ID, Source string }) bool { return p.ID == chosen }) {
+			return errors.New("that process isn't in use any more; reload the page")
+		}
+		reply, err = ask.BeginFrom(r.Context(), tx, s.env(), chosen, r.PostFormValue("message"), c.session.PersonID)
+		return err
+	})
+	if err != nil {
+		s.problem(w, r, c, "", err)
 		return
 	}
 	http.Redirect(w, r, "/t/"+c.tenant.Slug+"/items/"+reply.Item.ID, http.StatusSeeOther)

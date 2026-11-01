@@ -1,0 +1,40 @@
+# Sample playbook: ask for something inside the business and let the right team handle it.
+# Shows steps: who has the item in each step, what Seyal asks there, a move that depends on a
+# condition (urgent requests go to the owner), and copying a value to keep it.
+# Generic example only. Real playbooks live in each business's own set-up, not in this folder.
+id: internal-request
+version: "0.1"
+description: Ask for something inside the business (a repair, a purchase, access) and let the right team handle it.
+examples:
+  - "The printer in the front office is not working"
+  - "Need a new laptop charger, about 1500"
+numbering: "R-{yyyy}-{seq:4}"
+title: "{what}"
+roles: [ops, owner]
+
+fields:
+  - { key: what, label: What is needed, type: text, required: true, ask: "What do you need?" }
+  - { key: urgency, label: Urgency, type: choice, options: [normal, urgent], required: true, ask: "Is it urgent?" }
+  - { key: cost, label: Rough cost, type: money, ask: "Roughly how much will it cost? (say 0 if nothing)" }
+  - { key: cost_when_sent, label: Cost when sent, type: money, readonly: true }
+  - { key: done_note, label: What was done, type: text, ask: "What was done?" }
+
+states: [asking, with_ops, with_owner, done, cancelled]
+initial: asking
+
+steps:
+  asking: { owner: starter, asks: [what, urgency, cost], needs: [what, urgency] }
+  with_ops: { owner: "role:ops", asks: [done_note], needs: [done_note] }
+  with_owner: { owner: "role:owner", asks: [done_note], needs: [done_note] }
+
+transitions:
+  - { action: send, from: [asking], to: with_owner, when: required_filled, if: { field: urgency, eq: urgent } }
+  - { action: send, from: [asking], to: with_ops, when: required_filled }
+  - { action: done, from: [with_ops, with_owner], to: done, when: required_filled }
+  - { action: cancel, from: [asking, with_ops, with_owner], to: cancelled, needs: reason }
+
+on:
+  with_ops:
+    - { do: copy, from: cost, to: cost_when_sent }
+  with_owner:
+    - { do: copy, from: cost, to: cost_when_sent }

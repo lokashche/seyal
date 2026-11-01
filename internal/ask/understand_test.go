@@ -104,7 +104,7 @@ func TestUnderstand(t *testing.T) {
 }
 
 func TestCommand(t *testing.T) {
-	words := []string{"submit", "cancel", "approve", "reject"}
+	words := []string{"submit", "cancel", "approve", "reject", "send_to_ops"}
 	tests := []struct {
 		text, word, reason string
 		ok                 bool
@@ -116,6 +116,9 @@ func TestCommand(t *testing.T) {
 		{"reject as assets are missing", "reject", "assets are missing", true},
 		{"submitted the papers", "", "", false}, // not the word "submit"
 		{"please submit", "", "", false},
+		{"send to ops", "send_to_ops", "", true},
+		{"Send_to_ops", "send_to_ops", "", true},
+		{"send to ops: fee to be confirmed", "send_to_ops", "fee to be confirmed", true},
 	}
 	for _, tt := range tests {
 		word, reason, ok := Command(tt.text, words)
@@ -130,15 +133,15 @@ func TestQuestions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := NextField(p, nil)
+	f := NextField(p, "draft", nil)
 	if f == nil || f.Key != "client" || Question(*f) != "Which client is this for?" {
 		t.Errorf("first question = %+v", f)
 	}
-	integrity := NextField(p, map[string]any{"client": "a", "nature_of_work": "b", "reason": "c", "fee_agreed": 1.0})
+	integrity := NextField(p, "draft", map[string]any{"client": "a", "nature_of_work": "b", "reason": "c", "fee_agreed": 1.0})
 	if integrity == nil || !strings.HasSuffix(Question(*integrity), "(pass / fail)") {
 		t.Errorf("integrity question = %v", integrity)
 	}
-	if NextField(p, map[string]any{"client": "a", "nature_of_work": "b", "reason": "c", "fee_agreed": 1.0,
+	if NextField(p, "draft", map[string]any{"client": "a", "nature_of_work": "b", "reason": "c", "fee_agreed": 1.0,
 		"integrity_check": "pass"}) != nil {
 		t.Error("asked something although every required field is filled")
 	}

@@ -31,9 +31,10 @@ type Choices interface {
 	Items(kind string) ([]Choice, error) // active items only
 }
 
-// NextField returns the first required field that is still empty, or nil when all are filled.
-func NextField(p *playbook.Playbook, fields engine.Fields) *playbook.Field {
-	missing := engine.Missing(p, fields)
+// NextField returns the next field Seyal should ask for in state (the step's asks, or the required fields),
+// or nil when there is nothing to ask.
+func NextField(p *playbook.Playbook, state string, fields engine.Fields) *playbook.Field {
+	missing := engine.ToAsk(p, state, fields)
 	if len(missing) == 0 {
 		return nil
 	}
@@ -259,7 +260,7 @@ func match(answer string, list []Choice, what string) (string, error) {
 	case len(exact) == 0 && len(partial) == 1:
 		return partial[0].ID, nil
 	case len(exact)+len(partial) == 0:
-		return "", fmt.Errorf("I don't know a %s called %q", what, answer)
+		return "", &NotInListError{What: what, Name: answer}
 	}
 	var names []string
 	for _, c := range append(exact, partial...) {
@@ -269,6 +270,13 @@ func match(answer string, list []Choice, what string) (string, error) {
 		names = append(names[:5], "…")
 	}
 	return "", fmt.Errorf("which one do you mean: %s?", strings.Join(names, ", "))
+}
+
+// NotInListError means an answer names nothing in the list, e.g. a new entry; Seyal can offer to add it.
+type NotInListError struct{ What, Name string }
+
+func (e *NotInListError) Error() string {
+	return fmt.Sprintf("I don't know a %s called %q", e.What, e.Name)
 }
 
 var listSeparator = regexp.MustCompile(`\s*(?:,|;|\n|\band\b)\s*`)
@@ -285,15 +293,19 @@ func splitList(s string) []string {
 
 // Command recognises a short command at the start of a message, such as "submit" or "cancel
 // because it is no longer needed", among the given words. It returns the command and the rest of the
-// message as the reason.
+// message as the reason. A word with underscores may be typed with spaces ("send to ops").
 func Command(text string, words []string) (word, reason string, ok bool) {
 	lower := strings.ToLower(strings.TrimSpace(text))
 	for _, w := range words {
-		if lower == w {
+		typed := w
+		if spaced := strings.ReplaceAll(w, "_", " "); strings.HasPrefix(lower, spaced) {
+			typed = spaced
+		}
+		if lower == typed {
 			return w, "", true
 		}
-		if rest, found := strings.CutPrefix(lower, w); found && (rest[0] == ' ' || rest[0] == ':') {
-			reason = strings.TrimLeft(strings.TrimSpace(text)[len(w):], " :-")
+		if rest, found := strings.CutPrefix(lower, typed); found && (rest[0] == ' ' || rest[0] == ':') {
+			reason = strings.TrimLeft(strings.TrimSpace(text)[len(typed):], " :-")
 			for _, filler := range []string{"because ", "as ", "since "} {
 				if strings.HasPrefix(strings.ToLower(reason), filler) {
 					reason = reason[len(filler):]

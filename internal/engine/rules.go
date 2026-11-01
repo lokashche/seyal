@@ -177,6 +177,17 @@ func equal(a, b any) bool {
 	return false
 }
 
+// SameValue reports whether two stored field values are the same, lists included; two empty values
+// are the same.
+func SameValue(a, b any) bool {
+	if isEmpty(a) || isEmpty(b) {
+		return isEmpty(a) && isEmpty(b)
+	}
+	ha, errA := HashFields(Fields{"v": a})
+	hb, errB := HashFields(Fields{"v": b})
+	return errA == nil && errB == nil && ha == hb
+}
+
 // compare orders two numbers, or two texts such as ISO dates ("2026-10-31").
 func compare(a, b any) (int, bool) {
 	if x, ok := number(a); ok {

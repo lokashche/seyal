@@ -38,8 +38,12 @@ func (e *MissingError) Error() string {
 	return "still needed: " + strings.Join(e.Keys, ", ")
 }
 
-// Missing returns the keys of required fields that have no value yet, in playbook order.
-func Missing(p *playbook.Playbook, fields Fields) []string {
+// Missing returns the keys of the fields that are still empty but needed to move on from state: the
+// step's needs if it has them, otherwise every required field, in order.
+func Missing(p *playbook.Playbook, state string, fields Fields) []string {
+	if st, ok := p.Steps[state]; ok && len(st.Needs) > 0 {
+		return empty(st.Needs, fields)
+	}
 	var keys []string
 	for _, f := range p.Fields {
 		if f.Required && isEmpty(fields[f.Key]) {
@@ -49,12 +53,42 @@ func Missing(p *playbook.Playbook, fields Fields) []string {
 	return keys
 }
 
-// Actions returns the actions that can start from the item's current state, in playbook order.
-// Transition still checks their other conditions (required fields, reason).
+// ToAsk returns the keys of the fields Seyal should ask for in state, in order: the step's asks that
+// are still empty if it has them, otherwise what is missing.
+func ToAsk(p *playbook.Playbook, state string, fields Fields) []string {
+	if st, ok := p.Steps[state]; ok && len(st.Asks) > 0 {
+		return empty(st.Asks, fields)
+	}
+	return Missing(p, state, fields)
+}
+
+func empty(keys []string, fields Fields) []string {
+	var out []string
+	for _, k := range keys {
+		if isEmpty(fields[k]) {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// Owner says who has an item in state: "starter", "role" with a role key, "field" with a person
+// field key, or "" when the state doesn't change who has it.
+func Owner(p *playbook.Playbook, state string) (kind, name string) {
+	st, ok := p.Steps[state]
+	if !ok || st.Owner == "" {
+		return "", ""
+	}
+	kind, name, _ = strings.Cut(st.Owner, ":")
+	return kind, name
+}
+
+// Actions returns the actions that can start from the item's current state, in playbook order and
+// each once. Transition still checks their other conditions (required fields, reason, if).
 func Actions(p *playbook.Playbook, it Item) []string {
 	var actions []string
 	for _, t := range p.Transitions {
-		if slices.Contains(t.From, it.State) {
+		if slices.Contains(t.From, it.State) && !slices.Contains(actions, t.Action) {
 			actions = append(actions, t.Action)
 		}
 	}
@@ -62,18 +96,40 @@ func Actions(p *playbook.Playbook, it Item) []string {
 }
 
 // Transition checks whether action may happen to the item now, and returns the state it moves
-// to. reason is the reason the person gave, if any.
-func Transition(p *playbook.Playbook, it Item, action, reason string) (string, error) {
-	i := slices.IndexFunc(p.Transitions, func(t playbook.Transition) bool { return t.Action == action })
-	if i < 0 {
-		return "", fmt.Errorf("engine: unknown action %q", action)
+// to. reason is the reason the person gave, if any. When the action is listed more than once, the
+// first move whose if-condition is true is taken; an unknown answer doesn't count as true, so the
+// move without a condition (the default) is taken then. lookup finds master data for conditions.
+func Transition(p *playbook.Playbook, it Item, action, reason string, lookup MasterLookup) (string, error) {
+	known, found := false, -1
+	for i, t := range p.Transitions {
+		if t.Action != action {
+			continue
+		}
+		known = true
+		if !slices.Contains(t.From, it.State) {
+			continue
+		}
+		if t.If != nil {
+			r, err := Eval(p, *t.If, it.Fields, lookup)
+			if err != nil {
+				return "", err
+			}
+			if r != True {
+				continue
+			}
+		}
+		found = i
+		break
 	}
-	t := p.Transitions[i]
-	if !slices.Contains(t.From, it.State) {
+	switch {
+	case !known:
+		return "", fmt.Errorf("engine: unknown action %q", action)
+	case found < 0:
 		return "", fmt.Errorf("%s while %s: %w", action, it.State, ErrNotNow)
 	}
+	t := p.Transitions[found]
 	if t.When == "required_filled" {
-		if keys := Missing(p, it.Fields); len(keys) > 0 {
+		if keys := Missing(p, it.State, it.Fields); len(keys) > 0 {
 			return "", &MissingError{Keys: keys}
 		}
 	}

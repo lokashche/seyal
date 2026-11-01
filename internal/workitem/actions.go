@@ -147,7 +147,11 @@ func Act(ctx context.Context, tx pgx.Tx, id, action, reason string, by ledger.Ac
 	if err != nil {
 		return Item{}, err
 	}
-	to, err := engine.Transition(s.p, s.engineItem(it), action, reason)
+	lookup, err := master.LookupFor(ctx, tx, s.p, it.Fields)
+	if err != nil {
+		return Item{}, err
+	}
+	to, err := engine.Transition(s.p, s.engineItem(it), action, reason, lookup)
 	if err != nil {
 		return Item{}, err
 	}
@@ -328,11 +332,18 @@ func (s session) move(it *Item, to string, change map[string]any, by ledger.Acto
 	return s.enter(it)
 }
 
-// enter runs the playbook's actions for the item's current state, then follows any automatic
-// move (all approvals given, or one rejected).
+// enter hands the item to the owner of its new step, runs the playbook's actions for the state, then
+// follows any automatic move (all approvals given, or one rejected).
 func (s session) enter(it *Item) error {
+	if err := s.handOver(it); err != nil {
+		return err
+	}
 	for _, a := range s.p.On[it.State] {
 		switch a.Do {
+		case "copy":
+			if err := s.copyField(it, a.From, a.To); err != nil {
+				return err
+			}
 		case "post":
 			text, err := s.render(a.Text, it.Fields)
 			if err != nil {
@@ -343,19 +354,73 @@ func (s session) enter(it *Item) error {
 			}
 		case "assign":
 			id, _ := it.Fields[a.To].(string)
-			if id == "" || id == it.AssigneeID {
+			if id == "" {
 				continue
 			}
-			it.AssigneeID = id
-			if err := s.update(*it); err != nil {
-				return err
-			}
-			if err := s.record("item.assigned", *it, map[string]any{"assignee_id": id}, ledger.SystemActor); err != nil {
+			if err := s.assign(it, id, ""); err != nil {
 				return err
 			}
 		}
 	}
 	return s.settle(it)
+}
+
+// handOver gives the item to the owner of its current step, if the step names one: whoever started
+// it, a person field, or a role (anyone in it, shown as the item's team).
+func (s session) handOver(it *Item) error {
+	kind, name := engine.Owner(s.p, it.State)
+	switch kind {
+	case "starter":
+		if it.CreatedBy != "" {
+			return s.assign(it, it.CreatedBy, "")
+		}
+	case "field":
+		if id, _ := it.Fields[name].(string); id != "" {
+			return s.assign(it, id, "")
+		}
+	case "role":
+		return s.assign(it, "", name)
+	}
+	return nil
+}
+
+// assign gives the item to one person, or to a team (a role) when person is "".
+func (s session) assign(it *Item, person, team string) error {
+	if it.AssigneeID == person && it.Team == team {
+		return nil
+	}
+	it.AssigneeID, it.Team = person, team
+	if err := s.update(*it); err != nil {
+		return err
+	}
+	change := map[string]any{"assignee_id": person}
+	if team != "" {
+		change["team"] = team
+	}
+	return s.record("item.assigned", *it, change, ledger.SystemActor)
+}
+
+// copyField copies one field's value into another (e.g. keeping a proposed amount to compare with
+// later). A change is recorded like any edit, by Seyal.
+func (s session) copyField(it *Item, from, to string) error {
+	v := it.Fields[from]
+	if engine.SameValue(v, it.Fields[to]) {
+		return nil
+	}
+	if v == nil {
+		delete(it.Fields, to)
+	} else {
+		it.Fields[to] = v
+	}
+	if err := s.refresh(it); err != nil {
+		return err
+	}
+	it.Version++
+	if err := s.update(*it); err != nil {
+		return err
+	}
+	return s.record("item.fields_set", *it, map[string]any{"values": map[string]any{to: v}, "copied_from": from},
+		ledger.SystemActor)
 }
 
 // settle moves an item that waits for approvals once they are complete or one was rejected.

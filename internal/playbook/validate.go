@@ -39,6 +39,7 @@ func (p *Playbook) Validate() error {
 	v.basics()
 	v.fieldList()
 	v.statesAndTransitions()
+	v.steps()
 	v.approvals()
 	v.deadlinesAndActions()
 	if len(v.problems) == 0 {
@@ -133,10 +134,24 @@ func (v *validator) statesAndTransitions() {
 	v.states = v.unique("states", p.States)
 	v.state(p.Initial, "initial")
 
-	actions := make([]string, len(p.Transitions))
-	for i, t := range p.Transitions {
-		actions[i] = t.Action
+	var actions []string
+	open := map[string]bool{} // "action/from" listed with no condition: a default
+	for _, t := range p.Transitions {
+		if !slices.Contains(actions, t.Action) {
+			actions = append(actions, t.Action)
+		}
 		where := "transition " + t.Action
+		for _, s := range t.From {
+			if open[t.Action+"/"+s] {
+				v.add("%s: from %s it already has a move without a condition, which always wins; put moves with if first", where, s)
+			}
+			if t.If == nil {
+				open[t.Action+"/"+s] = true
+			}
+		}
+		if t.If != nil {
+			v.condition(*t.If, where+": if")
+		}
 		if len(t.From) == 0 {
 			v.add(`%s: "from" needs at least one state`, where)
 		}
@@ -152,6 +167,37 @@ func (v *validator) statesAndTransitions() {
 		}
 	}
 	v.unique("transitions", actions)
+}
+
+func (v *validator) steps() {
+	for _, state := range slices.Sorted(maps.Keys(v.p.Steps)) {
+		st, where := v.p.Steps[state], "step "+state
+		v.state(state, where)
+		kind, name, _ := strings.Cut(st.Owner, ":")
+		switch {
+		case st.Owner == "" || st.Owner == "starter":
+		case kind == "role":
+			if !v.roles[name] {
+				v.add("%s: owner: unknown role %q (declare it under roles)", where, name)
+			}
+		case kind == "field":
+			if f := v.fieldRef(name, where+": owner"); f != nil && f.Type != "person" {
+				v.add("%s: owner needs a person field, %s is %s", where, f.Key, f.Type)
+			}
+		default:
+			v.add(`%s: owner %q: use starter, role:<role> or field:<person field>`, where, st.Owner)
+		}
+		for _, list := range []struct {
+			name string
+			keys []string
+		}{{"asks", st.Asks}, {"needs", st.Needs}} {
+			for _, key := range list.keys {
+				if f := v.fieldRef(key, where+": "+list.name); f != nil && f.Readonly && list.name == "asks" {
+					v.add("%s: asks: %s is filled automatically, so Seyal can't ask for it", where, key)
+				}
+			}
+		}
+	}
 }
 
 func (v *validator) approvals() {
@@ -246,21 +292,29 @@ func (v *validator) deadlinesAndActions() {
 		for _, a := range v.p.On[state] {
 			switch a.Do {
 			case "post":
-				if a.Text == "" || a.To != "" {
-					v.add(`%s: post needs text and no "to"`, where)
+				if a.Text == "" || a.To != "" || a.From != "" {
+					v.add(`%s: post needs text and no "to" or "from"`, where)
 				}
 				for _, m := range placeholder.FindAllStringSubmatch(a.Text, -1) {
 					v.fieldRef(m[1], where+": post")
 				}
 			case "assign":
-				if a.Text != "" {
-					v.add("%s: assign takes no text", where)
+				if a.Text != "" || a.From != "" {
+					v.add(`%s: assign takes no text or "from"`, where)
 				}
 				if f := v.fieldRef(a.To, where+": assign"); f != nil && f.Type != "person" {
 					v.add("%s: assign needs a person field, %s is %s", where, f.Key, f.Type)
 				}
+			case "copy":
+				from, to := v.fieldRef(a.From, where+": copy from"), v.fieldRef(a.To, where+": copy to")
+				if a.Text != "" {
+					v.add("%s: copy takes no text", where)
+				}
+				if from != nil && to != nil && (from.Type != to.Type || from.Of != to.Of) {
+					v.add("%s: copy from %s (%s) to %s (%s): the types must match", where, from.Key, from.Type, to.Key, to.Type)
+				}
 			default:
-				v.add("%s: unknown action %q (use post or assign)", where, a.Do)
+				v.add("%s: unknown action %q (use post, assign or copy)", where, a.Do)
 			}
 		}
 	}

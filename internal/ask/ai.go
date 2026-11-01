@@ -4,6 +4,7 @@ package ask
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -78,7 +79,9 @@ kind:
 
 fields: for each detail the message gives, use the field's key and the value exactly as the person said it
 ("2k per month", "15/11", "Rasi"). Leave out details it doesn't give.
-new_items: when a value names something that is not in a field's list, add {"field": key, "name": the name}.
+For a field with choices, if the message names something that is not among the choices (a new name), still put
+that name in fields, and also add {"field": key, "name": the name} to new_items. Never put a name into another
+field (such as a reason) just because it isn't among the choices.
 
 Fields of this kind of work item:
 `)
@@ -113,7 +116,9 @@ Fields of this kind of work item:
 	b.WriteString("\nAllowed actions: ")
 	var actions []string
 	for _, t := range c.p.Transitions {
-		actions = append(actions, t.Action)
+		if !slices.Contains(actions, t.Action) {
+			actions = append(actions, t.Action)
+		}
 	}
 	b.WriteString(strings.Join(actions, ", ") + "\n")
 	return b.String(), nil
@@ -236,7 +241,7 @@ func (c *conversation) apply(pr *proposal, text string, pending *playbook.Field)
 
 	values := engine.Fields{}
 	var problems []string
-	var offer *newItem
+	var offers []newItem // new names, one per field, offered one after another
 	for _, key := range sortedKeys(pr.Fields) {
 		f := c.field(key)
 		if f == nil || f.Readonly {
@@ -247,18 +252,23 @@ func (c *conversation) apply(pr *proposal, text string, pending *playbook.Field)
 			values[key] = v
 			continue
 		}
-		if f.Type == "master" && offer == nil {
+		// A name that isn't in the list is offered as a new entry, whether or not the model marked it.
+		var notIn *NotInListError
+		if f.Type == "master" && errors.As(err, &notIn) {
+			n := newItem{Field: key, Name: tidyName(notIn.Name)}
 			if i := slices.IndexFunc(pr.NewItems, func(n newItem) bool { return n.Field == key }); i >= 0 {
-				offer = &pr.NewItems[i]
-				continue
+				n.Name = tidyName(pr.NewItems[i].Name)
 			}
+			offers = append(offers, n)
+			continue
 		}
 		problems = append(problems, fmt.Sprintf("%s: %s", Label(*f), strings.TrimSuffix(err.Error(), ".")))
 	}
 
 	// The model found nothing usable, but Seyal had asked something: read it as that answer.
-	if len(values) == 0 && offer == nil && len(problems) == 0 && pending != nil {
-		return true, false, c.answer(*pending, text)
+	if len(values) == 0 && len(offers) == 0 && len(problems) == 0 && pending != nil {
+		offered, err := c.answer(*pending, text)
+		return true, offered, err
 	}
 	if len(values) > 0 {
 		problem, err := c.try(func(sp pgx.Tx) (workitem.Item, error) {
@@ -276,8 +286,8 @@ func (c *conversation) apply(pr *proposal, text string, pending *playbook.Field)
 			return true, false, err
 		}
 	}
-	if offer != nil {
-		return true, true, c.offerNew(*c.field(offer.Field), offer.Name)
+	if len(offers) > 0 {
+		return true, true, c.offerNew(*c.field(offers[0].Field), offers[0].Name, offers[1:])
 	}
 	return true, false, nil
 }
@@ -306,7 +316,9 @@ func (c *conversation) isCommand(text string) bool {
 }
 
 // offerNew asks whether to add a name that isn't in a field's list yet as a new master item.
-func (c *conversation) offerNew(f playbook.Field, name string) error {
+// then holds further new names from the same message, offered one after another once this one is
+// answered.
+func (c *conversation) offerNew(f playbook.Field, name string, then []newItem) error {
 	label := strings.ToLower(Label(f))
 	mk, err := playbook.Kind(c.ctx, c.tx, f.Kind)
 	if err != nil {
@@ -319,25 +331,48 @@ func (c *conversation) offerNew(f playbook.Field, name string) error {
 	if err != nil {
 		return err
 	}
+	change := map[string]any{"field": f.Key, "offer_new": name, "message_id": m.ID}
+	if len(then) > 0 {
+		change["then"] = then
+	}
 	_, err = ledger.Append(c.ctx, c.tx, ledger.Event{
 		Kind: "item.asked", SubjectType: "work_item", SubjectID: c.reply.Item.ID,
-		Payload: map[string]any{"change": map[string]any{"field": f.Key, "offer_new": name, "message_id": m.ID},
-			"item": c.reply.Item},
+		Payload: map[string]any{"change": change, "item": c.reply.Item},
 	}.By(ledger.SystemActor))
 	return err
 }
 
+// nextOffer offers the next queued new name whose field is still empty. It reports whether it did.
+func (c *conversation) nextOffer(queue []newItem) (bool, error) {
+	for i, n := range queue {
+		if f := c.field(n.Field); f != nil && isEmpty(c.reply.Item.Fields[n.Field]) {
+			return true, c.offerNew(*f, n.Name, queue[i+1:])
+		}
+	}
+	return false, nil
+}
+
 // answerOffer handles the reply to "Add it as a new …?". Yes adds the master item (as the person who
-// said yes) and fills the field; no asks the field's question again; anything else is read as an
-// answer to the field.
-func (c *conversation) answerOffer(f playbook.Field, name, text string) error {
+// said yes) and fills the field; no leaves the field empty (its question is asked again later);
+// anything else is read as an answer to the field. Then the next queued new name, if any, is offered
+// (offered is then true, and nothing else is asked).
+func (c *conversation) answerOffer(f playbook.Field, of offer, text string) (offered bool, err error) {
 	yes, err := parseYesNo(text)
 	switch {
 	case err != nil:
-		return c.answer(f, text)
-	case !yes:
-		return nil // the field is still empty, so askNext asks its question again
+		if offered, err = c.answer(f, text); offered || err != nil {
+			return offered, err
+		}
+	case yes:
+		if err := c.addOffered(f, of.Name); err != nil {
+			return false, err
+		}
 	}
+	return c.nextOffer(of.Then)
+}
+
+// addOffered adds name as a new entry of f's list and fills f with it.
+func (c *conversation) addOffered(f playbook.Field, name string) error {
 	mk, err := playbook.Kind(c.ctx, c.tx, f.Kind)
 	if err != nil {
 		return err

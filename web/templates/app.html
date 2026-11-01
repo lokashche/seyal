@@ -1,7 +1,7 @@
 {{define "title"}}{{with .Data.Item}}{{.Item.Number}} · {{end}}Seyal{{end}}
 {{define "content"}}
 {{template "bar" .}}
-<div class="app{{if .Data.Item}} has-item{{end}}">
+<div class="app{{if .Data.Item}} has-item{{else}}{{with .Data.Tell}}{{if gt (len .Processes) 1}} choosing{{end}}{{end}}{{end}}">
   <section class="pane list-pane" aria-label="My Work">
     <div class="pane-h"><b>My Work</b><small>as {{.Session.Name}}</small></div>
     <nav class="groups">
@@ -28,15 +28,29 @@
 <section class="pane main-pane" aria-label="Tell Seyal">
   <div class="pane-h"><b>Tell Seyal</b></div>
   <div class="thread" id="thread">
+    {{with .Data.Tell}}{{with .Pending}}
+    <div class="msg me"><span class="who">{{$.Session.Name}}</span>{{with .Text}}<p>{{.}}</p>{{end}}{{if .Files}}<p class="why">{{.Files}} file{{if gt .Files 1}}s{{end}} attached</p>{{end}}</div>
+    <div class="msg bot"><span class="who">Seyal</span>
+      <p>{{with .Suggested}}This looks like {{.Name}}. Start it?{{else}}Which process is this for?{{end}}</p>
+    </div>
+    <form class="quick confirm" method="post" action="/t/{{$.Slug}}/tell">
+      <input type="hidden" name="message" value="{{.MessageID}}">
+      {{with .Suggested}}<button class="yes" name="playbook" value="{{.ID}}">Yes, start {{.Name}}</button>{{end}}
+      {{if and .Suggested .Others}}<span class="why">No, it's:</span>{{end}}
+      {{range .Others}}<button name="playbook" value="{{.ID}}">{{.Name}}</button>{{end}}
+    </form>
+    {{else}}
     <div class="empty">Type the work as you would tell a colleague. Seyal turns it into a work item and asks only for what's missing.</div>
+    {{end}}{{else}}
+    <div class="empty">Type the work as you would tell a colleague. Seyal turns it into a work item and asks only for what's missing.</div>
+    {{end}}
   </div>
   {{with .Data.Tell}}
-  <form class="composer" method="post" action="/t/{{$.Slug}}/tell" enctype="multipart/form-data">
-    {{if gt (len .Choices) 1}}
-      <label class="ctl-label">Type<select name="playbook">{{range .Choices}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select></label>
-    {{else}}{{range .Choices}}<input type="hidden" name="playbook" value="{{.ID}}">{{end}}{{end}}
+  <form class="composer" id="tell-form" method="post" action="/t/{{$.Slug}}/tell" enctype="multipart/form-data">
+    {{if eq (len .Processes) 1}}{{range .Processes}}<input type="hidden" name="playbook" value="{{.ID}}">{{end}}{{end}}
     <label for="msg" class="ctl-label">Message</label>
-    <textarea id="msg" name="text" placeholder="For example: new monthly bookkeeping job for Sundaram Textiles"></textarea>
+    <textarea id="msg" name="text" placeholder="{{.Placeholder}}"></textarea>
+    {{if gt (len .Processes) 1}}<p class="why chosen">Starting: <b data-chosen>Seyal decides</b> · or choose a process on the right</p>{{end}}
     {{template "tools"}}
   </form>
   {{else}}
@@ -44,12 +58,32 @@
   {{end}}
 </section>
 <aside class="pane side-pane" aria-label="Fields">
-  <div class="pane-h"><b>Fields &amp; approvals</b></div>
+  <div class="pane-h"><b>What you can start</b></div>
   <div class="side">
     {{with .Data.Tell}}
-    <h4>{{.Name}} fields</h4>
-    <dl class="fields">{{range .Fields}}<dt>{{.}}</dt><dd class="miss">waiting</dd>{{end}}</dl>
-    <p class="why">These fill themselves from the conversation. Nobody types into a form.</p>
+    {{if gt (len .Processes) 1}}
+    <input type="search" class="proc-search" placeholder="Search processes" aria-label="Search processes" data-proc-search>
+    <div class="procs" role="radiogroup" aria-label="What to start">
+      <label class="proc auto">
+        <input type="radio" name="playbook" value="auto" form="tell-form" data-name="Seyal decides" checked>
+        <span><b>Let Seyal decide</b><span class="r">Seyal works out the process from your message and asks you to confirm before starting.</span></span>
+      </label>
+      {{range .Processes}}
+      <label class="proc" data-search="{{.Search}}">
+        <input type="radio" name="playbook" value="{{.ID}}" form="tell-form" data-name="{{.Name}}" data-example="{{.Example}}">
+        <span><b>{{.Name}}</b><span class="r">{{.Description}}</span>{{with .Example}}<span class="r">e.g. “{{.}}”</span>{{end}}</span>
+      </label>
+      {{end}}
+      <p class="none" data-proc-none hidden>No process matches.</p>
+    </div>
+    {{else}}
+    <ul class="rows plain">
+      {{range .Processes}}<li><b>{{.Name}}</b><span class="r">{{.Description}}</span>{{with .Example}}<span class="r">e.g. “{{.}}”</span>{{end}}</li>{{end}}
+    </ul>
+    {{end}}
+    <p class="why">Once Seyal knows what the work is, its details appear here and fill themselves from the conversation. Nobody types into a form.</p>
+    {{else}}
+    <p class="why">No processes are switched on yet. An admin can add one in Settings → Processes.</p>
     {{end}}
   </div>
 </aside>
@@ -110,7 +144,7 @@
 <aside class="pane side-pane" aria-label="Fields and approvals">
   <div class="pane-h"><b>Fields &amp; approvals</b><small>version {{.Item.Version}}</small></div>
   <div class="side">
-    <div><span class="pill {{.Pill}}">{{.Status}}</span></div>
+    <div><span class="pill {{.Pill}}">{{.Status}}</span>{{with .With}} <span class="why">with {{.}}</span>{{end}}</div>
     <h4>{{.Kind}} fields</h4>
     <dl class="fields">
       {{range .Fields}}<dt>{{.Label}}</dt><dd{{if .Missing}} class="miss"{{end}}>{{if .Missing}}Seyal will ask{{else}}{{or .Value "—"}}{{end}}</dd>{{end}}

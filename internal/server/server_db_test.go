@@ -249,7 +249,8 @@ func TestAJobInTheBrowser(t *testing.T) {
 	a := s.logIn(arjun)
 
 	_, home, _ := s.get(a, base+"/")
-	for _, want := range []string{"My Work", "Tell Seyal", "Arjun Mehta", "Kaveri Associates (demo)", "Fee agreed"} {
+	for _, want := range []string{"My Work", "Tell Seyal", "Arjun Mehta", "Kaveri Associates (demo)", "What you can start",
+		"Job evaluation", "Evaluate a new piece of client work", `placeholder="For example: New monthly bookkeeping job for Acme Traders`} {
 		if !strings.Contains(home, want) {
 			t.Fatalf("home page is missing %q", want)
 		}

@@ -3,6 +3,7 @@
 package ask
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -70,27 +71,7 @@ func Begin(ctx context.Context, tx pgx.Tx, env Env, playbookVersionID string, in
 		return c.replyWithoutItem(greetingReply)
 	}
 
-	by := ledger.PersonActor(msg.PersonID)
-	it, err := workitem.Start(ctx, tx, workitem.NewItem{PlaybookVersionID: playbookVersionID, Via: "chat", Ref: msg.ID, By: by})
-	if err != nil {
-		return Reply{}, err
-	}
-	if c.reply.Message, err = channel.FileInto(ctx, tx, msg.ID, it.ID, by); err != nil {
-		return Reply{}, err
-	}
-	c.reply.Item = it
-	offered := false
-	if pr != nil {
-		if _, offered, err = c.apply(pr, text, nil); err != nil {
-			return Reply{}, err
-		}
-	}
-	if !offered {
-		if err := c.askNext(false); err != nil {
-			return Reply{}, err
-		}
-	}
-	return c.reply, nil
+	return c.start(pr)
 }
 
 // replyWithoutItem answers a message that starts nothing. Both stay unfiled (not in any thread).
@@ -135,16 +116,18 @@ func Converse(ctx context.Context, tx pgx.Tx, env Env, itemID string, in channel
 			pendingKey = f.Key
 		}
 		var pr *proposal
-		if offer == "" && !c.isCommand(text) {
+		if offer == nil && !c.isCommand(text) {
 			pr = c.understand(text, pendingKey)
 		}
 		switch {
-		case offer != "": // offer is only set when f is
-			answered, err = true, c.answerOffer(*f, offer, text)
+		case offer != nil: // offer is only set when f is
+			answered = true
+			offered, err = c.answerOffer(*f, *offer, text)
 		case pr != nil:
 			answered, offered, err = c.apply(pr, text, f)
 		case f != nil:
-			answered, err = true, c.answer(*f, text)
+			answered = true
+			offered, err = c.answer(*f, text)
 		default:
 			err = c.command(text)
 		}
@@ -168,17 +151,28 @@ func Pending(ctx context.Context, tx pgx.Tx, it workitem.Item) (*playbook.Field,
 		return nil, "", err
 	}
 	c := &conversation{ctx: ctx, tx: tx, p: p, reply: Reply{Item: it}}
-	return c.pending()
+	f, of, err := c.pending()
+	if of == nil {
+		return f, "", err
+	}
+	return f, of.Name, err
+}
+
+// offer is Seyal's open question "add <Name> as a new entry?", with further new names queued after it.
+type offer struct {
+	Name string    `json:"offer_new"`
+	Then []newItem `json:"then"`
 }
 
 type conversation struct {
-	ctx    context.Context
-	tx     pgx.Tx
-	env    Env
-	p      *playbook.Playbook
-	person string
-	today  time.Time
-	reply  Reply
+	ctx       context.Context
+	tx        pgx.Tx
+	env       Env
+	versionID string // the process version the conversation follows
+	p         *playbook.Playbook
+	person    string
+	today     time.Time
+	reply     Reply
 }
 
 func newConversation(ctx context.Context, tx pgx.Tx, env Env, versionID string, it workitem.Item, msg channel.Message) (*conversation, error) {
@@ -194,29 +188,29 @@ func newConversation(ctx context.Context, tx pgx.Tx, env Env, versionID string, 
 	if err != nil {
 		return nil, err
 	}
-	return &conversation{ctx: ctx, tx: tx, env: env, p: p, person: msg.PersonID, today: time.Now().In(loc),
+	return &conversation{ctx: ctx, tx: tx, env: env, versionID: versionID, p: p, person: msg.PersonID, today: time.Now().In(loc),
 		reply: Reply{Message: msg, Item: it}}, nil
 }
 
-// pending returns the field Seyal last asked about, if it is still empty, and the name it offered to
-// add as a new master item, if the question was such an offer.
-func (c *conversation) pending() (*playbook.Field, string, error) {
-	key, offer, err := c.lastAsked()
+// pending returns the field Seyal last asked about, if it is still empty, and the offer to add a new
+// master item, if the question was such an offer.
+func (c *conversation) pending() (*playbook.Field, *offer, error) {
+	key, of, err := c.lastAsked()
 	if err != nil || key == "" {
-		return nil, "", err
+		return nil, nil, err
 	}
 	for i := range c.p.Fields {
 		if f := &c.p.Fields[i]; f.Key == key && isEmpty(c.reply.Item.Fields[key]) {
-			return f, offer, nil
+			return f, of, nil
 		}
 	}
-	return nil, "", nil
+	return nil, nil, nil
 }
 
-// lastAsked returns the field of Seyal's last question, and the offered name if it was an offer.
-func (c *conversation) lastAsked() (field, offer string, err error) {
+// lastAsked returns the field of Seyal's last question, and the offer if it was one.
+func (c *conversation) lastAsked() (field string, of *offer, err error) {
 	if c.reply.Item.ID == "" {
-		return "", "", nil
+		return "", nil, nil
 	}
 	var body string
 	err = c.tx.QueryRow(c.ctx, `
@@ -225,38 +219,61 @@ func (c *conversation) lastAsked() (field, offer string, err error) {
 			AND kind = 'item.asked'
 		ORDER BY seq DESC LIMIT 1`, c.reply.Item.ID).Scan(&body)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", "", nil
+		return "", nil, nil
 	}
 	if err != nil {
-		return "", "", err
+		return "", nil, err
 	}
 	var e struct {
 		Payload struct {
 			Change struct {
 				Field string `json:"field"`
-				Offer string `json:"offer_new"`
+				offer
 			} `json:"change"`
 		} `json:"payload"`
 	}
 	if err := json.Unmarshal([]byte(body), &e); err != nil {
-		return "", "", err
+		return "", nil, err
 	}
-	return e.Payload.Change.Field, e.Payload.Change.Offer, nil
+	if e.Payload.Change.Name == "" {
+		return e.Payload.Change.Field, nil, nil
+	}
+	return e.Payload.Change.Field, &e.Payload.Change.offer, nil
 }
 
-// answer fills field f from the person's answer, or says what was wrong with it.
-func (c *conversation) answer(f playbook.Field, text string) error {
+// answer fills field f from the person's answer, or says what was wrong with it. A name that isn't
+// in a list is offered as a new entry instead (offered is then true, and nothing else is asked).
+func (c *conversation) answer(f playbook.Field, text string) (offered bool, err error) {
 	v, err := Understand(f, text, c.today, choices{c.ctx, c.tx})
-	if err != nil {
-		return c.say(fmt.Sprintf("Sorry, I didn't get that: %s.", strings.TrimSuffix(err.Error(), ".")))
+	var notIn *NotInListError
+	switch {
+	case errors.As(err, &notIn) && f.Type == "master":
+		return true, c.offerNew(f, tidyName(notIn.Name), nil)
+	case err != nil:
+		return false, c.say(fmt.Sprintf("Sorry, I didn't get that: %s.", strings.TrimSuffix(err.Error(), ".")))
 	}
 	problem, err := c.try(func(sp pgx.Tx) (workitem.Item, error) {
 		return workitem.SetFields(c.ctx, sp, c.reply.Item.ID, engine.Fields{f.Key: v}, ledger.PersonActor(c.person))
 	})
 	if err != nil || problem == "" {
-		return err
+		return false, err
 	}
-	return c.say("Sorry, I couldn't use that: " + problem + ".")
+	return false, c.say("Sorry, I couldn't use that: " + problem + ".")
+}
+
+// tidyName capitalises a name typed all in small letters ("sri balaji traders" → "Sri Balaji
+// Traders"); a name with any capitals is kept as typed.
+func tidyName(name string) string {
+	name = strings.Join(strings.Fields(name), " ")
+	if name != strings.ToLower(name) {
+		return name
+	}
+	words := strings.Fields(name)
+	for i, w := range words {
+		r := []rune(w)
+		words[i] = strings.ToUpper(string(r[0])) + string(r[1:])
+	}
+	return strings.Join(words, " ")
 }
 
 // command runs a short command, if the text is one. Any other text is just a note.
@@ -336,7 +353,16 @@ func (c *conversation) sayStatus() error {
 	if a := c.p.Approvals; a != nil && it.State == a.OnComplete {
 		return nil // the playbook's own on-approved actions speak for themselves
 	}
-	return c.say("Done. It is now " + strings.ReplaceAll(it.State, "_", " ") + ".")
+	msg := "Done. It is now " + strings.ReplaceAll(it.State, "_", " ") + "."
+	if it.Team != "" {
+		var name string
+		if err := c.tx.QueryRow(c.ctx, `SELECT name FROM roles WHERE tenant_id = current_tenant() AND key = $1`,
+			it.Team).Scan(&name); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		msg += " It's with the " + cmp.Or(name, it.Team) + " team now."
+	}
+	return c.say(msg)
 }
 
 // askNext asks for the next empty required field. A question already asked is not repeated unless
@@ -347,7 +373,7 @@ func (c *conversation) askNext(answered bool) error {
 	if engine.IsClosed(c.p, it.State) {
 		return nil
 	}
-	if f := NextField(c.p, it.Fields); f != nil {
+	if f := NextField(c.p, it.State, it.Fields); f != nil {
 		last, _, err := c.lastAsked()
 		if err != nil || (last == f.Key && !answered) {
 			return err
@@ -362,12 +388,12 @@ func (c *conversation) askNext(answered bool) error {
 		}.By(ledger.SystemActor))
 		return err
 	}
-	if !answered {
+	if !answered || len(engine.Missing(c.p, it.State, it.Fields)) > 0 {
 		return nil
 	}
 	for _, t := range c.p.Transitions {
 		if t.When == "required_filled" && slices.Contains(t.From, it.State) {
-			return c.say(fmt.Sprintf("Everything needed is filled in. Say %q when it's ready.", t.Action))
+			return c.say(fmt.Sprintf("Everything needed is filled in. Say %q when it's ready.", strings.ReplaceAll(t.Action, "_", " ")))
 		}
 	}
 	return nil

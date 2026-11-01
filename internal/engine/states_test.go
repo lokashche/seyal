@@ -6,6 +6,8 @@ import (
 	"errors"
 	"slices"
 	"testing"
+
+	"seyal/internal/playbook"
 )
 
 // complete returns fields where every required field of the sample playbook is filled in.
@@ -22,10 +24,10 @@ func complete() Fields {
 func TestMissing(t *testing.T) {
 	p := loadExample(t)
 	want := []string{"client", "nature_of_work", "reason", "fee_agreed", "integrity_check"}
-	if got := Missing(p, Fields{}); !slices.Equal(got, want) {
+	if got := Missing(p, "draft", Fields{}); !slices.Equal(got, want) {
 		t.Errorf("Missing(empty) = %v, want %v", got, want)
 	}
-	if got := Missing(p, complete()); len(got) != 0 {
+	if got := Missing(p, "draft", complete()); len(got) != 0 {
 		t.Errorf("Missing(complete) = %v, want none", got)
 	}
 }
@@ -50,7 +52,7 @@ func TestTransition(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			to, err := Transition(p, Item{State: tt.state, Fields: tt.fields}, tt.action, tt.reason)
+			to, err := Transition(p, Item{State: tt.state, Fields: tt.fields}, tt.action, tt.reason, nil)
 			switch want := tt.wantErr.(type) {
 			case nil:
 				if err != nil || to != tt.wantTo {
@@ -69,7 +71,7 @@ func TestTransition(t *testing.T) {
 		})
 	}
 
-	if _, err := Transition(p, Item{State: "draft"}, "approve-everything", ""); err == nil {
+	if _, err := Transition(p, Item{State: "draft"}, "approve-everything", "", nil); err == nil {
 		t.Error("Transition accepted an unknown action")
 	}
 }
@@ -131,5 +133,67 @@ func TestCheckSet(t *testing.T) {
 				t.Errorf("CheckSet(%s = %v) error = %v, wantErr %v", tt.key, tt.value, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestSteps: each step asks its own fields and needs its own; a conditional move is taken only when
+// its condition is true, otherwise the default; owners are read from the step.
+func TestSteps(t *testing.T) {
+	p, err := playbook.Parse([]byte(`id: hand-off
+version: "1"
+description: Ask, hand over, maybe study.
+numbering: "H-{seq:4}"
+roles: [team]
+fields:
+  - { key: who, label: Who, type: text, required: true }
+  - { key: kind, label: Kind, type: choice, options: [usual, new], required: true }
+  - { key: amount, label: Amount, type: money }
+  - { key: lead, label: Lead, type: person }
+states: [asking, with_team, studying, done]
+initial: asking
+steps:
+  asking: { owner: starter, asks: [who, kind, amount], needs: [who, kind] }
+  with_team: { owner: "role:team", asks: [lead], needs: [amount] }
+transitions:
+  - { action: hand_over, from: [asking], to: studying, when: required_filled, if: { field: kind, eq: new } }
+  - { action: hand_over, from: [asking], to: with_team, when: required_filled }
+  - { action: finish, from: [with_team, studying], to: done, when: required_filled }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if got := ToAsk(p, "asking", Fields{"who": "A"}); !slices.Equal(got, []string{"kind", "amount"}) {
+		t.Errorf("asking asks %v, want kind, amount (optional amount too)", got)
+	}
+	if got := Missing(p, "asking", Fields{"who": "A"}); !slices.Equal(got, []string{"kind"}) {
+		t.Errorf("asking needs %v, want kind only", got)
+	}
+	if got := Missing(p, "studying", Fields{"amount": 5.0}); !slices.Equal(got, []string{"who", "kind"}) {
+		t.Errorf("a state without a step needs %v, want the required fields", got)
+	}
+	if got := Actions(p, Item{State: "asking"}); !slices.Equal(got, []string{"hand_over"}) {
+		t.Errorf("actions = %v, want hand_over once", got)
+	}
+	for _, tt := range []struct {
+		kind, want string
+	}{{"new", "studying"}, {"usual", "with_team"}} {
+		to, err := Transition(p, Item{State: "asking", Fields: Fields{"who": "A", "kind": tt.kind}}, "hand_over", "", nil)
+		if err != nil || to != tt.want {
+			t.Errorf("hand_over with kind %s = %s, %v; want %s", tt.kind, to, err, tt.want)
+		}
+	}
+	var missing *MissingError
+	if _, err := Transition(p, Item{State: "with_team", Fields: Fields{"who": "A", "kind": "usual"}}, "finish", "", nil); !errors.As(err, &missing) ||
+		!slices.Equal(missing.Keys, []string{"amount"}) {
+		t.Errorf("finish without the amount = %v, want amount still needed", err)
+	}
+	if k, n := Owner(p, "with_team"); k != "role" || n != "team" {
+		t.Errorf("owner of with_team = %s:%s", k, n)
+	}
+	if k, _ := Owner(p, "done"); k != "" {
+		t.Errorf("owner of done = %q, want none (unchanged)", k)
 	}
 }

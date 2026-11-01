@@ -1,4 +1,5 @@
-// Seyal's own script: keep the newest message in view, Ctrl/Cmd+Enter sends, and record voice notes.
+// Seyal's own script: keep the newest message in view, Ctrl/Cmd+Enter sends, record voice notes,
+// and choose or search what to start on Tell Seyal.
 (function () {
   "use strict";
 
@@ -120,6 +121,30 @@
       })
       .catch(function () { status(form, "Couldn't send. Check the connection and try again."); });
   }
+
+  // --- Choosing what to start on Tell Seyal -------------------------------------------------
+  // The process cards in the right pane belong to the message form (form="tell-form"). Searching
+  // hides the cards that don't match; choosing one updates "Starting: …" and the example text.
+
+  document.addEventListener("input", function (e) {
+    if (!e.target.matches("[data-proc-search]")) return;
+    var q = e.target.value.trim().toLowerCase(), shown = 0;
+    document.querySelectorAll(".proc[data-search]").forEach(function (card) {
+      var match = card.getAttribute("data-search").indexOf(q) >= 0;
+      card.hidden = !match;
+      if (match) shown++;
+    });
+    var none = document.querySelector("[data-proc-none]");
+    if (none) none.hidden = shown > 0;
+  });
+
+  document.addEventListener("change", function (e) {
+    if (!e.target.matches('.proc input[type="radio"]')) return;
+    var chosen = document.querySelector("[data-chosen]");
+    if (chosen) chosen.textContent = e.target.getAttribute("data-name");
+    var example = e.target.getAttribute("data-example"), msg = document.getElementById("msg");
+    if (msg && example) msg.placeholder = "For example: " + example;
+  });
 
   // --- Installable app ----------------------------------------------------------------------
   if ("serviceWorker" in navigator) {

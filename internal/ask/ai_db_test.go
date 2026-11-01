@@ -276,3 +276,65 @@ func TestWhatTheModelSees(t *testing.T) {
 		t.Error("the instructions changed between two messages; they should stay the same so providers can cache them")
 	}
 }
+
+// TestNewNameAsAnAnswer: without AI, answering "Which client?" with a name that isn't in the list
+// offers to add it (tidied: "sheik trading" → "Sheik Trading"); yes adds it and moves on.
+func TestNewNameAsAnAnswer(t *testing.T) {
+	o := newOffice(t)
+	r := o.begin("New job")
+	o.says(r, "Which client is this for?")
+	o.says(o.write(r.Item.ID, o.sam, "sheik trading"), "Sheik Trading isn't in the list yet. Add it as a new client? (yes / no)")
+	r = o.write(r.Item.ID, o.sam, "yes")
+	o.says(r, "Added Sheik Trading.", "What kind of work is it?")
+	if r.Item.Fields["client"] != "sheik-trading" {
+		t.Errorf("client = %v", r.Item.Fields["client"])
+	}
+	o.checkLedger()
+}
+
+// TestAINewNameNotFlagged: the model passes on a new name but forgets to list it in new_items; Seyal
+// still offers it instead of saying it doesn't know the name.
+func TestAINewNameNotFlagged(t *testing.T) {
+	o := newOffice(t)
+	o.withFake(map[string]string{
+		"sheik": `{"kind":"new_work","fields":{"client":"sheik","reason":"registration"},"new_items":[],
+			"command":"","reason":"","reply":""}`,
+	})
+	r := o.begin("sheik wants registration")
+	o.says(r, "Sheik isn't in the list yet. Add it as a new client? (yes / no)")
+	if r.Item.Fields["reason"] != "registration" {
+		t.Errorf("reason = %v, want the other detail kept", r.Item.Fields["reason"])
+	}
+}
+
+// TestTwoNewNames: one message names a new client and a new work type. Seyal offers them one after
+// the other, keeps the details it could use, and only then asks what is still missing.
+func TestTwoNewNames(t *testing.T) {
+	o := newOffice(t)
+	o.withFake(map[string]string{
+		"Rahim": `{"kind":"new_work","fields":{"client":"Rahim Stores","nature_of_work":"GST registration",
+			"fee_agreed":"5000"},"new_items":[{"field":"client","name":"Rahim Stores"}],"command":"","reason":"","reply":""}`,
+		"Karim": `{"kind":"new_work","fields":{"client":"Karim Traders","nature_of_work":"VAT filing"},"new_items":[],
+			"command":"","reason":"","reply":""}`,
+	})
+	r := o.begin("Rahim Stores wants GST registration for 5000")
+	job := r.Item.ID
+	o.says(r, "Rahim Stores isn't in the list yet. Add it as a new client? (yes / no)")
+	if r.Item.Fields["fee_agreed"] != 500000.0 {
+		t.Errorf("fee = %v, want it kept", r.Item.Fields["fee_agreed"])
+	}
+
+	r = o.write(job, o.sam, "yes")
+	o.says(r, "Added Rahim Stores.", "GST registration isn't in the list yet. Add it as a new work type? (yes / no)")
+	r = o.write(job, o.sam, "yes")
+	o.says(r, "Added GST registration.", "Why does the client need this?")
+	if r.Item.Fields["client"] != "rahim-stores" || r.Item.Fields["nature_of_work"] != "gst-registration" {
+		t.Errorf("fields = %v", r.Item.Fields)
+	}
+
+	// Saying no to the first still offers the second.
+	r = o.begin("Karim Traders wants VAT filing")
+	o.says(r, "Karim Traders isn't in the list yet.")
+	o.says(o.write(r.Item.ID, o.sam, "no"), "VAT filing isn't in the list yet. Add it as a new work type? (yes / no)")
+	o.checkLedger()
+}
