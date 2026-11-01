@@ -244,14 +244,16 @@ func sender(ctx context.Context, tx pgx.Tx, in Incoming) (personID, identityID s
 }
 
 func saveFile(ctx context.Context, tx pgx.Tx, store media.Store, personID string, f File) (Media, error) {
+	contentType, ok := media.Clean(f.ContentType)
 	switch {
 	case len(f.Data) == 0:
 		return Media{}, errors.New("an attached file is empty")
 	case len(f.Data) > media.MaxSize:
 		return Media{}, fmt.Errorf("files can be at most %d MB", media.MaxSize>>20)
-	case !media.Allowed(f.ContentType):
-		return Media{}, fmt.Errorf("files of type %q are not accepted", f.ContentType)
+	case !ok:
+		return Media{}, fmt.Errorf("files of type %q are not accepted (voice notes, photos and PDFs are)", f.ContentType)
 	}
+	f.ContentType = contentType // only the plain type is kept
 	var tenant string
 	if err := tx.QueryRow(ctx, "SELECT current_tenant()::text").Scan(&tenant); err != nil {
 		return Media{}, err

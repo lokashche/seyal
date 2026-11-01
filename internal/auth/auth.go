@@ -75,6 +75,12 @@ func SetPassword(ctx context.Context, tx pgx.Tx, personID, email, password strin
 	if tag.RowsAffected() == 0 {
 		return errors.New("auth: no such person")
 	}
+	// A new password logs the person out everywhere: if the old one leaked, its sessions end too.
+	if _, err := tx.Exec(ctx, `
+		UPDATE sessions SET ended_at = now()
+		WHERE tenant_id = current_tenant() AND person_id::text = $1 AND ended_at IS NULL`, personID); err != nil {
+		return fmt.Errorf("auth: end sessions: %w", err)
+	}
 	_, err = ledger.Append(ctx, tx, ledger.Event{
 		Kind: "person.login_set", SubjectType: "person", SubjectID: personID,
 		Payload: map[string]string{"email": email},

@@ -55,10 +55,33 @@ func Get(ctx context.Context, tx pgx.Tx, id string) (Item, error) {
 	return scanItem(tx.QueryRow(ctx, selectItem, id))
 }
 
-// List returns the tenant's work items, most recently changed first, at most 500.
+// List returns the tenant's open work items (all of them: nothing open may go missing), most recently
+// changed first. Which states are closed depends on each item's process version.
 // tx must come from db.WithTenant.
 func List(ctx context.Context, tx pgx.Tx) ([]Item, error) {
-	rows, err := tx.Query(ctx, selectItems+` ORDER BY updated_at DESC, number LIMIT 500`)
+	rows, _ := tx.Query(ctx, `
+		SELECT DISTINCT v.id::text, v.source FROM work_items w
+		JOIN playbook_versions v ON v.tenant_id = w.tenant_id AND v.id = w.playbook_version_id
+		WHERE w.tenant_id = current_tenant()`)
+	versions, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ ID, Source string }])
+	if err != nil {
+		return nil, fmt.Errorf("workitem: list: %w", err)
+	}
+	var closed []string // "version id:state"
+	for _, v := range versions {
+		p, err := playbook.Parse([]byte(v.Source))
+		if err != nil {
+			return nil, fmt.Errorf("workitem: list: %w", err)
+		}
+		for _, st := range p.States {
+			if engine.IsClosed(p, st) {
+				closed = append(closed, v.ID+":"+st)
+			}
+		}
+	}
+	rows, err = tx.Query(ctx, selectItems+`
+		AND (playbook_version_id::text || ':' || state) <> ALL($1::text[])
+		ORDER BY updated_at DESC, number`, closed)
 	if err != nil {
 		return nil, fmt.Errorf("workitem: list: %w", err)
 	}
@@ -75,8 +98,11 @@ func List(ctx context.Context, tx pgx.Tx) ([]Item, error) {
 }
 
 // getForUpdate returns one work item and locks it until the transaction ends, so two people
-// changing the same item at once take turns.
+// changing the same item at once take turns. The ledger is locked first (see ledger.Lock).
 func getForUpdate(ctx context.Context, tx pgx.Tx, id string) (Item, error) {
+	if err := ledger.Lock(ctx, tx); err != nil {
+		return Item{}, err
+	}
 	return scanItem(tx.QueryRow(ctx, selectItem+" FOR UPDATE", id))
 }
 

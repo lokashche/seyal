@@ -56,6 +56,12 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .banner { margin: 0; padding: 8px 16px; font-size: 13.5px; white-space: pre-line; }
 .banner.error { background: var(--warn-soft); color: var(--warn); }
 .banner.notice { background: var(--ok-soft); color: var(--ok); }
+/* The connection band (app.js): a thin strip at the top while the server can't be reached */
+.conn { flex: none; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 5px 16px; font-size: 13px; font-weight: 500; }
+.conn.down { background: var(--warn-soft); color: var(--warn); }
+.conn.up { background: var(--ok-soft); color: var(--ok); }
+.conn button { border: 1px solid currentColor; background: none; color: inherit; border-radius: 6px; padding: 1px 9px; font-size: 12.5px; }
+.is-offline .composer .btn:not([data-voice="record"]):not(.attach) { opacity: .5; }
 
 /* The main screen: folders, list, conversation, details */
 .app { flex: 1; min-height: 0; display: grid; grid-template-columns: 232px 340px minmax(0, 1fr) 320px; background: var(--panel); }

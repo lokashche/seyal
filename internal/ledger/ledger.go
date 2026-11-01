@@ -85,6 +85,23 @@ type body struct {
 	Payload       json.RawMessage `json:"payload"`
 }
 
+// Lock takes the current tenant's chain head (creating it on first use) and holds it until the
+// transaction ends. Append does this itself; code that also locks other rows (a work item, a number
+// counter) calls Lock first, so every writing transaction takes the locks in the same order and two
+// of them can never wait for each other in a circle. tx must come from db.WithTenant.
+func Lock(ctx context.Context, tx pgx.Tx) error {
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO ledger_heads (tenant_id, last_seq, last_hash)
+		VALUES (current_tenant(), 0, $1)
+		ON CONFLICT (tenant_id) DO NOTHING`, zeroHash); err != nil {
+		return fmt.Errorf("ledger: create head: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM ledger_heads WHERE tenant_id = current_tenant() FOR UPDATE`); err != nil {
+		return fmt.Errorf("ledger: lock head: %w", err)
+	}
+	return nil
+}
+
 // Append adds e to the end of the current tenant's chain. tx must come from db.WithTenant.
 func Append(ctx context.Context, tx pgx.Tx, e Event) (Recorded, error) {
 	if err := e.validate(); err != nil {
@@ -98,12 +115,8 @@ func Append(ctx context.Context, tx pgx.Tx, e Event) (Recorded, error) {
 		}
 	}
 
-	// Create this tenant's chain head on first use, then lock it until the transaction ends.
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO ledger_heads (tenant_id, last_seq, last_hash)
-		VALUES (current_tenant(), 0, $1)
-		ON CONFLICT (tenant_id) DO NOTHING`, zeroHash); err != nil {
-		return Recorded{}, fmt.Errorf("ledger: create head: %w", err)
+	if err := Lock(ctx, tx); err != nil {
+		return Recorded{}, err
 	}
 	var tenantID string
 	var lastSeq int64

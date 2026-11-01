@@ -11,8 +11,11 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -77,6 +80,7 @@ type itemView struct {
 	Heading string // the title, or the start of the first message while it has none
 	Links   []linkView
 	Closed  bool
+	NotMine bool // open, but this person may only read it and write notes (D55)
 	Thread  []entryView
 	Quick   []string
 	Fields  []fieldView
@@ -323,13 +327,23 @@ func (v *view) item(id string) (*itemView, error) {
 		}
 	}
 
+	if !iv.Closed {
+		switch err := workitem.MayChange(v.ctx, v.tx, it, ledger.PersonActor(v.c.session.PersonID)); {
+		case errors.Is(err, workitem.ErrNotYours):
+			iv.NotMine = true
+		case err != nil:
+			return nil, err
+		}
+	}
+	changeable := !iv.Closed && !iv.NotMine
+
 	toAsk := engine.ToAsk(p, it.State, it.Fields) // what Seyal asks in this step
 	from, err := v.prefilled(p, it)
 	if err != nil {
 		return nil, err
 	}
 	for _, f := range p.Fields {
-		fv, err := v.field(f, it.Fields[f.Key], !iv.Closed)
+		fv, err := v.field(f, it.Fields[f.Key], changeable)
 		if err != nil {
 			return nil, err
 		}
@@ -338,7 +352,7 @@ func (v *view) item(id string) (*itemView, error) {
 		iv.Fields = append(iv.Fields, fv)
 	}
 
-	if !iv.Closed {
+	if changeable {
 		f, offer, err := ask.Pending(v.ctx, v.tx, it)
 		switch {
 		case err != nil:
@@ -661,7 +675,8 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request, c *call) {
 func (s *Server) decide(w http.ResponseWriter, r *http.Request, c *call) {
 	id := r.PathValue("id")
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
-		_, err := workitem.Decide(r.Context(), tx, id, c.session.PersonID, r.PostFormValue("slot"),
+		seen, _ := strconv.Atoi(r.PostFormValue("version")) // the version the page showed
+		_, err := workitem.DecideSeen(r.Context(), tx, id, seen, c.session.PersonID, r.PostFormValue("slot"),
 			r.PostFormValue("decision"), strings.TrimSpace(r.PostFormValue("reason")))
 		if err != nil {
 			return err
@@ -745,9 +760,16 @@ func (s *Server) media(w http.ResponseWriter, r *http.Request, c *call) {
 		return
 	}
 	defer f.Close()
-	w.Header().Set("Content-Type", contentType)
+	// Serve only a plain, accepted type (files stored before types were cleaned may carry anything),
+	// and never let a file act as a page of this site, even if a browser opens it directly.
+	clean, ok := media.Clean(contentType)
+	if !ok {
+		clean = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", clean)
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
 	w.Header().Set("Cache-Control", "private, max-age=86400")
-	if !strings.HasPrefix(contentType, "audio/") && !strings.HasPrefix(contentType, "image/") {
+	if !strings.HasPrefix(clean, "audio/") && !strings.HasPrefix(clean, "image/") {
 		w.Header().Set("Content-Disposition", "attachment")
 	}
 	if rs, ok := f.(io.ReadSeeker); ok {
@@ -768,8 +790,9 @@ func sentence(s string) string {
 
 // capital gives a message a capital first letter and changes nothing else.
 func capital(s string) string {
-	if s == "" {
+	r, size := utf8.DecodeRuneInString(s) // the first letter, which may be more than one byte (e.g. Tamil)
+	if size == 0 {
 		return s
 	}
-	return strings.ToUpper(s[:1]) + s[1:]
+	return string(unicode.ToUpper(r)) + s[size:]
 }

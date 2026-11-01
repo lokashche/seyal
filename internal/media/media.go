@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,15 +21,31 @@ import (
 // MaxSize is the largest file accepted (25 MB): enough for several minutes of voice.
 const MaxSize = 25 << 20
 
-// Allowed reports whether a file of this type may be stored: audio, images and PDFs. SVG images are
-// refused, because an SVG can contain scripts.
-func Allowed(contentType string) bool {
-	base, _, _ := strings.Cut(strings.ToLower(contentType), ";")
-	base = strings.TrimSpace(base)
-	if base == "image/svg+xml" {
-		return false
+// accepted are the file types that may be stored: voice notes, photos and PDFs. SVG images are not
+// among them, because an SVG can contain scripts.
+var accepted = map[string]bool{
+	"audio/webm": true, "audio/ogg": true, "audio/mp4": true, "audio/mpeg": true, "audio/aac": true,
+	"audio/wav": true, "audio/x-m4a": true,
+	"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true, "image/heic": true,
+	"application/pdf": true,
+}
+
+// Clean returns the plain type of a file ("audio/webm" from "audio/webm;codecs=opus") if it may be
+// stored, and false otherwise. Only the plain type is ever kept and served back: a type as sent by
+// a browser (or anyone) can carry tricks such as "image/png,text/html" that make a browser treat
+// the file as a web page.
+func Clean(contentType string) (string, bool) {
+	base, _, err := mime.ParseMediaType(contentType)
+	if err != nil || !accepted[base] {
+		return "", false
 	}
-	return strings.HasPrefix(base, "audio/") || strings.HasPrefix(base, "image/") || base == "application/pdf"
+	return base, true
+}
+
+// Allowed reports whether a file of this type may be stored.
+func Allowed(contentType string) bool {
+	_, ok := Clean(contentType)
+	return ok
 }
 
 // Store keeps file bytes.

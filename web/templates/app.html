@@ -156,6 +156,7 @@
   <div class="pane-h"><b>Details</b><small>version {{.Item.Version}}</small></div>
   <div class="side">
     <div><span class="pill {{.Pill}}">{{.Status}}</span>{{with .With}} <span class="why">with {{.}}</span>{{end}}</div>
+    {{if .NotMine}}<p class="why">Only {{or .With "whoever has it"}}, whoever started it, or an admin can change this item. You can read it and write a note.</p>{{end}}
     {{with .Links}}
     <details class="sec" open><summary>Linked work</summary>
     <ul class="links">
@@ -204,13 +205,13 @@
         {{if .Done}}<span class="s-ok">✓ {{.By}}</span>
         {{else if .CanDecide}}
           <form method="post" action="/t/{{$.Slug}}/items/{{$.Data.Item.Item.ID}}/decide">
-            <input type="hidden" name="slot" value="{{.Slot}}">
+            <input type="hidden" name="slot" value="{{.Slot}}"><input type="hidden" name="version" value="{{$.Data.Item.Item.Version}}">
             <button class="btn ok sm" name="decision" value="approve">Approve</button>
           </form>
           <details>
             <summary>Refuse…</summary>
             <form method="post" action="/t/{{$.Slug}}/items/{{$.Data.Item.Item.ID}}/decide" class="reason">
-              <input type="hidden" name="slot" value="{{.Slot}}">
+              <input type="hidden" name="slot" value="{{.Slot}}"><input type="hidden" name="version" value="{{$.Data.Item.Item.Version}}">
               <input name="reason" required placeholder="Why?" aria-label="Reason for refusing">
               <button class="btn warn sm" name="decision" value="reject">Refuse</button>
             </form>

@@ -42,13 +42,18 @@
     if (el) el.textContent = text;
   }
 
+  var asking = false; // waiting for the microphone permission: a second click mustn't start another
+
   function start(button) {
     var form = button.form;
     if (!navigator.mediaDevices || !window.MediaRecorder) {
       status(form, "This browser can't record voice notes.");
       return;
     }
+    if (asking) return;
+    asking = true;
     navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+      asking = false;
       var type = pickType();
       var recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
       rec = { recorder: recorder, stream: stream, chunks: [], started: Date.now(), form: form, button: button };
@@ -64,12 +69,13 @@
       button.textContent = "■ Stop 0:00";
       status(form, "Recording…");
     }).catch(function () {
+      asking = false;
       status(form, "Microphone not allowed. Check the browser's permission for this site.");
     });
   }
 
   function stop() {
-    if (!rec) return;
+    if (!rec || rec.recorder.state === "inactive") return;
     clearInterval(rec.timer);
     rec.recorder.stop();
     rec.stream.getTracks().forEach(function (t) { t.stop(); });
@@ -104,6 +110,12 @@
 
   function send(form) {
     if (!rec || rec.form !== form || !rec.blob) return;
+    if (offline) {
+      status(form, "No connection. The voice note is kept; send it when the connection is back.");
+      return;
+    }
+    if (form.dataset.sending) return;
+    form.dataset.sending = "1";
     var data = new FormData(form);
     var ext = rec.blob.type.indexOf("mp4") >= 0 ? "m4a" : rec.blob.type.indexOf("ogg") >= 0 ? "ogg" : "webm";
     data.append("voice", rec.blob, "voice-note." + ext);
@@ -119,7 +131,11 @@
           settle();
         });
       })
-      .catch(function () { status(form, "Couldn't send. Check the connection and try again."); });
+      .catch(function () {
+        delete form.dataset.sending;
+        status(form, "Couldn't send. The voice note is kept; send it again when the connection is back.");
+        goneOffline();
+      });
   }
 
   // --- Choosing what to start on Tell Seyal -------------------------------------------------
@@ -144,6 +160,88 @@
     if (chosen) chosen.textContent = e.target.getAttribute("data-name");
     var example = e.target.getAttribute("data-example"), msg = document.getElementById("msg");
     if (msg && example) msg.placeholder = "For example: " + example;
+  });
+
+  // --- Connection band ----------------------------------------------------------------------
+  // When the server can't be reached, a thin band says so and Seyal keeps checking; sending waits,
+  // and whatever was typed or recorded stays on the page. When the server answers again, the band
+  // says "Back online" for a moment. (Opening the app with no connection shows the offline page,
+  // from the service worker.)
+
+  var offline = false, checking = null, band = null;
+
+  function showBand(text, kind) {
+    if (!band) {
+      band = document.createElement("div");
+      band.className = "conn";
+      band.setAttribute("role", "status");
+      band.setAttribute("aria-live", "polite");
+    }
+    if (!band.isConnected) document.body.prepend(band); // htmx swaps the body on navigation
+    band.className = "conn " + kind;
+    band.textContent = text;
+    if (kind === "down") {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.setAttribute("data-reload", "");
+      b.textContent = "Refresh";
+      band.append(" ", b);
+    }
+  }
+
+  function hideBand() { if (band) band.remove(); }
+
+  function goneOffline() {
+    if (offline) return;
+    offline = true;
+    document.body.classList.add("is-offline");
+    showBand("No connection · trying again…", "down");
+    checking = setInterval(check, 5000);
+  }
+
+  function check() {
+    fetch("/sw.js", { method: "HEAD", cache: "no-store" }).then(function (res) {
+      if (res.ok) backOnline();
+    }).catch(function () { /* still offline */ });
+  }
+
+  function backOnline() {
+    if (!offline) return;
+    offline = false;
+    clearInterval(checking);
+    document.body.classList.remove("is-offline");
+    showBand("Back online", "up");
+    setTimeout(function () { if (!offline) hideBand(); }, 2000);
+  }
+
+  window.addEventListener("offline", goneOffline);
+  window.addEventListener("online", check);
+  document.addEventListener("htmx:sendError", function () { // a link or form couldn't reach the server
+    // What didn't arrive can be sent again later.
+    document.querySelectorAll("form[data-sending]").forEach(function (f) { delete f.dataset.sending; });
+    goneOffline();
+  });
+
+  // While offline, nothing is sent: the typed text stays in the box until the connection is back.
+  function hold(e) {
+    if (!offline) return;
+    e.preventDefault();
+    showBand("No connection · your message is kept; send it when the connection is back.", "down");
+  }
+
+  // Every form is sent once: a second click while the first is on its way is ignored (it would start
+  // the same work twice). A recorded voice note goes with the message even if the person presses the
+  // ordinary Send. Stopping the event here keeps htmx from sending it as well.
+  document.addEventListener("submit", function (e) {
+    var form = e.target;
+    var stopHere = function () { e.preventDefault(); e.stopPropagation(); };
+    if (offline) { hold(e); stopHere(); return; }
+    if (form.dataset.sending) { stopHere(); return; }
+    if (rec && rec.form === form && rec.blob) { stopHere(); send(form); return; }
+    form.dataset.sending = "1"; // the page that comes back has a fresh form
+  }, true);
+  document.addEventListener("htmx:beforeRequest", function (e) {
+    if (offline && e.detail.requestConfig && e.detail.requestConfig.verb !== "get") hold(e);
   });
 
   // --- Installable app ----------------------------------------------------------------------

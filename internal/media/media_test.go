@@ -52,14 +52,17 @@ func TestKeysCannotEscapeTheStore(t *testing.T) {
 
 func TestAllowed(t *testing.T) {
 	for typ, want := range map[string]bool{
-		"audio/webm;codecs=opus": true,
-		"audio/mp4":              true,
-		"image/jpeg":             true,
-		"application/pdf":        true,
-		"text/html":              false,
-		"image/svg+xml":          false, // can contain scripts
-		"application/x-msdos":    false,
-		"":                       false,
+		"audio/webm;codecs=opus":  true,
+		"audio/mp4":               true,
+		"image/jpeg":              true,
+		"application/pdf":         true,
+		"text/html":               false,
+		"image/svg+xml":           false, // can contain scripts
+		"application/x-msdos":     false,
+		"image/png,text/html":     false, // a browser would take the last type and show a web page
+		"audio/x,text/javascript": false,
+		"image/x-anything":        false,
+		"":                        false,
 	} {
 		if got := Allowed(typ); got != want {
 			t.Errorf("Allowed(%q) = %v, want %v", typ, got, want)

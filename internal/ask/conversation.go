@@ -116,10 +116,13 @@ func Converse(ctx context.Context, tx pgx.Tx, env Env, itemID string, in channel
 			pendingKey = f.Key
 		}
 		var pr *proposal
-		if offer == nil && !c.isCommand(text) {
+		command := c.isCommand(text)
+		if offer == nil && !command {
 			pr = c.understand(text, pendingKey)
 		}
 		switch {
+		case command: // a command wins over a pending question or offer ("submit" isn't an amount)
+			err = c.command(text)
 		case offer != nil: // offer is only set when f is
 			answered = true
 			offered, err = c.answerOffer(*f, *offer, text)
@@ -314,6 +317,12 @@ func tidyName(name string) string {
 
 // command runs a short command, if the text is one. Any other text is just a note.
 func (c *conversation) command(text string) error {
+	return c.commandBy(text, ledger.PersonActor(c.person))
+}
+
+// commandBy is command, recorded as done by the given actor (the person, or Seyal reading their message
+// for them).
+func (c *conversation) commandBy(text string, by ledger.Actor) error {
 	it := c.reply.Item
 	words := engine.Actions(c.p, engine.Item{State: it.State, Fields: it.Fields})
 	waiting := c.p.Approvals != nil && it.State == c.p.Approvals.In
@@ -328,7 +337,7 @@ func (c *conversation) command(text string) error {
 		return c.decide(word, reason)
 	}
 	problem, err := c.try(func(sp pgx.Tx) (workitem.Item, error) {
-		return workitem.Act(c.ctx, sp, it.ID, word, reason, ledger.PersonActor(c.person))
+		return workitem.Act(c.ctx, sp, it.ID, word, reason, by)
 	})
 	switch {
 	case err != nil:

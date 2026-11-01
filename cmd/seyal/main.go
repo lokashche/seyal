@@ -73,6 +73,7 @@ Commands:
   dev down       stop the local database
   dev test       run the quick tests
   dev test-db    run the database tests (needs "dev up")
+  dev reset      wipe the LOCAL database and files, then load the demo (asks first)
   migrate        apply all pending database migrations
   verify         check every ledger for tampering (--full: from the start)
   check          verify the integrity of the playbooks and master data

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"seyal/internal/ledger"
 )
 
 var seqToken = regexp.MustCompile(`\{seq:([1-9])\}`)
@@ -44,6 +46,9 @@ func FiscalYear(t time.Time, startMonth int) int {
 // and a transaction that fails gives its number back, so there are no gaps.
 // tx must come from db.WithTenant.
 func TakeNumber(ctx context.Context, tx pgx.Tx, key string) (int64, error) {
+	if err := ledger.Lock(ctx, tx); err != nil { // same lock order as every other change
+		return 0, err
+	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO counters (tenant_id, key) VALUES (current_tenant(), $1)
 		ON CONFLICT (tenant_id, key) DO NOTHING`, key); err != nil {

@@ -50,7 +50,13 @@ func Start(ctx context.Context, tx pgx.Tx, in NewItem) (Item, error) {
 		return Item{}, fmt.Errorf("workitem: tenant time zone: %w", err)
 	}
 	year := FiscalYear(time.Now().In(loc), fiscalStart)
-	seq, err := TakeNumber(ctx, tx, fmt.Sprintf("%s:%d", s.p.ID, year))
+	// Numbers start again each year only if the year is part of them; otherwise "T-0001" would come
+	// round again next year.
+	counter := s.p.ID
+	if strings.Contains(s.p.Numbering, "{yyyy}") || strings.Contains(s.p.Numbering, "{yy}") {
+		counter = fmt.Sprintf("%s:%d", s.p.ID, year)
+	}
+	seq, err := TakeNumber(ctx, tx, counter)
 	if err != nil {
 		return Item{}, err
 	}
@@ -101,6 +107,9 @@ func SetFields(ctx context.Context, tx pgx.Tx, id string, values engine.Fields, 
 	if err != nil {
 		return Item{}, err
 	}
+	if err := MayChange(ctx, tx, it, by); err != nil {
+		return Item{}, err
+	}
 	s, err := open(ctx, tx, it.PlaybookVersionID)
 	if err != nil {
 		return Item{}, err
@@ -138,6 +147,11 @@ func SetFields(ctx context.Context, tx pgx.Tx, id string, values engine.Fields, 
 		if err := s.handOver(&it); err != nil {
 			return Item{}, err
 		}
+	} else if a := s.p.Approvals; a != nil && it.State == a.In {
+		// The change may leave no approval needed (each one has a condition): then it moves on.
+		if err := s.settle(&it); err != nil {
+			return Item{}, err
+		}
 	}
 	return it, nil
 }
@@ -147,6 +161,9 @@ func SetFields(ctx context.Context, tx pgx.Tx, id string, values engine.Fields, 
 func Act(ctx context.Context, tx pgx.Tx, id, action, reason string, by ledger.Actor) (Item, error) {
 	it, err := getForUpdate(ctx, tx, id)
 	if err != nil {
+		return Item{}, err
+	}
+	if err := MayChange(ctx, tx, it, by); err != nil {
 		return Item{}, err
 	}
 	s, err := open(ctx, tx, it.PlaybookVersionID)
@@ -175,9 +192,22 @@ func Act(ctx context.Context, tx pgx.Tx, id, action, reason string, by ledger.Ac
 // decide, and the engine's rules apply: the right role, one decision per slot and per person for
 // each version, and a reason for a rejection. tx must come from db.WithTenant.
 func Decide(ctx context.Context, tx pgx.Tx, id, personID, slot, decision, reason string) (Item, error) {
+	return DecideSeen(ctx, tx, id, 0, personID, slot, decision, reason)
+}
+
+// ErrChanged means the item changed after the person looked at it, so their decision would apply
+// to details they haven't seen.
+var ErrChanged = errors.New("this item changed after you opened it; please look at it again before deciding")
+
+// DecideSeen is Decide for a person who looked at version seen of the item (0: not known). If the
+// item has changed since, nothing is recorded and ErrChanged is returned.
+func DecideSeen(ctx context.Context, tx pgx.Tx, id string, seen int, personID, slot, decision, reason string) (Item, error) {
 	it, err := getForUpdate(ctx, tx, id)
 	if err != nil {
 		return Item{}, err
+	}
+	if seen != 0 && seen != it.Version {
+		return Item{}, ErrChanged
 	}
 	s, err := open(ctx, tx, it.PlaybookVersionID)
 	if err != nil {
@@ -351,8 +381,12 @@ func (s session) enter(it *Item) error {
 				return err
 			}
 		case "start":
+			state := it.State
 			if err := s.startChild(it, a); err != nil {
 				return err
+			}
+			if it.State != state {
+				return nil // the linked work moved this item on at once; its new step has already run
 			}
 		case "tell_parent":
 			if err := s.tellParent(it, a); err != nil {
@@ -529,6 +563,10 @@ func (s session) startChild(it *Item, a playbook.Action) error {
 	if err != nil {
 		return fmt.Errorf("starting %s: %w", a.Process, err)
 	}
+	// The child may have reported back at once and changed this item: carry on from what is stored.
+	if *it, err = getForUpdate(s.ctx, s.tx, it.ID); err != nil {
+		return err
+	}
 	name := strings.ReplaceAll(a.Process, "-", " ")
 	if err := s.record("item.posted", *it, map[string]any{"text": fmt.Sprintf("Started %s %s.", name, child.Number)},
 		ledger.SystemActor); err != nil {
@@ -557,6 +595,21 @@ func (s session) tellParent(it *Item, a playbook.Action) error {
 	}
 	if err != nil {
 		return err
+	}
+	// A parent that was closed meanwhile (e.g. cancelled) can't take the report; this item still
+	// finishes, and says so.
+	parent, err := Get(ctx, s.tx, parentID)
+	if err != nil {
+		return err
+	}
+	ps, err := open(ctx, s.tx, parent.PlaybookVersionID)
+	if err != nil {
+		return err
+	}
+	if engine.IsClosed(ps.p, parent.State) {
+		return s.record("item.posted", *it, map[string]any{"text": fmt.Sprintf(
+			"%s is %s, so nothing was passed back to it.", parent.Number, strings.ReplaceAll(parent.State, "_", " "))},
+			ledger.SystemActor)
 	}
 	values := engine.Fields{}
 	for parent, from := range a.Copy {

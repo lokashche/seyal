@@ -54,6 +54,10 @@ func TestUnderstand(t *testing.T) {
 		{field("money"), "5000 quarterly", 500000.0, ""},
 		{field("money"), "1500pm", 150000.0, ""},
 		{field("money"), "2 lakh per annum", 20000000.0, ""},
+		{field("money"), "5L", 50000000.0, ""},
+		{field("money"), "Rupees 5000 only", 500000.0, ""},
+		{field("money"), "2 cr.", 2000000000.0, ""},
+		{field("money"), "-5000", nil, "can't be negative"},
 		{field("money"), "lots", nil, "I need a number"},
 		{field("money"), "12 bananas", nil, `"bananas"`},
 		{field("number"), "7.5", 7.5, ""},
@@ -70,6 +74,8 @@ func TestUnderstand(t *testing.T) {
 		{field("date"), "friday", "2026-11-06", ""},
 		{field("date"), "next saturday", "2026-11-07", ""},
 		{field("date"), "31/02/2026", nil, "I need a date"},
+		{field("date"), "29/2", nil, "doesn't exist this year"}, // 2026 and 2027 have no 29 February
+		{field("date"), "15 Nov 26", "2026-11-15", ""},
 		{field("date"), "soon", nil, "I need a date"},
 
 		{choice, "Pass", "pass", ""},
@@ -125,6 +131,10 @@ func TestCommand(t *testing.T) {
 		{"send to ops", "send_to_ops", "", true},
 		{"Send_to_ops", "send_to_ops", "", true},
 		{"send to ops: fee to be confirmed", "send_to_ops", "fee to be confirmed", true},
+		{"submit.", "submit", "", true},
+		{"cancel - duplicate of R-2026-0003", "cancel", "duplicate of R-2026-0003", true},
+		{"cancel the Friday meeting, they moved it", "", "", false}, // a note, not a command
+		{"submit the GST papers tomorrow", "", "", false},
 	}
 	for _, tt := range tests {
 		word, reason, ok := Command(tt.text, words)

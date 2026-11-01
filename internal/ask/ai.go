@@ -300,7 +300,8 @@ func (c *conversation) aiCommand(pr *proposal, text string) error {
 	}
 	for _, t := range c.p.Transitions {
 		if t.Action == pr.Command && t.Needs == "" && slices.Contains(t.From, c.reply.Item.State) {
-			return c.command(pr.Command)
+			// The model read it; the ledger says so ("Seyal for <person>").
+			return c.commandBy(pr.Command, ledger.AgentActor(c.person))
 		}
 	}
 	return c.say(`To do that, please type the command itself, for example "submit", or "cancel because …".`)

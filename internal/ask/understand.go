@@ -92,6 +92,9 @@ func Understand(f playbook.Field, answer string, today time.Time, choices Choice
 		if err != nil {
 			return nil, err
 		}
+		if x < 0 {
+			return nil, errors.New("an amount can't be negative")
+		}
 		return math.Round(x * 100), nil // stored in minor units (cents, paise)
 	case "date":
 		return parseDate(answer, today)
@@ -131,7 +134,7 @@ func Understand(f playbook.Field, answer string, today time.Time, choices Choice
 // multipliers are number words people use for amounts, including the Indian lakh and crore.
 var multipliers = map[string]float64{
 	"k": 1e3, "thousand": 1e3,
-	"lakh": 1e5, "lakhs": 1e5, "lac": 1e5, "lacs": 1e5,
+	"l": 1e5, "lakh": 1e5, "lakhs": 1e5, "lac": 1e5, "lacs": 1e5,
 	"m": 1e6, "mn": 1e6, "million": 1e6,
 	"cr": 1e7, "crore": 1e7, "crores": 1e7,
 }
@@ -147,9 +150,10 @@ var (
 // period such as "2000 per month" or "₹24,000 p.a.".
 func parseNumber(s string) (float64, error) {
 	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(s, "."), "only"))
 	s = period.ReplaceAllString(s, "")
 	s = strings.TrimSuffix(s, "/-")
-	for _, symbol := range []string{"₹", "rs.", "rs", "inr", "$", "€", "£"} {
+	for _, symbol := range []string{"₹", "rupees", "rs.", "rs", "inr", "$", "€", "£"} {
 		s = strings.TrimSpace(strings.TrimPrefix(s, symbol))
 	}
 	s = strings.ReplaceAll(s, ",", "")
@@ -173,7 +177,7 @@ func parseNumber(s string) (float64, error) {
 
 var (
 	fullDates = []string{"2006-01-02", "2/1/2006", "2-1-2006", "2.1.2006", "2/1/06", "2-1-06",
-		"2 Jan 2006", "2 January 2006", "Jan 2 2006", "January 2 2006"}
+		"2 Jan 2006", "2 January 2006", "Jan 2 2006", "January 2 2006", "2 Jan 06", "2 January 06"}
 	shortDates = []string{"2/1", "2-1", "2.1", "2 Jan", "2 January", "Jan 2", "January 2"}
 	weekdays   = []string{"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"}
 )
@@ -207,7 +211,11 @@ func parseDate(s string, today time.Time) (string, error) {
 	}
 	for _, layout := range shortDates {
 		if t, err := time.Parse(layout, s); err == nil {
+			day0, month0 := t.Day(), t.Month()
 			t = time.Date(today.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+			if t.Day() != day0 || t.Month() != month0 { // 29/2 in a year without it
+				return "", errors.New("that date doesn't exist this year; please give the full date")
+			}
 			if t.Before(today) {
 				t = t.AddDate(1, 0, 0)
 			}
@@ -298,27 +306,31 @@ func splitList(s string) []string {
 	return parts
 }
 
-// Command recognises a short command at the start of a message, such as "submit" or "cancel
-// because it is no longer needed", among the given words. It returns the command and the rest of the
-// message as the reason. A word with underscores may be typed with spaces ("send to ops").
+// Command recognises a short command, such as "submit" or "cancel because it is no longer needed",
+// among the given words. It returns the command and the reason. A word with underscores may be typed
+// with spaces ("send to ops"). Words after the command count only when they are clearly a reason
+// ("because …", "as …", "since …", ": …", "- …"); otherwise the message is a note, so "cancel the
+// Friday meeting, they moved it" doesn't cancel the item.
 func Command(text string, words []string) (word, reason string, ok bool) {
-	lower := strings.ToLower(strings.TrimSpace(text))
+	text = strings.TrimSpace(text)
+	lower := strings.ToLower(text)
 	for _, w := range words {
 		typed := w
 		if spaced := strings.ReplaceAll(w, "_", " "); strings.HasPrefix(lower, spaced) {
 			typed = spaced
 		}
-		if lower == typed {
+		if strings.Trim(lower, " .!") == typed {
 			return w, "", true
 		}
-		if rest, found := strings.CutPrefix(lower, typed); found && (rest[0] == ' ' || rest[0] == ':') {
-			reason = strings.TrimLeft(strings.TrimSpace(text)[len(typed):], " :-")
-			for _, filler := range []string{"because ", "as ", "since "} {
-				if strings.HasPrefix(strings.ToLower(reason), filler) {
-					reason = reason[len(filler):]
-				}
+		rest, found := strings.CutPrefix(lower, typed)
+		if !found {
+			continue
+		}
+		restText := text[len(typed):]
+		for _, marker := range []string{" because ", " as ", " since ", ":", " -", " –"} {
+			if strings.HasPrefix(rest, marker) {
+				return w, strings.TrimSpace(restText[len(marker):]), true
 			}
-			return w, strings.TrimSpace(reason), true
 		}
 	}
 	return "", "", false

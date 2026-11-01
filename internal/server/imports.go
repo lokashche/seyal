@@ -52,12 +52,17 @@ type sheetRow struct {
 	cells []string
 }
 
-// cell returns column i of the row, trimmed, or "" if the row is shorter.
+// cell returns column i of the row, trimmed, or "" if the row is shorter. The ' that a download puts
+// before a cell starting like a formula is removed.
 func (r sheetRow) cell(i int) string {
 	if i < 0 || i >= len(r.cells) {
 		return ""
 	}
-	return strings.TrimSpace(r.cells[i])
+	c := strings.TrimSpace(r.cells[i])
+	if len(c) > 1 && c[0] == '\'' && strings.ContainsRune(formulaStart, rune(c[1])) {
+		c = c[1:]
+	}
+	return c
 }
 
 // readSheet reads CSV text. It drops the byte-order mark Excel adds, accepts ";" between columns
@@ -462,8 +467,20 @@ func (v *view) cell(f playbook.Field, value any) string {
 	return v.show(f, value)
 }
 
+// formulaStart are the first characters that make a spreadsheet treat a cell as a formula.
+const formulaStart = "=+-@\t\r"
+
 func writeCSV(out *bytes.Buffer, table [][]string) error {
 	out.WriteString("\ufeff") // so Excel reads names in any script correctly
+	// A name like "=HYPERLINK(\u2026)" typed into a list must stay text when the file is opened in a
+	// spreadsheet, not run as a formula: a leading ' makes it text, and an import removes it again.
+	for _, line := range table {
+		for i, c := range line {
+			if c != "" && strings.ContainsRune(formulaStart, rune(c[0])) {
+				line[i] = "'" + c
+			}
+		}
+	}
 	cw := csv.NewWriter(out)
 	cw.UseCRLF = true
 	if err := cw.WriteAll(table); err != nil {
