@@ -26,6 +26,7 @@ import (
 type processList struct {
 	InUse     []processRow
 	Templates []processRow // shipped templates the business doesn't have yet
+	DraftOn   bool         // AI drafting is switched on
 }
 
 type processRow struct {
@@ -46,6 +47,7 @@ type processView struct {
 	CurrentID         string
 	Source            string // the definition, for advanced editing
 	Template          string // a newer template version, if the shipped one differs
+	DraftOn           bool   // AI drafting is switched on
 }
 
 type processField struct {
@@ -83,6 +85,7 @@ func (s *Server) showProcesses(w http.ResponseWriter, r *http.Request, c *call, 
 			return err
 		}
 		sv.Process = s.processView(inUse[i], lib)
+		sv.Process.DraftOn = s.draftOn()
 		if len(draft) > 0 {
 			sv.Process.Source = draft[0]
 		}
@@ -102,7 +105,7 @@ func (s *Server) showProcesses(w http.ResponseWriter, r *http.Request, c *call, 
 }
 
 func (s *Server) processList(inUse []playbook.InUse) *processList {
-	pl := &processList{}
+	pl := &processList{DraftOn: s.draftOn()}
 	has := map[string]bool{}
 	for _, u := range inUse {
 		has[u.PlaybookID] = true
@@ -299,8 +302,12 @@ func (d describer) literal(v any) string {
 	return fmt.Sprint(v)
 }
 
-// addProcess starts using a shipped template.
+// addProcess starts using a shipped template, or drafts a new process from plain words.
 func (s *Server) addProcess(w http.ResponseWriter, r *http.Request, c *call) {
+	if r.PostFormValue("action") != "" {
+		s.draftProcess(w, r, c, "")
+		return
+	}
 	t := s.lib.Playbooks[r.PostFormValue("template")]
 	if t == nil {
 		http.NotFound(w, r)
@@ -327,6 +334,10 @@ func (s *Server) addProcess(w http.ResponseWriter, r *http.Request, c *call) {
 // changeProcess saves a new version, switches versions, or switches the process on or off.
 func (s *Server) changeProcess(w http.ResponseWriter, r *http.Request, c *call) {
 	id := r.PathValue("id")
+	if a := r.PostFormValue("action"); a == "draft" || a == "recheck" || r.PostFormValue("fromdraft") != "" {
+		s.draftProcess(w, r, c, id)
+		return
+	}
 	by := ledger.PersonActor(c.session.PersonID)
 	var notice string
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {

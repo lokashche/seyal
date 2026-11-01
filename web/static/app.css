@@ -161,6 +161,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .rows.plain li { font-size: 14px; }
 .sform.wide { max-width: none; }
 .code { font: 13px/1.5 var(--f-mono); white-space: pre; tab-size: 2; }
+.panel div.banner { margin: 12px 0; border-radius: 8px; white-space: normal; }
+.panel div.banner ul { margin: 6px 0 6px 18px; padding: 0; }
+.changes li { font-family: var(--f-mono); font-size: 13px; }
 .advanced > summary { cursor: pointer; font: 500 13px var(--f-mono); color: var(--accent-ink); }
 .checks { display: flex; flex-wrap: wrap; gap: 4px 14px; font-weight: 400; }
 .checks label { flex-direction: row; align-items: center; gap: 6px; font-weight: 400; }

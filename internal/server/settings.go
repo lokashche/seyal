@@ -39,6 +39,7 @@ type settingsView struct {
 	Process   *processView
 	Lists     *listsView
 	List      *listView
+	Draft     *draftView
 	AI        *aiView
 }
 

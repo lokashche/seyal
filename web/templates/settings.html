@@ -10,6 +10,7 @@
     {{if eq .Data.Tab "people"}}{{template "people" .}}
     {{else if eq .Data.Tab "roles"}}{{template "roles" .}}
     {{else if eq .Data.Tab "ai"}}{{template "ai" .}}
+    {{else if .Data.Draft}}{{template "draft" .}}
     {{else if .Data.Process}}{{template "process" .}}
     {{else if .Data.Processes}}{{template "processes" .}}
     {{else if .Data.List}}{{template "list" .}}
@@ -91,9 +92,10 @@
     </div></div>
   </li>
   {{else}}
-  <li class="none">No processes yet. Add one from the templates below.</li>
+  <li class="none">No processes yet. Describe one below, or add one from the templates.</li>
   {{end}}
 </ul>
+{{template "describe" (dict "Slug" $.Slug "Action" (print "/t/" $.Slug "/settings/processes") "On" .DraftOn "New" true)}}
 {{with .Templates}}
 <h3>Templates you can add</h3>
 <ul class="rows">
@@ -118,19 +120,8 @@
   {{else}}<button class="btn sm" name="action" value="enable">Switch on</button>{{end}}
   {{with .Template}}<button class="btn ghost sm" name="action" value="template">Use template version {{.}}</button>{{end}}
 </form>
-
-<h3>Details it collects</h3>
-<ul class="rows plain">
-  {{range .Fields}}<li><b>{{.Label}}</b> <span class="r">{{.Type}}{{if .Required}} · required{{end}}{{if .Fixed}} · filled automatically{{end}}{{with .Ask}} · Seyal asks: “{{.}}”{{end}}</span></li>{{end}}
-</ul>
-
-<h3>Steps</h3>
-<p class="why">{{.States}}</p>
-<ul class="rows plain">{{range .Actions}}<li>{{.}}</li>{{end}}</ul>
-
-{{with .Approvals}}<h3>Approvals</h3><ul class="rows plain">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
-{{with .OnState}}<h3>What Seyal does by itself</h3><ul class="rows plain">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
-{{with .Deadlines}}<h3>Deadlines</h3><ul class="rows plain">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
+{{template "describe" (dict "Action" (print "/t/" $.Slug "/settings/processes/" .ID) "On" .DraftOn "New" false)}}
+{{template "processdetails" .}}
 
 <h3>Versions</h3>
 <ul class="rows plain">
@@ -146,12 +137,88 @@
 
 <details class="advanced">
   <summary>Edit the definition (advanced)</summary>
-  <p class="why">Change the text below, give it a new version number, and save. It's checked before it goes live. Soon you'll be able to describe changes in plain words and let Seyal draft this for you.</p>
+  <p class="why">Change the text below, give it a new version number, and save. It's checked before it goes live.</p>
   <form method="post" action="/t/{{$.Slug}}/settings/processes/{{.ID}}" class="sform wide">
     <textarea name="source" rows="24" spellcheck="false" class="code">{{.Source}}</textarea>
     <button class="btn sm" name="action" value="save">Check and save as a new version</button>
   </form>
 </details>
+{{end}}{{end}}
+
+{{define "processdetails"}}
+<h3>Details it collects</h3>
+<ul class="rows plain">
+  {{range .Fields}}<li><b>{{.Label}}</b> <span class="r">{{.Type}}{{if .Required}} · required{{end}}{{if .Fixed}} · filled automatically{{end}}{{with .Ask}} · Seyal asks: “{{.}}”{{end}}</span></li>{{end}}
+</ul>
+
+<h3>Steps</h3>
+<p class="why">{{.States}}</p>
+<ul class="rows plain">{{range .Actions}}<li>{{.}}</li>{{end}}</ul>
+
+{{with .Approvals}}<h3>Approvals</h3><ul class="rows plain">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
+{{with .OnState}}<h3>What Seyal does by itself</h3><ul class="rows plain">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
+{{with .Deadlines}}<h3>Deadlines</h3><ul class="rows plain">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
+{{end}}
+
+{{define "describe"}}
+<details class="add"{{if .On}} open{{end}}>
+  <summary class="btn sm">{{if .New}}+ Describe a new process{{else}}Describe a change{{end}}</summary>
+  {{if .On}}
+  <form method="post" action="{{.Action}}" class="sform wide">
+    <textarea name="words" rows="4" required placeholder="{{if .New}}In your own words: what the work is, what details it needs, the steps, and who approves it.{{else}}In your own words, e.g. “also ask for the reference number, and the owner must approve when the amount is over 50,000”.{{end}}"></textarea>
+    <button class="btn sm" name="action" value="draft">Draft it</button>
+    <span class="why">Seyal drafts it and shows you what changes. Nothing is saved until you press Save.</span>
+  </form>
+  {{else}}
+  <p class="why">AI drafting is switched off on this server (see AI usage). You can still edit the definition below{{if .New}}, or start from a template{{end}}.</p>
+  {{end}}
+</details>
+{{end}}
+
+{{define "draft"}}{{with .Data.Draft}}
+<p><a href="/t/{{$.Slug}}/settings/processes{{with .ForID}}/{{.}}{{end}}">← Back without saving</a></p>
+<h2>{{if .ForID}}Draft change to {{.ForName}}{{else}}Draft of a new process{{end}}</h2>
+{{with .Words}}<p class="why">You asked: “{{.}}”</p>{{end}}
+{{with .Summary}}<p>{{.}}</p>{{end}}
+
+{{with .Problems}}
+<div class="banner error" role="alert"><b>This draft can't be saved yet:</b>
+  <ul>{{range .}}<li>{{.}}</li>{{end}}</ul>
+  Fix the text below and press “Check again”, or describe the change again.</div>
+{{end}}
+
+{{with .Changes}}
+<h3>What changes</h3>
+<ul class="rows plain changes">{{range .}}<li>{{.}}</li>{{end}}</ul>
+{{end}}
+
+{{range .Lists}}
+<h3>{{if .New}}New list: {{.Label}}s{{else}}Changed list: {{.Label}}s{{end}}</h3>
+<ul class="rows plain">
+  <li><b>Name</b> <span class="r">text · always</span></li>
+  {{range .Fields}}<li><b>{{.Label}}</b> <span class="r">{{.Type}}</span></li>{{end}}
+</ul>
+{{end}}
+
+{{with .Preview}}
+<details class="advanced"{{if not $.Data.Draft.ForID}} open{{end}}>
+  <summary>The whole process after this change</summary>
+  <p class="why">{{.Description}} · version {{.Version}} · numbered {{.Numbering}}</p>
+  {{template "processdetails" .}}
+</details>
+{{end}}
+
+<form method="post" action="/t/{{$.Slug}}/settings/processes{{with .ForID}}/{{.}}{{end}}" class="sform wide">
+  <input type="hidden" name="words" value="{{.Words}}">
+  <input type="hidden" name="fromdraft" value="1">
+  <details class="advanced">
+    <summary>The definition (advanced)</summary>
+    <textarea name="source" rows="24" spellcheck="false" class="code">{{.Source}}</textarea>
+    {{range .Lists}}<p class="why">List {{.Kind}}:</p><textarea name="list" rows="8" spellcheck="false" class="code">{{.Source}}</textarea>{{end}}
+  </details>
+  {{if .Preview}}<button class="btn sm" name="action" value="save">Save and use for new work</button>{{end}}
+  <button class="btn ghost sm" name="action" value="recheck">Check again</button>
+</form>
 {{end}}{{end}}
 
 {{define "ai"}}{{with .Data.AI}}
