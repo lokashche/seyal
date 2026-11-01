@@ -223,6 +223,12 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .table th { font-size: 12px; font-weight: 500; color: var(--muted); background: var(--bg); }
 .table tfoot td { font-weight: 600; border-bottom: 0; }
 .rows.plain li { font-size: 13.5px; }
+.sheet-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+.sheet-tools .add[open] { flex-basis: 100%; order: 2; }
+.table table.import { min-width: 0; }
+.table .import th, .table .import td { text-align: left; white-space: normal; vertical-align: top; }
+.table .import td:first-child { color: var(--muted); width: 1%; }
+.bad { color: var(--warn); }
 .sform.wide { max-width: none; }
 code, .code { font-family: var(--f-mono); font-size: 12.5px; }
 .code { line-height: 1.5; white-space: pre; tab-size: 2; }

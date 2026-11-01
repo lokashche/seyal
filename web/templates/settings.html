@@ -12,7 +12,8 @@
     {{template "me" (dict "S" $ "Settings" false)}}
   </nav>
   <section class="panel">
-    {{if eq .Data.Tab "people"}}{{template "people" .}}
+    {{if .Data.Import}}{{template "import" .}}
+    {{else if eq .Data.Tab "people"}}{{template "people" .}}
     {{else if eq .Data.Tab "roles"}}{{template "roles" .}}
     {{else if eq .Data.Tab "ai"}}{{template "ai" .}}
     {{else if .Data.Draft}}{{template "draft" .}}
@@ -39,6 +40,8 @@
     <button class="btn sm">Add and make a password</button>
   </form>
 </details>
+{{template "sheet" (dict "Action" (printf "/t/%s/settings/people/import" $.Slug) "Export" (printf "/t/%s/settings/people/export" $.Slug)
+  "Help" "First row: Name, Email, Roles (role names separated by ;). People are matched by email. New people get a password, shown once after the import. Roles are only added, never taken away.")}}
 <ul class="rows">
   {{range .Rows}}
   <li class="{{if not .Active}}off{{end}}">
@@ -346,6 +349,8 @@
     <button class="btn sm">Add</button>
   </form>
 </details>
+{{template "sheet" (dict "Action" (printf "/t/%s/settings/master/%s/import" $.Slug .Kind) "Export" (printf "/t/%s/settings/master/%s/export" $.Slug .Kind)
+  "Help" (printf "First row: Name, then any of: %s. A row whose name is already in the list updates it; an empty cell keeps what is saved. Amounts like 12000 or 12k, dates like 15/11/2026, people and entries by name, several items separated by ;." .Columns))}}
 <ul class="rows">
   {{range .Items}}
   <li class="{{if not .Active}}off{{end}}">
@@ -373,6 +378,50 @@
   <li class="none">None yet.</li>
   {{end}}
 </ul>
+{{end}}{{end}}
+
+{{/* "sheet" takes (dict "Action" <import URL> "Export" <download URL> "Help" <what the file holds>). */}}
+{{define "sheet"}}
+<div class="sheet-tools">
+  <details class="add">
+    <summary class="btn ghost sm">Import from a spreadsheet</summary>
+    <form method="post" action="{{.Action}}" enctype="multipart/form-data" class="sform">
+      <p class="why">{{.Help}}</p>
+      <p class="why">In Excel: File → Save As → <b>CSV UTF-8</b>. In Google Sheets: File → Download → CSV. Tip: download the current list first, change it, and import it back.</p>
+      <label>CSV file <input type="file" name="sheet" accept=".csv,text/csv" required></label>
+      <button class="btn sm">Check the file</button>
+      <p class="why">Nothing is saved yet: you'll see every row first.</p>
+    </form>
+  </details>
+  <a class="btn ghost sm" href="{{.Export}}" hx-boost="false" download>Download as a spreadsheet</a>
+</div>
+{{end}}
+
+{{define "import"}}{{with .Data.Import}}
+<p><a href="{{.Back}}">← Back</a></p>
+<h2>{{.Title}}: check before saving</h2>
+<p class="why">Columns used: {{range $i, $c := .Columns}}{{if $i}}, {{end}}{{$c}}{{end}}.{{with .Ignored}} <b>Ignored</b> (no such detail): {{range $i, $c := .}}{{if $i}}, {{end}}“{{$c}}”{{end}}.{{end}}</p>
+<p>{{.New}} new · {{.Changed}} changed · {{.Same}} unchanged{{if .Problems}} · <b class="bad">{{.Problems}} with problems</b>{{end}}</p>
+{{if .Problems}}
+<div class="banner error">Nothing is saved while a row has a problem. Fix the rows marked below in your spreadsheet, then check the file again.</div>
+{{else if .ToSave}}
+<form method="post" action="{{.Action}}" class="sform inline">
+  <input type="hidden" name="action" value="apply">
+  <textarea name="csv" hidden>{{.CSV}}</textarea>
+  <button class="btn sm">Import {{.ToSave}} row{{if gt .ToSave 1}}s{{end}}</button>
+  <a class="btn ghost sm" href="{{.Back}}">Cancel</a>
+</form>
+{{else}}
+<p class="why">Everything in the file is already saved. There is nothing to import.</p>
+{{end}}
+<div class="table">
+  <table class="import">
+    <thead><tr><th>Row</th><th>Name</th><th>What happens</th></tr></thead>
+    <tbody>
+      {{range .Rows}}<tr><td>{{.Line}}</td><td>{{or .Name "—"}}</td><td><span class="pill {{.Pill}}">{{.Status}}</span> {{.Detail}}</td></tr>{{end}}
+    </tbody>
+  </table>
+</div>
 {{end}}{{end}}
 
 {{define "input"}}

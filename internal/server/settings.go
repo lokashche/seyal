@@ -41,6 +41,7 @@ type settingsView struct {
 	List      *listView
 	Draft     *draftView
 	AI        *aiView
+	Import    *importView
 }
 
 type tab struct {
@@ -64,6 +65,7 @@ type roleRow struct{ Key, Name, Holders string }
 
 type masterView struct {
 	Kind, Label string
+	Columns     string // the details, as spreadsheet column headings
 	New         []formField
 	Items       []masterRow
 }
@@ -360,6 +362,11 @@ func (s *Server) addRole(w http.ResponseWriter, r *http.Request, c *call) {
 
 func (v *view) masterView(mk *playbook.MasterKind) (*masterView, error) {
 	mv := &masterView{Kind: mk.Kind, Label: mk.Label}
+	var labels []string
+	for _, f := range mk.Fields {
+		labels = append(labels, ask.Label(f))
+	}
+	mv.Columns = strings.Join(labels, ", ")
 	var err error
 	if mv.New, err = v.form(mk, nil); err != nil {
 		return nil, err
