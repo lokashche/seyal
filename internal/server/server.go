@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +29,7 @@ import (
 	"seyal/internal/auth"
 	"seyal/internal/db"
 	"seyal/internal/media"
+	"seyal/internal/playbook"
 	"seyal/web"
 )
 
@@ -37,7 +39,8 @@ const cookieName = "seyal_session"
 type Server struct {
 	app     *pgxpool.Pool
 	store   media.Store
-	secure  bool // send cookies only over HTTPS
+	lib     *playbook.Library // master-kind definitions, for the Settings forms
+	secure  bool              // send cookies only over HTTPS
 	pages   map[string]*template.Template
 	static  http.Handler
 	asset   string // fingerprint of the static files, added to their addresses
@@ -45,11 +48,12 @@ type Server struct {
 	limiter *limiter
 }
 
-// New prepares the web app. secureCookies must be true when the app is reached over HTTPS.
-func New(app *pgxpool.Pool, store media.Store, secureCookies bool) (*Server, error) {
-	s := &Server{app: app, store: store, secure: secureCookies, pages: map[string]*template.Template{},
+// New prepares the web app. lib holds the master-kind definitions used by the Settings forms.
+// secureCookies must be true when the app is reached over HTTPS.
+func New(app *pgxpool.Pool, store media.Store, lib *playbook.Library, secureCookies bool) (*Server, error) {
+	s := &Server{app: app, store: store, lib: lib, secure: secureCookies, pages: map[string]*template.Template{},
 		limiter: newLimiter(10, 15*time.Minute)}
-	for _, name := range []string{"home", "login", "app", "offline"} {
+	for _, name := range []string{"home", "login", "app", "offline", "settings"} {
 		t, err := template.ParseFS(web.Files, "templates/layout.html", "templates/"+name+".html")
 		if err != nil {
 			return nil, err
@@ -112,6 +116,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /t/{slug}/items/{id}/act", s.authed(s.act))
 	mux.HandleFunc("POST /t/{slug}/items/{id}/decide", s.authed(s.decide))
 	mux.HandleFunc("GET /t/{slug}/media/{id}", s.authed(s.media))
+
+	// Settings: admins only.
+	mux.HandleFunc("GET /t/{slug}/settings/{$}", s.admin(s.settingsHome))
+	mux.HandleFunc("GET /t/{slug}/settings/people", s.admin(s.peoplePage))
+	mux.HandleFunc("POST /t/{slug}/settings/people", s.admin(s.addPerson))
+	mux.HandleFunc("POST /t/{slug}/settings/people/{id}", s.admin(s.updatePerson))
+	mux.HandleFunc("POST /t/{slug}/settings/people/{id}/password", s.admin(s.resetPassword))
+	mux.HandleFunc("GET /t/{slug}/settings/roles", s.admin(s.rolesPage))
+	mux.HandleFunc("POST /t/{slug}/settings/roles", s.admin(s.addRole))
+	mux.HandleFunc("GET /t/{slug}/settings/master/{kind}", s.admin(s.masterPage))
+	mux.HandleFunc("POST /t/{slug}/settings/master/{kind}", s.admin(s.saveMaster))
 	return securityHeaders(http.NewCrossOriginProtection().Handler(mux))
 }
 
@@ -120,9 +135,14 @@ type page struct {
 	Asset          string // static files fingerprint, filled in by render
 	Slug, Business string
 	Session        *auth.Session
+	Admin          bool   // may open Settings
+	Notice         string // a one-time message, e.g. a new password
 	Error          string
 	Data           any
 }
+
+// adminRole is the role that may open Settings (people, roles, master data).
+const adminRole = "admin"
 
 // call is one request by a logged-in person.
 type call struct {
@@ -132,8 +152,10 @@ type call struct {
 }
 
 func (c *call) page(data any) page {
-	return page{Slug: c.tenant.Slug, Business: c.tenant.Name, Session: &c.session, Data: data}
+	return page{Slug: c.tenant.Slug, Business: c.tenant.Name, Session: &c.session, Admin: c.admin(), Data: data}
 }
+
+func (c *call) admin() bool { return slices.Contains(c.session.Roles, adminRole) }
 
 type tenant struct {
 	ID, Slug, Name, Currency string

@@ -16,11 +16,12 @@ roles:
   - { key: sales, name: Sales }
   - { key: ops, name: Operations }
   - { key: owner, name: Owner }
+  - { key: admin, name: Admin (Settings) }
 
 people:
   - { key: arjun, name: Arjun Mehta, email: arjun@kaveri-demo.example, roles: [sales] }
   - { key: priya, name: Priya Raman, email: priya@kaveri-demo.example, roles: [ops] }
-  - { key: lakshmi, name: Lakshmi Narayanan, email: lakshmi@kaveri-demo.example, roles: [owner] }
+  - { key: lakshmi, name: Lakshmi Narayanan, email: lakshmi@kaveri-demo.example, roles: [owner, admin] }
   - { key: karthik, name: Karthik Subramanian, email: karthik@kaveri-demo.example, roles: [] }
   - { key: fatima, name: Fatima Sheikh, email: fatima@kaveri-demo.example, roles: [] }
   - { key: rahul, name: Rahul Iyer, email: rahul@kaveri-demo.example, roles: [sales] }

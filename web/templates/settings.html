@@ -1,0 +1,129 @@
+{{define "title"}}Settings · Seyal{{end}}
+{{define "content"}}
+{{template "bar" .}}
+<div class="settings">
+  <nav class="tabs" aria-label="Settings">
+    <a class="back-link" href="/t/{{.Slug}}/">← My Work</a>
+    {{range .Data.Tabs}}<a href="{{.URL}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}
+  </nav>
+  <section class="panel">
+    {{if eq .Data.Tab "people"}}{{template "people" .}}
+    {{else if eq .Data.Tab "roles"}}{{template "roles" .}}
+    {{else}}{{template "masterdata" .}}{{end}}
+  </section>
+</div>
+{{end}}
+
+{{define "people"}}{{with .Data.People}}
+<h2>People</h2>
+<p class="why">Everyone who can log in. A disabled person can't log in and is logged out at once. Nobody is ever deleted, so the history stays.</p>
+<details class="add">
+  <summary class="btn sm">+ Add a person</summary>
+  <form method="post" action="/t/{{$.Slug}}/settings/people" class="sform">
+    <label>Name <input name="name" required></label>
+    <label>Login email <input type="email" name="email" required></label>
+    <fieldset><legend>Roles</legend>
+      <div class="checks">{{range .Roles}}<label><input type="checkbox" name="role" value="{{.Value}}"> {{.Label}}</label>{{end}}</div>
+    </fieldset>
+    <button class="btn sm">Add and make a password</button>
+  </form>
+</details>
+<ul class="rows">
+  {{range .Rows}}
+  <li class="{{if not .Active}}off{{end}}">
+    <div class="row-head">
+      <div><b>{{.Name}}</b>{{if .Me}} <span class="pill p-draft">you</span>{{end}}{{if not .Active}} <span class="pill p-closed">disabled</span>{{end}}
+        <span class="r">{{.Email}}{{with .RoleNames}} · {{.}}{{end}}</span></div>
+    </div>
+    <details>
+      <summary>Edit</summary>
+      <form method="post" action="/t/{{$.Slug}}/settings/people/{{.ID}}" class="sform">
+        <label>Name <input name="name" value="{{.Name}}" required></label>
+        <label>Login email <input type="email" name="email" value="{{.Email}}" required></label>
+        <fieldset><legend>Roles</legend>
+          <div class="checks">{{range .Roles}}<label><input type="checkbox" name="role" value="{{.Value}}"{{if .Selected}} checked{{end}}> {{.Label}}</label>{{end}}</div>
+        </fieldset>
+        <label>Status
+          <select name="status"><option value="active"{{if .Active}} selected{{end}}>Active</option><option value="disabled"{{if not .Active}} selected{{end}}>Disabled</option></select>
+        </label>
+        <button class="btn sm">Save</button>
+      </form>
+      <form method="post" action="/t/{{$.Slug}}/settings/people/{{.ID}}/password" class="sform inline">
+        <button class="btn ghost sm">Make a new password</button>
+        <span class="why">The old one stops working.</span>
+      </form>
+    </details>
+  </li>
+  {{end}}
+</ul>
+{{end}}{{end}}
+
+{{define "roles"}}
+<h2>Roles</h2>
+<p class="why">Roles decide who may approve what (the playbooks name roles) and who may open Settings (the admin role).</p>
+<ul class="rows">
+  {{range .Data.Roles}}
+  <li><div class="row-head"><div><b>{{.Name}}</b> <span class="r">{{.Key}} · {{or .Holders "nobody yet"}}</span></div></div></li>
+  {{end}}
+</ul>
+<form method="post" action="/t/{{.Slug}}/settings/roles" class="sform inline">
+  <label>New role <input name="name" required placeholder="e.g. Reviewer"></label>
+  <button class="btn sm">Add role</button>
+</form>
+{{end}}
+
+{{define "masterdata"}}{{with .Data.Master}}
+<h2>{{.Label}}s</h2>
+<p class="why">Changes apply to new work at once. Work already started keeps what it was given. Retired entries can't be chosen for new work, but nothing is deleted.</p>
+<details class="add">
+  <summary class="btn sm">+ Add {{.Label}}</summary>
+  <form method="post" action="/t/{{$.Slug}}/settings/master/{{.Kind}}" class="sform">
+    <label>Name <input name="name" required></label>
+    {{range .New}}{{template "input" .}}{{end}}
+    <button class="btn sm">Add</button>
+  </form>
+</details>
+<ul class="rows">
+  {{range .Items}}
+  <li class="{{if not .Active}}off{{end}}">
+    <div class="row-head">
+      <div><b>{{.Name}}</b>{{if not .Active}} <span class="pill p-closed">retired</span>{{end}}
+        <span class="r">{{or .Summary "—"}}</span></div>
+    </div>
+    <details>
+      <summary>Edit</summary>
+      <form method="post" action="/t/{{$.Slug}}/settings/master/{{$.Data.Master.Kind}}" class="sform">
+        <input type="hidden" name="key" value="{{.Key}}">
+        <label>Name <input name="name" value="{{.Name}}" required></label>
+        {{range .Form}}{{template "input" .}}{{end}}
+        <button class="btn sm">Save</button>
+      </form>
+      <form method="post" action="/t/{{$.Slug}}/settings/master/{{$.Data.Master.Kind}}" class="sform inline">
+        <input type="hidden" name="key" value="{{.Key}}">
+        <input type="hidden" name="name" value="{{.Name}}">
+        {{if .Active}}<button class="btn warn sm" name="action" value="retire">Retire</button>
+        {{else}}<button class="btn ghost sm" name="action" value="restore">Bring back</button>{{end}}
+      </form>
+    </details>
+  </li>
+  {{else}}
+  <li class="none">None yet.</li>
+  {{end}}
+</ul>
+{{end}}{{end}}
+
+{{define "input"}}
+<label>{{.Label}}
+  {{if eq .Input "select"}}
+    <select name="f.{{.Key}}"><option value="">—</option>{{range .Options}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+  {{else if eq .Input "multi"}}
+    <span class="checks">{{range .Options}}<label><input type="checkbox" name="f.{{$.Key}}" value="{{.Value}}"{{if .Selected}} checked{{end}}> {{.Label}}</label>{{end}}</span>
+  {{else if eq .Input "lines"}}
+    <textarea name="f.{{.Key}}" rows="3" placeholder="One per line">{{.Raw}}</textarea>
+  {{else if eq .Input "date"}}
+    <input type="date" name="f.{{.Key}}" value="{{.Raw}}">
+  {{else}}
+    <input name="f.{{.Key}}" value="{{.Raw}}">
+  {{end}}
+</label>
+{{end}}

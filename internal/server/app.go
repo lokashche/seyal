@@ -356,14 +356,12 @@ func (v *view) quick(f playbook.Field) []string {
 	case "bool":
 		return []string{"yes", "no"}
 	case "master":
-		var names []string
-		for key, name := range v.masters {
-			if strings.HasPrefix(key, f.Kind+"/") {
-				names = append(names, name)
-			}
-		}
-		if len(names) <= 8 {
-			slices.Sort(names)
+		// Only entries still in use: a retired master item isn't offered for new work.
+		rows, _ := v.tx.Query(v.ctx, `
+			SELECT name FROM master_items WHERE tenant_id = current_tenant() AND kind = $1 AND active
+			ORDER BY name LIMIT 9`, f.Kind)
+		names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err == nil && len(names) <= 8 {
 			return names
 		}
 	}

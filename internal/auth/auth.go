@@ -126,6 +126,26 @@ func Login(ctx context.Context, tx pgx.Tx, email, password, userAgent string) (t
 	return token, s, err
 }
 
+// NewPassword gives a person a new random password and returns it. It is shown once and never
+// stored. Passwords are 16 characters from A-Z and 2-7, so there's no 0/O or 1/l to mix up when
+// reading one out. The person must already have a login email. tx must come from db.WithTenant.
+func NewPassword(ctx context.Context, tx pgx.Tx, personID string, by ledger.Actor) (string, error) {
+	var email string
+	err := tx.QueryRow(ctx, `
+		SELECT coalesce(login_email, '') FROM persons WHERE tenant_id = current_tenant() AND id::text = $1`,
+		personID).Scan(&email)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return "", errors.New("auth: no such person")
+	case err != nil:
+		return "", err
+	case email == "":
+		return "", errors.New("this person has no login email yet")
+	}
+	password := rand.Text()[:16]
+	return password, SetPassword(ctx, tx, personID, email, password, by)
+}
+
 // Pretend spends as long as checking a real password. Use it for a login to an address that
 // doesn't exist, so the answer can't reveal which addresses do.
 func Pretend(password string) {
@@ -176,7 +196,8 @@ func Logout(ctx context.Context, tx pgx.Tx, token string) error {
 
 func roles(ctx context.Context, tx pgx.Tx, personID string) ([]string, error) {
 	rows, _ := tx.Query(ctx, `
-		SELECT role_key FROM person_roles WHERE tenant_id = current_tenant() AND person_id::text = $1
+		SELECT role_key FROM person_roles
+		WHERE tenant_id = current_tenant() AND person_id::text = $1 AND revoked_at IS NULL
 		ORDER BY role_key`, personID)
 	return pgx.CollectRows(rows, pgx.RowTo[string])
 }

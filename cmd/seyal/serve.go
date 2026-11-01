@@ -65,7 +65,7 @@ func runServe(out io.Writer) error {
 	if mediaDir == "" {
 		mediaDir = "data/media"
 	}
-	srv, err := server.New(app, media.Disk{Dir: mediaDir}, os.Getenv("SEYAL_SECURE_COOKIES") == "true")
+	srv, err := server.New(app, media.Disk{Dir: mediaDir}, lib, os.Getenv("SEYAL_SECURE_COOKIES") == "true")
 	if err != nil {
 		return err
 	}

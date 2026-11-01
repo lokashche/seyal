@@ -48,6 +48,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .who { margin-left: auto; display: flex; align-items: center; gap: 10px; font-size: 13.5px; color: var(--muted); }
 .banner { margin: 0; padding: 9px 16px; font-size: 14px; }
 .banner.error { background: var(--warn-soft); color: var(--warn); }
+.banner.notice { background: var(--ok-soft); color: var(--ok); }
+.who form { margin: 0; }
+.who a.btn { text-decoration: none; }
 
 /* The three panes */
 .app { flex: 1; min-height: 0; display: grid; grid-template-columns: 270px minmax(0, 1fr) 310px; background: var(--panel); }
@@ -124,6 +127,36 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .acts { display: flex; flex-direction: column; gap: 8px; }
 .acts form { margin: 0; }
 .why { font-size: 12.5px; color: var(--muted); margin: 0; }
+
+/* Settings */
+.settings { flex: 1; min-height: 0; display: grid; grid-template-columns: 220px minmax(0, 1fr); background: var(--panel); }
+.tabs { border-right: 1px solid var(--line); padding: 12px 8px; display: flex; flex-direction: column; gap: 2px; overflow: auto; }
+.tabs a { padding: 8px 10px; border-radius: 8px; color: var(--ink); text-decoration: none; font-size: 14px; }
+.tabs a:hover { background: var(--bg); }
+.tabs a[aria-current] { background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
+.tabs .back-link { color: var(--accent-ink); margin-bottom: 8px; }
+.panel { padding: 18px 22px; overflow: auto; display: flex; flex-direction: column; gap: 14px; max-width: 860px; }
+.panel h2 { font-size: 22px; }
+.rows { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 10px; }
+.rows li { padding: 10px 12px; }
+.rows li + li { border-top: 1px solid var(--line); }
+.rows li.off { opacity: .65; }
+.rows .r { display: block; color: var(--muted); font-size: 13px; }
+.rows summary { cursor: pointer; font: 500 12px var(--f-mono); color: var(--accent-ink); margin-top: 4px; }
+.add > summary { list-style: none; display: inline-block; }
+.add > summary::-webkit-details-marker { display: none; }
+.sform { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); max-width: 520px; }
+.sform.inline { flex-direction: row; flex-wrap: wrap; align-items: end; border: 0; padding: 0; background: none; }
+.sform label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 500; }
+.sform input:not([type="checkbox"]), .sform select, .sform textarea { font: inherit; font-size: 14px; font-weight: 400; border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; background: var(--panel); color: var(--ink); }
+.sform fieldset { border: 0; padding: 0; margin: 0; }
+.sform legend { font-size: 13px; font-weight: 500; margin-bottom: 4px; }
+.checks { display: flex; flex-wrap: wrap; gap: 4px 14px; font-weight: 400; }
+.checks label { flex-direction: row; align-items: center; gap: 6px; font-weight: 400; }
+@media (max-width: 760px) {
+  .settings { grid-template-columns: 1fr; }
+  .tabs { flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--line); }
+}
 
 /* Login and home */
 .center { flex: 1; display: grid; place-items: center; padding: 24px 16px; }

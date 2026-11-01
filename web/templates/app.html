@@ -1,14 +1,6 @@
 {{define "title"}}{{with .Data.Item}}{{.Item.Number}} · {{end}}Seyal{{end}}
 {{define "content"}}
-<header class="bar">
-  <a class="brand" href="/t/{{.Slug}}/">Seyal<span class="tamil" lang="ta">செயல்</span></a>
-  <span class="biz">{{.Business}}</span>
-  <form method="post" action="/t/{{.Slug}}/logout" class="who">
-    <span>{{.Session.Name}}</span>
-    <button class="btn ghost sm">Log out</button>
-  </form>
-</header>
-{{with .Error}}<p class="banner error" role="alert">{{.}}</p>{{end}}
+{{template "bar" .}}
 <div class="app{{if .Data.Item}} has-item{{end}}">
   <section class="pane list-pane" aria-label="My Work">
     <div class="pane-h"><b>My Work</b><small>as {{.Session.Name}}</small></div>

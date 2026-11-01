@@ -221,7 +221,8 @@ func (c *conversation) command(text string) error {
 // decide records the person's approval or refusal for the first waiting slot they can decide.
 func (c *conversation) decide(decision, reason string) error {
 	rows, _ := c.tx.Query(c.ctx, `
-		SELECT role_key FROM person_roles WHERE tenant_id = current_tenant() AND person_id::text = $1`, c.person)
+		SELECT role_key FROM person_roles
+		WHERE tenant_id = current_tenant() AND person_id::text = $1 AND revoked_at IS NULL`, c.person)
 	roles, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
 		return err
@@ -355,6 +356,10 @@ func (c *conversation) post(text string) (channel.Message, error) {
 	}
 	return m, err
 }
+
+// DBChoices finds people and active master items in the database, for Understand.
+// tx must come from db.WithTenant.
+func DBChoices(ctx context.Context, tx pgx.Tx) Choices { return choices{ctx, tx} }
 
 // choices finds people and active master items in the database.
 type choices struct {

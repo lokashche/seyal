@@ -8,7 +8,6 @@ package setup
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"maps"
@@ -314,24 +313,17 @@ func toFloat(v any) (float64, bool) {
 	return 0, false
 }
 
-// NewPassword makes a random password that is easy to read out (no 0/O or 1/l), sets it for the
-// person with this email, and returns it. It is shown once and never stored.
+// NewPassword gives the person with this email a new random password (auth.NewPassword) and returns
+// it. It is shown once and never stored.
 func NewPassword(ctx context.Context, app *pgxpool.Pool, tenantID, email string) (string, error) {
-	const letters = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-	raw := make([]byte, 14)
-	if _, err := rand.Read(raw); err != nil {
-		return "", err
-	}
-	for i, b := range raw {
-		raw[i] = letters[int(b)%len(letters)]
-	}
-	password := string(raw)
+	var password string
 	err := db.WithTenant(ctx, app, tenantID, func(tx pgx.Tx) error {
 		id, err := people.ByEmail(ctx, tx, email)
 		if err != nil {
 			return err
 		}
-		return auth.SetPassword(ctx, tx, id, email, password, ledger.SystemActor)
+		password, err = auth.NewPassword(ctx, tx, id, ledger.SystemActor)
+		return err
 	})
 	return password, err
 }

@@ -20,3 +20,17 @@
 </body>
 </html>
 {{end}}
+
+{{define "bar"}}
+<header class="bar">
+  <a class="brand" href="/t/{{.Slug}}/">Seyal<span class="tamil" lang="ta">செயல்</span></a>
+  <span class="biz">{{.Business}}</span>
+  <nav class="who">
+    {{if .Admin}}<a class="btn ghost sm" href="/t/{{.Slug}}/settings/people">Settings</a>{{end}}
+    <span>{{.Session.Name}}</span>
+    <form method="post" action="/t/{{.Slug}}/logout"><button class="btn ghost sm">Log out</button></form>
+  </nav>
+</header>
+{{with .Notice}}<p class="banner notice" role="status">{{.}}</p>{{end}}
+{{with .Error}}<p class="banner error" role="alert">{{.}}</p>{{end}}
+{{end}}

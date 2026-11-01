@@ -44,8 +44,9 @@ type site struct {
 }
 
 const (
-	arjun = "arjun@kaveri-demo.example" // sales
-	priya = "priya@kaveri-demo.example" // ops
+	arjun   = "arjun@kaveri-demo.example"   // sales
+	priya   = "priya@kaveri-demo.example"   // ops
+	lakshmi = "lakshmi@kaveri-demo.example" // owner and admin
 )
 
 func newSite(t *testing.T) *site {
@@ -67,12 +68,12 @@ func newSite(t *testing.T) *site {
 	}
 	s := &site{t: t, slug: f.Business.Slug, tenant: sum.TenantID, store: media.Disk{Dir: t.TempDir()},
 		passwords: map[string]string{}, people: sum.People}
-	for _, email := range []string{arjun, priya} {
+	for _, email := range []string{arjun, priya, lakshmi} {
 		if s.passwords[email], err = setup.NewPassword(ctx, app, sum.TenantID, email); err != nil {
 			t.Fatal(err)
 		}
 	}
-	srv, err := server.New(app, s.store, false)
+	srv, err := server.New(app, s.store, lib, false)
 	if err != nil {
 		t.Fatal(err)
 	}

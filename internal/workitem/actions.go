@@ -174,7 +174,8 @@ func Decide(ctx context.Context, tx pgx.Tx, id, personID, slot, decision, reason
 		return Item{}, err
 	}
 	rows, _ := tx.Query(ctx, `
-		SELECT role_key FROM person_roles WHERE tenant_id = current_tenant() AND person_id::text = $1`, personID)
+		SELECT role_key FROM person_roles
+		WHERE tenant_id = current_tenant() AND person_id::text = $1 AND revoked_at IS NULL`, personID)
 	roles, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
 		return Item{}, fmt.Errorf("workitem: roles: %w", err)
