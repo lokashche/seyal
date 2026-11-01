@@ -1,0 +1,14 @@
+# Keep private and bulky things out of the image build.
+.git
+.github
+.env
+.env.*
+!.env.example
+.local
+.vscode
+docs
+data
+deploy/private
+deploy/.env
+*.dump
+*.tar

@@ -1,0 +1,36 @@
+# Every push and pull request: formatting, vet, the quick tests, then the database tests against the
+# same PostgreSQL setup as development (compose.yaml with the example settings).
+name: CI
+
+on:
+  push:
+    branches: ["**"] # tags are tested by the release workflow
+  pull_request:
+  workflow_call: # the release workflow runs these checks first
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Formatting
+        run: test -z "$(gofmt -l ./cmd ./internal ./migrations)" || (gofmt -l ./cmd ./internal ./migrations; exit 1)
+      - name: Vet
+        run: go vet -tags=db ./...
+      - name: Quick tests
+        run: go test ./...
+      - name: Database tests
+        run: |
+          cp .env.example .env
+          docker compose up -d --wait
+          go test -tags=db -p 1 -count=1 ./...
+      - name: Samples load
+        run: go run ./cmd/seyal check
+      - name: Image builds
+        run: docker build --build-arg VERSION=ci -t seyal:ci .

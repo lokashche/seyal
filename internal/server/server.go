@@ -44,6 +44,7 @@ type Server struct {
 	lib     *playbook.Library // templates: sample processes and lists a business can start from
 	ai      *ai.Setup
 	secure  bool // send cookies only over HTTPS
+	proxied bool // behind a trusted reverse proxy that sets X-Forwarded-For
 	pages   map[string]*template.Template
 	static  http.Handler
 	asset   string // fingerprint of the static files, added to their addresses
@@ -58,11 +59,14 @@ type Config struct {
 	Library       *playbook.Library // templates a business can start from (its own are in the database)
 	AI            *ai.Setup         // models per purpose; nil means AI is off
 	SecureCookies bool              // true when the app is reached over HTTPS
+	// BehindProxy says a reverse proxy we run (Caddy) is the only way in, so the visitor's address is
+	// the last one it adds to X-Forwarded-For. Never set it when people can reach the app directly.
+	BehindProxy bool
 }
 
 // New prepares the web app.
 func New(cfg Config) (*Server, error) {
-	s := &Server{app: cfg.App, store: cfg.Store, lib: cfg.Library, ai: cfg.AI, secure: cfg.SecureCookies,
+	s := &Server{app: cfg.App, store: cfg.Store, lib: cfg.Library, ai: cfg.AI, secure: cfg.SecureCookies, proxied: cfg.BehindProxy,
 		pages: map[string]*template.Template{}, limiter: newLimiter(10, 15*time.Minute)}
 	if s.ai == nil {
 		s.ai = &ai.Setup{USDtoINR: 88}
@@ -186,7 +190,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /t/{slug}/settings/ai", s.admin(s.aiPage))
 	mux.HandleFunc("GET /t/{slug}/settings/master/{kind}", s.admin(s.masterPage))
 	mux.HandleFunc("POST /t/{slug}/settings/master/{kind}", s.admin(s.saveMaster))
-	return securityHeaders(http.NewCrossOriginProtection().Handler(mux))
+	return securityHeaders(s.secure, http.NewCrossOriginProtection().Handler(mux))
 }
 
 // page is what every template gets.
@@ -346,14 +350,17 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	email, password := strings.TrimSpace(r.PostFormValue("email")), r.PostFormValue("password")
 	p := page{Slug: slug, Data: email}
-	key := slug + "|" + clientIP(r)
-	if !s.limiter.allowed(key) {
+	// Failed logins are counted per address and per email: guessing from many addresses at one
+	// person's login is slowed down too.
+	key, who := slug+"|"+s.clientIP(r), slug+"|email|"+strings.ToLower(email)
+	if !s.limiter.allowed(key) || !s.limiter.allowed(who) {
 		p.Error = "Too many failed attempts. Please wait 15 minutes and try again."
 		s.render(w, r, http.StatusTooManyRequests, "login", p)
 		return
 	}
 	wrong := func() {
 		s.limiter.failed(key)
+		s.limiter.failed(who)
 		p.Error = "Wrong email or password."
 		s.render(w, r, http.StatusUnauthorized, "login", p)
 	}
@@ -421,9 +428,12 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	http.Error(w, "Something went wrong. Please try again.", http.StatusInternalServerError)
 }
 
-func securityHeaders(next http.Handler) http.Handler {
+func securityHeaders(https bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
+		if https { // browsers then never try plain HTTP for this site again
+			h.Set("Strict-Transport-Security", "max-age=31536000")
+		}
 		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; "+
 			"style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
 		h.Set("X-Content-Type-Options", "nosniff")
@@ -440,9 +450,15 @@ func cacheFor(d time.Duration, next http.Handler) http.Handler {
 	})
 }
 
-// clientIP is the address the request came from. (Behind a reverse proxy this will need the
-// proxy's forwarded address instead; see the deploy step.)
-func clientIP(r *http.Request) string {
+// clientIP is the address the request came from. Behind our own reverse proxy that is the last address
+// the proxy added to X-Forwarded-For (anything before it was sent by the visitor's browser and can't be trusted).
+func (s *Server) clientIP(r *http.Request) string {
+	if xff := r.Header.Values("X-Forwarded-For"); s.proxied && len(xff) > 0 {
+		parts := strings.Split(xff[len(xff)-1], ",")
+		if ip := strings.TrimSpace(parts[len(parts)-1]); ip != "" {
+			return ip
+		}
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

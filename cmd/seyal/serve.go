@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -23,10 +25,26 @@ import (
 	"seyal/internal/server"
 )
 
+// secureCookies decides whether login cookies are sent only over HTTPS: as set ("true" or "false"),
+// otherwise yes unless the app listens only on this computer (development). Forgetting the setting on
+// a real server must not send logins over plain HTTP.
+func secureCookies(setting, addr string) bool {
+	switch setting {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	host, _, err := net.SplitHostPort(addr)
+	local := addr == "" || (err == nil && (host == "127.0.0.1" || host == "localhost" || host == "::1"))
+	return !local
+}
+
 // runServe starts the web app. The playbook and master-data folders are loaded as templates; each
 // business manages its own processes and lists in Settings.
 func runServe(out io.Writer) error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	// Ctrl+C, or a service manager / Docker stopping it: finish the requests in progress, then stop.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	url, err := config.Need("SEYAL_DATABASE_URL")
@@ -75,7 +93,8 @@ func runServe(out io.Writer) error {
 	}
 	srv, err := server.New(server.Config{
 		App: app, Store: media.Disk{Dir: mediaDir}, Library: lib, AI: aiSetup,
-		SecureCookies: os.Getenv("SEYAL_SECURE_COOKIES") == "true",
+		SecureCookies: secureCookies(os.Getenv("SEYAL_SECURE_COOKIES"), os.Getenv("SEYAL_ADDR")),
+		BehindProxy:   os.Getenv("SEYAL_BEHIND_PROXY") == "true",
 	})
 	if err != nil {
 		return err

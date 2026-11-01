@@ -1,0 +1,10 @@
+# Caddy gets and renews the HTTPS certificate for SEYAL_DOMAIN by itself (Let's Encrypt), sends
+# plain HTTP visitors to HTTPS, and passes everything to Seyal.
+{
+	email {$ACME_EMAIL}
+}
+
+{$SEYAL_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy seyal:8080
+}

@@ -1,0 +1,87 @@
+# Seyal on a server: PostgreSQL + Seyal, reached over HTTPS through either a Cloudflare Tunnel (profile
+# "tunnel": no open ports on the server) or Caddy (profile "caddy": ports 80/443, its own certificate).
+# Choose with COMPOSE_PROFILES in deploy/.env. See deploy/README.md for the steps.
+# Settings come from deploy/.env (copy deploy/.env.example; never commit it).
+#
+#   docker compose up -d          start (or apply a new version after "pull")
+#   docker compose pull           fetch the image named by SEYAL_IMAGE
+#   docker compose logs -f seyal  watch Seyal's log
+name: seyal
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      SEYAL_OWNER_PASSWORD: ${SEYAL_OWNER_PASSWORD:?set SEYAL_OWNER_PASSWORD in .env}
+      SEYAL_APP_PASSWORD: ${SEYAL_APP_PASSWORD:?set SEYAL_APP_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro # creates the owner and app roles on first start
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d seyal"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    # No ports: only the other services here can reach the database.
+
+  # Applies database migrations, then exits; Seyal starts only after it succeeded.
+  migrate:
+    image: ${SEYAL_IMAGE:-seyal:local}
+    build: { context: .., args: { VERSION: local } }
+    command: ["migrate"]
+    env_file: .env
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  seyal:
+    image: ${SEYAL_IMAGE:-seyal:local}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SEYAL_ADDR: ":8080"
+      SEYAL_MEDIA_DIR: /data/media
+      SEYAL_BEHIND_PROXY: "true" # the tunnel or Caddy is the only way in
+      SEYAL_SECURE_COOKIES: "true"
+    volumes:
+      - media:/data/media
+      - ./private:/app/private:ro # the business's private set-up file(s), for "seyal import"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    # No ports: the tunnel or Caddy forwards to it.
+
+  # Cloudflare Tunnel: connects out to Cloudflare, which serves https://<your address> and passes
+  # requests to seyal:8080 (set as the tunnel's public hostname service in Cloudflare).
+  cloudflared:
+    profiles: [tunnel]
+    image: cloudflare/cloudflared:2024.12.2
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on: [seyal]
+
+  caddy:
+    profiles: [caddy]
+    image: caddy:2.8.4
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      SEYAL_DOMAIN: ${SEYAL_DOMAIN:-}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data # HTTPS certificates
+      - caddy_config:/config
+    depends_on: [seyal]
+
+volumes:
+  pgdata:
+  media:
+  caddy_data:
+  caddy_config:

@@ -15,3 +15,7 @@ docs/
 *.test
 *.out
 coverage.*
+
+# A business's private set-up files on a server
+deploy/private/
+*.dump

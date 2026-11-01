@@ -622,12 +622,23 @@ func (s *Server) env() ask.Env {
 // maxFiles is how many files one message may carry.
 const maxFiles = 5
 
+// uploads limits how many messages with files are read at the same time (see incoming).
+var uploads = make(chan struct{}, 4)
+
 // incoming reads the composer form: the text, plus a recorded voice note and attached files when the
 // form is sent as multipart. The whole request is limited in size before anything is read.
 func (s *Server) incoming(w http.ResponseWriter, r *http.Request, c *call) (channel.Incoming, error) {
 	in := channel.Incoming{Channel: channel.Web{}.Name(), PersonID: c.session.PersonID}
 	r.Body = http.MaxBytesReader(w, r.Body, maxFiles*media.MaxSize+1<<20)
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		// Files are held in memory while they are checked and stored, so only a few uploads are
+		// handled at once; the others wait their turn (or give up when the person leaves).
+		select {
+		case uploads <- struct{}{}:
+			defer func() { <-uploads }()
+		case <-r.Context().Done():
+			return in, r.Context().Err()
+		}
 		if err := r.ParseMultipartForm(8 << 20); err != nil {
 			return in, errors.New("the message or its files are too large")
 		}
