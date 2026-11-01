@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
@@ -67,6 +68,17 @@ func New(cfg Config) (*Server, error) {
 		s.ai = &ai.Setup{USDtoINR: 88}
 	}
 	funcs := template.FuncMap{
+		"initials": initials,
+		"icon":     icon,
+		// replaceSort returns a list query ("?f=…") with its order set to s, without the "?".
+		"replaceSort": func(query, s string) string {
+			vals, _ := url.ParseQuery(strings.TrimPrefix(query, "?"))
+			vals.Del("s")
+			if s != "recent" {
+				vals.Set("s", s)
+			}
+			return vals.Encode()
+		},
 		// dict builds a map from key, value pairs, so one template block can be reused with
 		// different data: {{template "x" (dict "Title" "…" "Lines" .Lines)}}.
 		"dict": func(kv ...any) (map[string]any, error) {
@@ -297,7 +309,7 @@ func (s *Server) manifest(w http.ResponseWriter, r *http.Request) {
 	m := map[string]any{
 		"name": "Seyal", "short_name": "Seyal", "description": "No forms. Just tell Seyal.",
 		"id": base, "start_url": base, "scope": base, "display": "standalone",
-		"background_color": "#f4f5f1", "theme_color": "#c9861a",
+		"background_color": "#f7f7f8", "theme_color": "#f7f7f8",
 		"icons": []map[string]string{
 			{"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png"},
 			{"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"},

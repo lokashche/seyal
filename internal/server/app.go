@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -30,20 +31,19 @@ import (
 
 // screen is what the three-pane page shows. Item is nil on the Tell Seyal view.
 type screen struct {
-	Groups  []group
+	Work    *myWork
 	Current string // id of the open item
 	Tell    *tellView
 	Item    *itemView
 }
 
-type group struct {
-	Title string
-	Rows  []row
-}
-
 type row struct {
 	ID, Number, Title, Kind, Pill, Status string
 	Hint                                  string // what happens next, for the person looking
+	Preview                               string // the start of the latest message
+	Ago                                   string // how long since it last changed
+	Owner, OwnerName                      string // initials and name of who has it
+	Mine                                  bool   // the person (or their team) should act
 	Quoted                                bool   // Title is the start of the first message (the item has no title yet)
 }
 
@@ -73,6 +73,7 @@ type itemView struct {
 	Pill    string
 	Status  string
 	With    string // who has it now: a person, or a team
+	Heading string // the title, or the start of the first message while it has none
 	Links   []linkView
 	Closed  bool
 	Thread  []entryView
@@ -130,11 +131,12 @@ type view struct {
 	roles     map[string]string // role key → name
 	masters   map[string]string // "kind/key" → name
 	playbooks map[string]*playbook.Playbook
+	q         url.Values // the page's query: which folder, process and order My Work shows
 }
 
 func (s *Server) newView(r *http.Request, tx pgx.Tx, c *call) (*view, error) {
 	v := &view{ctx: r.Context(), tx: tx, c: c, today: time.Now().In(c.tenant.Zone).Format(time.DateOnly),
-		playbooks: map[string]*playbook.Playbook{}}
+		playbooks: map[string]*playbook.Playbook{}, q: r.URL.Query()}
 	var err error
 	if v.names, err = pairs(v, "SELECT id::text, display_name FROM persons WHERE tenant_id = current_tenant()"); err != nil {
 		return nil, err
@@ -299,6 +301,16 @@ func (v *view) item(id string) (*itemView, error) {
 		}
 		iv.Thread = append(iv.Thread, ev)
 	}
+	iv.Heading = it.Title
+	if untitled(it.Title) {
+		iv.Heading = "Untitled"
+		for _, e := range iv.Thread {
+			if e.Kind != "evt" && e.Kind != "bot" && strings.TrimSpace(e.Text) != "" {
+				iv.Heading = "“" + strings.Join(strings.Fields(e.Text), " ") + "”"
+				break
+			}
+		}
+	}
 
 	toAsk := engine.ToAsk(p, it.State, it.Fields) // what Seyal asks in this step
 	from, err := v.prefilled(p, it)
@@ -415,7 +427,7 @@ func (s *Server) show(w http.ResponseWriter, r *http.Request, c *call, itemID st
 		if err != nil {
 			return err
 		}
-		if sc.Groups, err = v.groups(); err != nil {
+		if sc.Work, err = v.myWork(); err != nil {
 			return err
 		}
 		if itemID == "" {

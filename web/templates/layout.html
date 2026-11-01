@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="htmx-config" content='{"includeIndicatorStyles": false, "responseHandling": [{"code": "204", "swap": false}, {"code": "[23]..", "swap": true}, {"code": "4..", "swap": true, "error": false}, {"code": "5..", "swap": true, "error": true}]}'>
   <title>{{block "title" .}}Seyal{{end}}</title>
-  <meta name="theme-color" content="#c9861a">
+  <meta name="theme-color" content="#f7f7f8" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#111113" media="(prefers-color-scheme: dark)">
   {{if .Slug}}<link rel="manifest" href="/t/{{.Slug}}/manifest.webmanifest">{{end}}
   <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
@@ -21,16 +22,27 @@
 </html>
 {{end}}
 
-{{define "bar"}}
-<header class="bar">
+{{/* The top and foot of the left column, shared by My Work and Settings. */}}
+{{define "brand"}}
+<div class="brand-row">
   <a class="brand" href="/t/{{.Slug}}/">Seyal<span class="tamil" lang="ta">செயல்</span></a>
-  <span class="biz">{{.Business}}</span>
-  <nav class="who">
-    {{if .Admin}}<a class="btn ghost sm" href="/t/{{.Slug}}/settings/people">Settings</a>{{end}}
-    <span>{{.Session.Name}}</span>
-    <form method="post" action="/t/{{.Slug}}/logout"><button class="btn ghost sm">Log out</button></form>
-  </nav>
-</header>
+  <span class="biz" title="{{.Business}}">{{.Business}}</span>
+</div>
+{{end}}
+
+{{/* "me" takes (dict "S" <the page> "Settings" <whether to link to Settings>). */}}
+{{define "me"}}{{with .S}}
+<div class="me">
+  {{if and .Admin $.Settings}}<a class="fold" href="/t/{{.Slug}}/settings/people">{{icon "settings"}}<span class="ft">Settings</span></a>{{end}}
+  <div class="me-row">
+    <span class="avatar" aria-hidden="true">{{initials .Session.Name}}</span>
+    <span class="me-name" title="{{.Session.Name}}">{{.Session.Name}}</span>
+    <form method="post" action="/t/{{.Slug}}/logout"><button class="icon-btn" title="Log out" aria-label="Log out">{{icon "logout"}}</button></form>
+  </div>
+</div>
+{{end}}{{end}}
+
+{{define "banners"}}
 {{with .Notice}}<p class="banner notice" role="status">{{.}}</p>{{end}}
 {{with .Error}}<p class="banner error" role="alert">{{.}}</p>{{end}}
 {{end}}

@@ -313,9 +313,9 @@ func TestAJobInTheBrowser(t *testing.T) {
 	t.Run("Priya sees it waiting for her and approves as ops", func(t *testing.T) {
 		p := s.logIn(priya)
 		_, home, _ := s.get(p, base+"/")
-		waiting := home[strings.Index(home, "Needs your approval"):]
+		waiting := home[strings.Index(home, "Needs my approval"):]
 		if !strings.Contains(waiting, "Sundaram Textiles") {
-			t.Error("the job isn't in Priya's 'Needs your approval'")
+			t.Error("the job isn't in Priya's 'Needs my approval'")
 		}
 		page := s.send(p, item+"/decide", url.Values{"slot": {"ops"}, "decision": {"approve"}})
 		if !strings.Contains(page, "✓ Priya Raman") || !strings.Contains(page, "pending approval") {

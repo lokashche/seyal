@@ -5,8 +5,12 @@ package server
 import (
 	"cmp"
 	"fmt"
+	"maps"
+	"net/url"
 	"slices"
 	"strings"
+	"time"
+	"unicode"
 
 	"github.com/jackc/pgx/v5"
 
@@ -27,25 +31,51 @@ const (
 	otherOpen
 )
 
-var groupTitles = []string{"Needs your approval", "Overdue", "Your turn", "For your team", "Waiting on others", "Other open work"}
+// folders are My Work's groups, in the order of the buckets above; "all" shows every open item.
+var folders = []struct{ key, title string }{
+	{"approval", "Needs my approval"}, {"overdue", "Overdue"}, {"turn", "My turn"}, {"team", "For my team"},
+	{"waiting", "Waiting on others"}, {"all", "All open work"},
+}
 
-func (v *view) groups() ([]group, error) {
+// myWork is the folder column and the list. The column has two parts that each add up: the person's
+// own folders, and all open work (in total and per process). The list shows the chosen folder (?f=)
+// or process (?p=, which always means all open work of that process), in the chosen order
+// (?s=recent or due).
+type myWork struct {
+	Folders   []folder // the person's own
+	All       folder
+	Processes []folder
+	Rows      []row
+	Title     string
+	Sort      string
+	Query     string // "?f=…&p=…&s=…", kept on links so the list stays as chosen
+}
+
+type folder struct {
+	Key, Title, URL string
+	Count           int
+	Current         bool
+}
+
+func (v *view) myWork() (*myWork, error) {
 	items, err := workitem.List(v.ctx, v.tx)
 	if err != nil {
 		return nil, err
 	}
-	firstWords, err := v.firstWords(items)
+	extra, err := v.rowExtras(items)
 	if err != nil {
 		return nil, err
 	}
-	buckets := make([][]row, len(groupTitles))
-	kinds := map[string]bool{}
 	type placed struct {
 		r      row
 		bucket int
 		pbID   string
+		due    string
 	}
 	var all []placed
+	byProcess := map[string]int{}
+	counts := make([]int, len(folders))
+	kinds := map[string]bool{}
 	for _, it := range items {
 		p, err := v.playbook(it)
 		if err != nil {
@@ -60,25 +90,125 @@ func (v *view) groups() ([]group, error) {
 			return nil, err
 		}
 		pill, status := v.status(p, it)
-		r := row{ID: it.ID, Number: it.Number, Title: it.Title, Pill: pill, Status: status, Hint: hint}
-		if r.Title == "" {
-			r.Title, r.Quoted = firstWords[it.ID], firstWords[it.ID] != ""
+		x := extra[it.ID]
+		r := row{ID: it.ID, Number: it.Number, Title: it.Title, Pill: pill, Status: status, Hint: hint,
+			Preview: x.preview, Ago: x.ago, Owner: initials(v.holder(it)), OwnerName: v.holder(it),
+			Mine: bucket <= yourTeam}
+		if untitled(r.Title) {
+			r.Title, r.Quoted = x.firstWords, x.firstWords != ""
 		}
-		all = append(all, placed{r, bucket, p.ID})
+		all = append(all, placed{r, bucket, p.ID, it.DueOn})
+		byProcess[p.ID]++
+		if bucket < otherOpen {
+			counts[bucket]++
+		}
+		counts[len(folders)-1]++ // all open
 	}
+
+	q := v.q
+	w := &myWork{Sort: q.Get("s")}
+	if w.Sort != "due" {
+		w.Sort = "recent"
+	}
+	chosen := q.Get("f")
+	if !slices.ContainsFunc(folders, func(f struct{ key, title string }) bool { return f.key == chosen }) {
+		chosen = "all"
+		for _, k := range []int{needsApproval, overdue, yourTurn, yourTeam} {
+			if counts[k] > 0 {
+				chosen = folders[k].key
+				break
+			}
+		}
+	}
+	proc := q.Get("p")
+	if byProcess[proc] == 0 {
+		proc = ""
+	}
+	if proc != "" {
+		chosen = "all" // a process is a part of all open work, never of a personal folder
+	}
+	link := func(f, p string) string {
+		vals := url.Values{}
+		vals.Set("f", f)
+		if p != "" {
+			vals.Set("p", p)
+		}
+		if w.Sort != "recent" {
+			vals.Set("s", w.Sort)
+		}
+		return "?" + vals.Encode()
+	}
+	w.Query = link(chosen, proc)
+	for i, f := range folders {
+		fl := folder{Key: f.key, Title: f.title, Count: counts[i], Current: f.key == chosen && proc == "", URL: link(f.key, "")}
+		if f.key == "all" {
+			w.All = fl
+		} else {
+			w.Folders = append(w.Folders, fl)
+		}
+		if f.key == chosen {
+			w.Title = f.title
+		}
+	}
+	if len(kinds) > 1 {
+		for _, id := range slices.Sorted(maps.Keys(byProcess)) {
+			w.Processes = append(w.Processes, folder{Key: id, Title: sentence(id), Count: byProcess[id],
+				Current: id == proc, URL: link("all", id)})
+		}
+	}
+	if proc != "" {
+		w.Title = sentence(proc)
+	}
+
 	for _, pl := range all {
-		if len(kinds) > 1 {
+		in := chosen == "all" || folders[pl.bucket].key == chosen
+		if pl.bucket == otherOpen {
+			in = chosen == "all"
+		}
+		if !in || (proc != "" && pl.pbID != proc) {
+			continue
+		}
+		if len(kinds) > 1 && proc == "" {
 			pl.r.Kind = human(pl.pbID)
 		}
-		buckets[pl.bucket] = append(buckets[pl.bucket], pl.r)
+		w.Rows = append(w.Rows, pl.r)
 	}
-	var out []group
-	for i, rows := range buckets {
-		if len(rows) > 0 {
-			out = append(out, group{Title: groupTitles[i], Rows: rows})
+	if w.Sort == "due" {
+		dues := map[string]string{}
+		for _, pl := range all {
+			dues[pl.r.ID] = pl.due
+		}
+		slices.SortStableFunc(w.Rows, func(a, b row) int {
+			da, db := dues[a.ID], dues[b.ID]
+			switch {
+			case da == db:
+				return 0
+			case da == "":
+				return 1
+			case db == "":
+				return -1
+			}
+			return strings.Compare(da, db)
+		})
+	}
+	return w, nil
+}
+
+// untitled reports whether a title says nothing yet: empty, or only the punctuation of a title
+// pattern whose fields are still empty ("—").
+func untitled(title string) bool {
+	return !strings.ContainsFunc(title, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) })
+}
+
+// initials shortens a name for the small badge on a card: "Priya Raman" → "PR".
+func initials(name string) string {
+	var out []rune
+	for _, w := range strings.Fields(name) {
+		if r := []rune(w); len(out) < 2 && len(r) > 0 {
+			out = append(out, r[0])
 		}
 	}
-	return out, nil
+	return strings.ToUpper(string(out))
 }
 
 // next says which group an item belongs to for the person, and what happens next, in a few words.
@@ -183,43 +313,84 @@ func (v *view) holder(it workitem.Item) string {
 	case it.AssigneeID != "":
 		return v.show(playbook.Field{Type: "person"}, it.AssigneeID)
 	case it.Team != "":
-		var name string
-		_ = v.tx.QueryRow(v.ctx, `SELECT name FROM roles WHERE tenant_id = current_tenant() AND key = $1`, it.Team).Scan(&name)
-		return cmp.Or(name, it.Team) + " team"
+		return cmp.Or(v.roles[it.Team], it.Team) + " team"
 	}
 	return "nobody yet"
 }
 
-// firstWords gives untitled items something to recognise them by: the start of the message that
-// started them.
-func (v *view) firstWords(items []workitem.Item) (map[string]string, error) {
-	var refs []string
-	byRef := map[string]string{}
-	for _, it := range items {
-		if it.Title == "" && it.StartedRef != "" {
-			refs = append(refs, it.StartedRef)
-			byRef[it.StartedRef] = it.ID
+// rowExtra is what a card shows besides the item itself.
+type rowExtra struct {
+	firstWords string // the start of the message that started it, for untitled items
+	preview    string // the start of the latest message in its thread
+	ago        string // how long since it last changed, e.g. "3h"
+}
+
+// rowExtras finds, for every item, the start of its first and latest messages and when it last
+// changed, in three queries.
+func (v *view) rowExtras(items []workitem.Item) (map[string]rowExtra, error) {
+	out := map[string]rowExtra{}
+	short := func(s string) string {
+		s = strings.Join(strings.Fields(s), " ")
+		if r := []rune(s); len(r) > 70 {
+			s = string(r[:70]) + "…"
 		}
-	}
-	out := map[string]string{}
-	if len(refs) == 0 {
-		return out, nil
+		return s
 	}
 	rows, _ := v.tx.Query(v.ctx, `
-		SELECT id::text, text FROM messages WHERE tenant_id = current_tenant() AND id::text = ANY($1)`, refs)
-	list, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ ID, Text string }])
+		SELECT DISTINCT ON (work_item_id) work_item_id::text, text FROM messages
+		WHERE tenant_id = current_tenant() AND work_item_id IS NOT NULL AND text <> ''
+		ORDER BY work_item_id, sent_at DESC`)
+	latest, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ ID, Text string }])
 	if err != nil {
 		return nil, err
 	}
-	for _, m := range list {
-		if text := strings.Join(strings.Fields(m.Text), " "); text != "" {
-			if r := []rune(text); len(r) > 60 {
-				text = string(r[:60]) + "…"
-			}
-			out[byRef[m.ID]] = text
-		}
+	for _, m := range latest {
+		x := out[m.ID]
+		x.preview = short(m.Text)
+		out[m.ID] = x
+	}
+	rows, _ = v.tx.Query(v.ctx, `
+		SELECT w.id::text, m.text FROM work_items w JOIN messages m ON m.tenant_id = w.tenant_id AND m.id::text = w.started_ref
+		WHERE w.tenant_id = current_tenant()`)
+	first, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ ID, Text string }])
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range first {
+		x := out[m.ID]
+		x.firstWords = short(m.Text)
+		out[m.ID] = x
+	}
+	rows, _ = v.tx.Query(v.ctx, `SELECT id::text, updated_at FROM work_items WHERE tenant_id = current_tenant()`)
+	changed, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct {
+		ID string
+		At time.Time
+	}])
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	for _, c := range changed {
+		x := out[c.ID]
+		x.ago = ago(now.Sub(c.At), c.At.In(v.c.tenant.Zone))
+		out[c.ID] = x
 	}
 	return out, nil
+}
+
+// ago says how long ago something happened, briefly: "now", "5m", "3h", "2d", or the date.
+func ago(d time.Duration, at time.Time) string {
+	switch {
+	case d < time.Minute:
+		return "now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	case d < 7*24*time.Hour:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
+	return at.Format("2 Jan")
 }
 
 // links lists the item this one is part of, then the items it started.

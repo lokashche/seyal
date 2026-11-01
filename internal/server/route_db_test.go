@@ -114,3 +114,47 @@ func TestLetSeyalDecideWithAI(t *testing.T) {
 		t.Errorf("routing request = %+v", seen)
 	}
 }
+
+// TestMyWorkFolders: My Work shows folders with counts and a filter per process; the list shows the
+// chosen folder, and links keep the choice.
+func TestMyWorkFolders(t *testing.T) {
+	s := newSite(t)
+	s.twoProcesses()
+	base := "/t/" + s.slug
+	a := s.logIn(arjun)
+	_, home, _ := s.get(a, base+"/")
+	jobPV := regexp.MustCompile(`value="([^"]+)" form="tell-form" data-name="Job evaluation"`).FindStringSubmatch(home)[1]
+	reqPV := regexp.MustCompile(`value="([^"]+)" form="tell-form" data-name="Internal request"`).FindStringSubmatch(home)[1]
+	for _, m := range []struct{ pv, text string }{{jobPV, "Work for Sundaram"}, {jobPV, "Work for Ganga"}, {reqPV, "Need a new chair"}} {
+		if code, _, _ := s.post(a, base+"/tell", url.Values{"playbook": {m.pv}, "text": {m.text}}, nil); code != http.StatusSeeOther {
+			t.Fatalf("start %q = %d", m.text, code)
+		}
+	}
+
+	_, home, _ = s.get(a, base+"/")
+	folder := regexp.MustCompile(`<a class="fold" href="[^"]*f=turn[^"]*" aria-current="true"><svg[^>]*>.*?</svg><span class="ft">My turn</span><span class="n">3</span>`)
+	if !folder.MatchString(home) {
+		t.Fatalf("My turn should be the open folder, with 3:\n%s", problem(home))
+	}
+	for _, want := range []string{"<span class=\"ft\">All open work</span><span class=\"n\">3</span>",
+		"<span class=\"ft\">Job evaluation</span><span class=\"n\">2</span>", "<span class=\"ft\">Internal request</span><span class=\"n\">1</span>",
+		"Seyal is asking: Which client is this for?", "“Work for Ganga”", `class="avatar sm" title="With Arjun Mehta">AM</span>`} {
+		if !strings.Contains(html.UnescapeString(home), want) {
+			t.Errorf("My Work is missing %q", want)
+		}
+	}
+
+	// A process shows all its open work, whatever folder was open, so its count matches the list; and
+	// links keep the choice.
+	for _, q := range []string{"/?p=internal-request", "/?f=turn&p=internal-request"} {
+		_, list, _ := s.get(a, base+q)
+		if strings.Contains(list, "Work for Sundaram") || !strings.Contains(list, "Need a new chair") ||
+			!strings.Contains(list, `<b>Internal request</b><span class="count">1</span>`) ||
+			!strings.Contains(list, "?f=all&amp;p=internal-request") {
+			t.Errorf("%s should show only the request, and keep itself on links:\n%s", q, problem(list))
+		}
+	}
+	if _, list, _ := s.get(a, base+"/?f=nonsense&s=due"); !strings.Contains(list, `aria-current="true">Due</a>`) {
+		t.Errorf("sorting by due date should be marked:\n%s", problem(list))
+	}
+}

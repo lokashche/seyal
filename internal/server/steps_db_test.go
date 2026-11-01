@@ -32,7 +32,7 @@ transitions:
 `
 
 // TestStepsOnScreen: the starter is asked only the first step's question; "send to ops" puts the
-// item under "For your team" for everyone in Ops, the item says who has it, and Ops is asked its own
+// item under "For my team" for everyone in Ops, the item says who has it, and Ops is asked its own
 // question.
 func TestStepsOnScreen(t *testing.T) {
 	s := newSite(t)
@@ -66,8 +66,8 @@ func TestStepsOnScreen(t *testing.T) {
 
 	p := s.logIn(priya) // ops
 	_, home, _ = s.get(p, base+"/")
-	if !strings.Contains(home, "For your team") {
-		t.Errorf("Priya (ops) doesn't see the item under For your team")
+	if !strings.Contains(home, "<b>For my team</b>") || !strings.Contains(home, "Something for Ravi") {
+		t.Errorf("Priya (ops) doesn't see the item under For my team:\n%s", problem(home))
 	}
 	_, page, _ = s.get(p, item)
 	page = html.UnescapeString(page)
@@ -75,13 +75,13 @@ func TestStepsOnScreen(t *testing.T) {
 		!strings.Contains(page, "What amount?") {
 		t.Errorf("after send to ops, the item should be with the Operations team and ask Ops' question:\n%s", problem(page))
 	}
-	if _, home, _ = s.get(a, base+"/"); strings.Contains(home, "For your team") {
-		t.Error("Arjun (sales) sees it under For your team")
+	if _, home, _ = s.get(a, base+"/"); !strings.Contains(home, `<span class="ft">For my team</span></a>`) {
+		t.Error("Arjun (sales) has something under For my team")
 	}
 }
 
 // TestLinkedWorkOnScreen: with the shipped samples, a job for new work shows its study under "Linked
-// work", the study shows the job it is part of, and the study is under "For your team" for Ops.
+// work", the study shows the job it is part of, and the study is under "For my team" for Ops.
 func TestLinkedWorkOnScreen(t *testing.T) {
 	s := newSiteWith(t, "../../examples/playbooks")
 	base := "/t/" + s.slug
@@ -117,9 +117,9 @@ func TestLinkedWorkOnScreen(t *testing.T) {
 	}
 
 	p := s.logIn(priya)
-	if _, home, _ := s.get(p, base+"/"); !strings.Contains(home, "For your team") || !strings.Contains(home, "requirement study") ||
+	if _, home, _ := s.get(p, base+"/"); !strings.Contains(home, "<b>For my team</b>") || !strings.Contains(home, "requirement study") ||
 		!strings.Contains(html.UnescapeString(home), "Seyal is asking: How will we do this work?") {
-		t.Errorf("Priya (ops) should see the study under For your team, with Seyal's question:\n%s", problem(home))
+		t.Errorf("Priya (ops) should see the study under For my team, with Seyal's question:\n%s", problem(home))
 	}
 	_, page, _ = s.get(p, study)
 	if !strings.Contains(page, "Part of</span>") || !strings.Contains(page, "How will we do this work?") {

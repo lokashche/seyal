@@ -1,10 +1,15 @@
 {{define "title"}}Settings · Seyal{{end}}
 {{define "content"}}
-{{template "bar" .}}
+{{template "banners" .}}
 <div class="settings">
-  <nav class="tabs" aria-label="Settings">
-    <a class="back-link" href="/t/{{.Slug}}/">← My Work</a>
-    {{range .Data.Tabs}}<a href="{{.URL}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}
+  <nav class="pane tabs" aria-label="Settings">
+    {{template "brand" .}}
+    <a class="fold back-link" href="/t/{{.Slug}}/">{{icon "back"}}<span class="ft">My Work</span></a>
+    <div class="folders">
+      <div class="grp">Settings</div>
+      {{range .Data.Tabs}}<a class="fold" href="{{.URL}}"{{if .Current}} aria-current="page"{{end}}><span class="ft">{{.Label}}</span></a>{{end}}
+    </div>
+    {{template "me" (dict "S" $ "Settings" false)}}
   </nav>
   <section class="panel">
     {{if eq .Data.Tab "people"}}{{template "people" .}}
