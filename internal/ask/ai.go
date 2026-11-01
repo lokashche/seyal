@@ -192,7 +192,8 @@ func (c *conversation) understand(text, pendingKey string) *proposal {
 		return nil
 	}
 	resp, err := c.env.AI.Call(c.ctx, c.tx, ai.Understand,
-		ai.Request{Instructions: instr, Input: in, Schema: proposalSchema, MaxTokens: 1024},
+		// Room for models that think before answering; only what is used is paid for.
+		ai.Request{Instructions: instr, Input: in, Schema: proposalSchema, MaxTokens: 4096},
 		ai.Link{PersonID: c.person, ItemID: c.reply.Item.ID})
 	if err != nil {
 		return nil

@@ -314,9 +314,13 @@ func (v *view) item(id string) (*itemView, error) {
 	}
 
 	if !iv.Closed {
-		if f, err := ask.Pending(v.ctx, v.tx, it); err != nil {
+		f, offer, err := ask.Pending(v.ctx, v.tx, it)
+		switch {
+		case err != nil:
 			return nil, err
-		} else if f != nil {
+		case offer != "":
+			iv.Quick = []string{"yes", "no"} // "add it as a new entry?"
+		case f != nil:
 			iv.Quick = v.quick(*f)
 		}
 		for _, name := range engine.Actions(p, engine.Item{State: it.State, Fields: it.Fields}) {

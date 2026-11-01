@@ -58,7 +58,7 @@ func TestFromEnv(t *testing.T) {
 		}
 	}
 	_, err = FromEnv(env(map[string]string{"SEYAL_AI_DRAFT": "nosuchprovider:x"}))
-	if err == nil || !strings.Contains(err.Error(), "available: fake") {
+	if err == nil || !strings.Contains(err.Error(), "available: compat, fake, groq, openai") {
 		t.Errorf("unknown provider error = %v, want the list of available providers", err)
 	}
 }

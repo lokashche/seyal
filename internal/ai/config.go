@@ -10,8 +10,8 @@ import (
 	"sync"
 )
 
-// Providers turn a model name into a Model. Each provider registers itself here; none is built in
-// yet except "fake" (tests and demos), so AI stays off until a provider is added and configured.
+// Providers turn a model name into a Model. Each provider registers itself here: "fake" (tests and
+// demos) and the OpenAI-style services in openai.go. AI stays off until a purpose is configured.
 var (
 	providersMu sync.Mutex
 	providers   = map[string]func(model string, get func(string) string) (Model, error){

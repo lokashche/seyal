@@ -56,7 +56,7 @@ func Process(ctx context.Context, tx pgx.Tx, setup *ai.Setup, templates *playboo
 	var res Result
 	for try := 0; try < 2; try++ {
 		resp, err := setup.Call(ctx, tx, ai.Draft,
-			ai.Request{Instructions: instr, Input: input, Schema: schema, MaxTokens: 8000},
+			ai.Request{Instructions: instr, Input: input, Schema: schema, MaxTokens: 16000},
 			ai.Link{PersonID: personID})
 		if err != nil {
 			return Result{}, err

@@ -160,16 +160,15 @@ func Converse(ctx context.Context, tx pgx.Tx, env Env, itemID string, in channel
 	return c.reply, nil
 }
 
-// Pending returns the field Seyal is waiting for an answer to on this item, or nil.
-// tx must come from db.WithTenant.
-func Pending(ctx context.Context, tx pgx.Tx, it workitem.Item) (*playbook.Field, error) {
+// Pending returns the field Seyal is waiting for an answer to on this item, or nil, and the name it
+// offered to add as a new entry if the question is that yes/no offer. tx must come from db.WithTenant.
+func Pending(ctx context.Context, tx pgx.Tx, it workitem.Item) (*playbook.Field, string, error) {
 	p, err := workitem.PlaybookFor(ctx, tx, it)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	c := &conversation{ctx: ctx, tx: tx, p: p, reply: Reply{Item: it}}
-	f, _, err := c.pending()
-	return f, err
+	return c.pending()
 }
 
 type conversation struct {
