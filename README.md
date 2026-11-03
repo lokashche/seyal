@@ -31,10 +31,18 @@ must be on your PATH), and again after pulling or changing code.
 ## Develop
 
 ```sh
+go run ./cmd/seyal dev serve      # run the app; it rebuilds and restarts by itself when you save
 go run ./cmd/seyal dev test       # quick tests
 go run ./cmd/seyal dev test-db    # database tests (needs "dev up")
 go run ./cmd/seyal check          # check the sample processes and lists
 ```
+
+`dev serve` watches the Go code, templates, styles, scripts and migrations. After you save, it builds
+again (a few seconds), applies new migrations and restarts; refresh the browser to see the change. If
+the build fails, the error is shown and the previous version keeps running. Templates and styles are
+built into the program, so plain `serve` needs a restart to show changes; `dev serve` does that for
+you. To try it on a phone on the same Wi-Fi: `go run ./cmd/seyal dev serve --lan` (it prints the
+address to open; plain http, so voice notes and "install app" won't work there).
 
 Processes and lists are data (YAML), not code: see `examples/`. Each business keeps its own in its
 database and changes them in Settings.

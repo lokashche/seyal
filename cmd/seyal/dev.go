@@ -35,6 +35,8 @@ func runDev(args []string, out io.Writer) error {
 		return runCmd(out, "go", "test", "-tags=db", "-count=1", "./...")
 	case "reset":
 		return devReset(os.Stdin, out)
+	case "serve":
+		return devServe(args[1:], out)
 	default:
 		usage(out)
 		return fmt.Errorf("dev: unknown subcommand %q", args[0])
