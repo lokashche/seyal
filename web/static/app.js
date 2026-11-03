@@ -10,6 +10,37 @@
   document.addEventListener("DOMContentLoaded", settle);
   document.addEventListener("htmx:afterSettle", settle);
 
+  // --- Chat | Details on phones ---------------------------------------------------------------
+  // A work item shows its chat or its details. The choice is kept for that item only, so saving a
+  // detail comes back to the details, and opening another item starts with its chat.
+
+  function showPane(details) {
+    var app = document.querySelector(".app.has-item");
+    if (!app) return;
+    app.classList.toggle("show-details", details);
+    app.querySelectorAll("[data-show]").forEach(function (b) {
+      b.setAttribute("aria-pressed", String((b.getAttribute("data-show") === "details") === details));
+    });
+    if (!details) settle();
+  }
+  function restorePane() {
+    var kept = null;
+    try { kept = sessionStorage.getItem("seyal-details"); } catch (_) { /* storage blocked: start with the chat */ }
+    showPane(kept === location.pathname);
+  }
+  document.addEventListener("DOMContentLoaded", restorePane);
+  document.addEventListener("htmx:afterSettle", restorePane);
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-show]");
+    if (!b) return;
+    var details = b.getAttribute("data-show") === "details";
+    showPane(details);
+    try {
+      if (details) sessionStorage.setItem("seyal-details", location.pathname);
+      else sessionStorage.removeItem("seyal-details");
+    } catch (_) { /* fine without it */ }
+  });
+
   document.addEventListener("keydown", function (e) {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && e.target.matches(".composer textarea")) {
       e.preventDefault();

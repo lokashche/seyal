@@ -34,10 +34,11 @@ import (
 
 // screen is what the three-pane page shows. Item is nil on the Tell Seyal view.
 type screen struct {
-	Work    *myWork
-	Current string // id of the open item
-	Tell    *tellView
-	Item    *itemView
+	Work     *myWork
+	Current  string // id of the open item
+	Tell     *tellView
+	Item     *itemView
+	TellView bool // phones show Tell Seyal on its own, not the list (?view=tell, or after sending)
 }
 
 type row struct {
@@ -456,6 +457,7 @@ func (s *Server) show(w http.ResponseWriter, r *http.Request, c *call, itemID st
 			return err
 		}
 		if itemID == "" {
+			sc.TellView = r.Method == http.MethodPost || r.URL.Query().Get("view") == "tell"
 			sc.Tell, err = v.tell()
 			for _, m := range more {
 				m(&sc)

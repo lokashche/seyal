@@ -1,10 +1,9 @@
 {{define "title"}}{{with .Data.Item}}{{.Item.Number}} · {{end}}Seyal{{end}}
 {{define "content"}}
-{{template "banners" .}}
-<div class="app{{if .Data.Item}} has-item{{else}}{{with .Data.Tell}}{{if gt (len .Processes) 1}} choosing{{end}}{{end}}{{end}}">
+<div class="app{{if .Data.Item}} has-item{{else if .Data.TellView}} tell-view{{end}}">
   <nav class="pane folders-pane" aria-label="Folders">
     {{template "brand" .}}
-    <a class="tell-btn{{if not .Data.Item}} current{{end}}" href="/t/{{.Slug}}/{{.Data.Work.Query}}">{{icon "plus"}}Tell Seyal</a>
+    <a class="tell-btn{{if not .Data.Item}} current{{end}}" href="/t/{{.Slug}}/{{.Data.Work.Query}}&amp;view=tell">{{icon "plus"}}Tell Seyal</a>
     <div class="folders">
       <div class="grp">My work</div>
       {{range .Data.Work.Folders}}<a class="fold" href="/t/{{$.Slug}}/{{.URL}}"{{if .Current}} aria-current="true"{{end}}>{{icon .Key}}<span class="ft">{{.Title}}</span>{{if .Count}}<span class="n">{{.Count}}</span>{{end}}</a>{{end}}
@@ -35,10 +34,13 @@
   </section>
   {{if .Data.Item}}{{template "item" .}}{{else}}{{template "tell" .}}{{end}}
 </div>
+{{$on := "work"}}{{if .Data.TellView}}{{$on = "tell"}}{{end}}
+{{template "tabbar" (dict "S" . "On" $on "Q" .Data.Work.Query)}}
 {{end}}
 {{define "tell"}}
 <section class="pane main-pane" aria-label="Tell Seyal">
   <div class="pane-h"><b>Tell Seyal</b></div>
+  {{template "banners" .}}
   <div class="thread" id="thread">
     {{with .Data.Tell}}{{with .Pending}}
     <div class="msg me"><span class="who">{{$.Session.Name}}</span>{{with .Text}}<p>{{.}}</p>{{end}}{{if .Files}}<p class="why">{{.Files}} file{{if gt .Files 1}}s{{end}} attached</p>{{end}}</div>
@@ -62,7 +64,7 @@
     {{if eq (len .Processes) 1}}{{range .Processes}}<input type="hidden" name="playbook" value="{{.ID}}">{{end}}{{end}}
     <label for="msg" class="ctl-label">Message</label>
     <textarea id="msg" name="text" placeholder="{{.Placeholder}}"></textarea>
-    {{if gt (len .Processes) 1}}<p class="why chosen">Starting: <b data-chosen>Seyal decides</b> · or choose a process on the right</p>{{end}}
+    {{if gt (len .Processes) 1}}<p class="why chosen">Starting: <b data-chosen>Seyal decides</b> · or choose a process under “What you can start”</p>{{end}}
     {{template "tools"}}
   </form>
   {{else}}
@@ -118,11 +120,19 @@
 {{end}}
 
 {{define "item"}}{{with .Data.Item}}
+{{/* Phones show the chat or the details, one at a time (app.js switches). */}}
+<div class="item-bar">
+  <a class="back" href="/t/{{$.Slug}}/{{$.Data.Work.Query}}">{{icon "back"}}My Work</a>
+  <span class="switch" role="group" aria-label="Show">
+    <button type="button" data-show="chat" aria-pressed="true">Chat</button>
+    <button type="button" data-show="details" aria-pressed="false">Details</button>
+  </span>
+</div>
 <section class="pane main-pane" aria-label="Thread">
   <div class="pane-h">
-    <a class="back" href="/t/{{$.Slug}}/{{$.Data.Work.Query}}">← My Work</a>
     <b>{{.Heading}}</b><small>{{.Item.Number}}</small>
   </div>
+  {{template "banners" $}}
   <div class="thread" id="thread">
     {{range .Thread}}
       {{if eq .Kind "evt"}}
@@ -198,7 +208,7 @@
     </details>
 
     {{with .Slots}}
-    <details class="sec" open><summary>Approvals</summary>
+    <details class="sec first-on-phones" open><summary>Approvals</summary>
     <div class="appr">
       {{range .}}
       <div class="ap">
@@ -226,7 +236,7 @@
     {{end}}
 
     {{with .Actions}}
-    <details class="sec" open><summary>Actions</summary>
+    <details class="sec first-on-phones" open><summary>Actions</summary>
     <div class="acts">
       {{range .}}
         {{if .NeedsReason}}

@@ -100,7 +100,7 @@ func New(cfg Config) (*Server, error) {
 			return m, nil
 		},
 	}
-	for _, name := range []string{"home", "login", "app", "offline", "settings", "password", "report"} {
+	for _, name := range []string{"home", "login", "app", "offline", "settings", "password", "me", "report"} {
 		t, err := template.New(name).Funcs(funcs).ParseFS(web.Files, "templates/layout.html", "templates/"+name+".html")
 		if err != nil {
 			return nil, err
@@ -156,6 +156,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /t/{slug}/login", s.loginPage)
 	mux.HandleFunc("POST /t/{slug}/login", s.login)
 	mux.HandleFunc("POST /t/{slug}/logout", s.authed(s.logout))
+	mux.HandleFunc("POST /t/{slug}/logout-everywhere", s.authed(s.logoutEverywhere))
+	mux.HandleFunc("GET /t/{slug}/me", s.authed(s.mePage))
 	mux.HandleFunc("GET /t/{slug}/password", s.authed(s.passwordPage))
 	mux.HandleFunc("POST /t/{slug}/password", s.authed(s.changePassword))
 	mux.HandleFunc("GET /t/{slug}/{$}", s.authed(s.tellPage))
@@ -404,11 +406,16 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request, c *call) {
 		s.fail(w, r, err)
 		return
 	}
+	s.clearSession(w, c.tenant.Slug)
+	http.Redirect(w, r, "/t/"+c.tenant.Slug+"/login", http.StatusSeeOther)
+}
+
+// clearSession removes the login cookie for one business address.
+func (s *Server) clearSession(w http.ResponseWriter, slug string) {
 	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Value: "", Path: "/t/" + c.tenant.Slug + "/", MaxAge: -1,
+		Name: cookieName, Value: "", Path: "/t/" + slug + "/", MaxAge: -1,
 		HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode,
 	})
-	http.Redirect(w, r, "/t/"+c.tenant.Slug+"/login", http.StatusSeeOther)
 }
 
 // render runs a page template into a buffer first, so a template error never sends half a page.

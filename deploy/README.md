@@ -32,6 +32,21 @@ Use SSH keys, not passwords, to log in to the server.
 3. **Public hostname**: subdomain `seyal`, your domain, service type **HTTP**, URL **`seyal:8080`**.
    Cloudflare creates the DNS record by itself.
 
+(**Already have a tunnel** running elsewhere on your network, e.g. for a Proxmox server? Don't create
+another one. Leave `COMPOSE_PROFILES` empty in step 3, publish Seyal's port on the server's LAN
+address with a `deploy/compose.override.yaml` (Compose reads it by itself; it isn't in the repository):
+
+```yaml
+services:
+  seyal:
+    ports:
+      - "<server-lan-ip>:8080:8080"
+```
+
+and in your existing tunnel add a public hostname with service **HTTP**, URL `<server-lan-ip>:8080`.
+Docker opens published ports past ufw, so other machines on the LAN can reach port 8080 too;
+logins still only work over HTTPS.)
+
 (Without Cloudflare: point an **A record** `seyal.<your-domain>` at the server's IP, set
 `COMPOSE_PROFILES=caddy`, `SEYAL_DOMAIN` and `ACME_EMAIL` in `.env` in step 3, and open ports 80/443.)
 
@@ -40,6 +55,7 @@ Use SSH keys, not passwords, to log in to the server.
 ```sh
 git clone https://github.com/<owner>/seyal.git ~/seyal     # or unpack a release download
 cd ~/seyal/deploy
+mkdir -p private   # the business's set-up file goes here (if Docker makes it, it belongs to root)
 cp .env.example .env && chmod 600 .env
 nano .env        # CLOUDFLARE_TUNNEL_TOKEN, long random passwords (openssl rand -base64 24 | tr -d '/+='), AI keys
 ```

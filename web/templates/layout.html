@@ -36,10 +36,21 @@
   {{if and .Admin $.Settings}}<a class="fold" href="/t/{{.Slug}}/settings/people">{{icon "settings"}}<span class="ft">Settings</span></a>{{end}}
   <div class="me-row">
     <span class="avatar" aria-hidden="true">{{initials .Session.Name}}</span>
-    <a class="me-name" href="/t/{{.Slug}}/password" title="{{.Session.Name}}: change your password">{{.Session.Name}}</a>
+    <a class="me-name" href="/t/{{.Slug}}/me" title="Your profile and password">{{.Session.Name}}</a>
     <form method="post" action="/t/{{.Slug}}/logout"><button class="icon-btn" title="Log out" aria-label="Log out">{{icon "logout"}}</button></form>
   </div>
 </div>
+{{end}}{{end}}
+
+{{/* The bar at the bottom on phones. "tabbar" takes (dict "S" <the page> "On" <work|tell|settings|me>
+     "Q" <My Work's query, to come back to the same list>). Computers use the left column instead. */}}
+{{define "tabbar"}}{{with .S}}
+<nav class="tabbar" aria-label="Sections">
+  <a href="/t/{{.Slug}}/{{$.Q}}"{{if eq $.On "work"}} aria-current="page"{{end}}>{{icon "all"}}My Work</a>
+  <a href="/t/{{.Slug}}/?view=tell"{{if eq $.On "tell"}} aria-current="page"{{end}}>{{icon "plus"}}Tell Seyal</a>
+  {{if .Admin}}<a href="/t/{{.Slug}}/settings/people"{{if eq $.On "settings"}} aria-current="page"{{end}}>{{icon "settings"}}Settings</a>{{end}}
+  <a href="/t/{{.Slug}}/me"{{if eq $.On "me"}} aria-current="page"{{end}}>{{icon "person"}}Me</a>
+</nav>
 {{end}}{{end}}
 
 {{define "banners"}}

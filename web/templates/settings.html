@@ -1,6 +1,5 @@
 {{define "title"}}Settings · Seyal{{end}}
 {{define "content"}}
-{{template "banners" .}}
 <div class="settings">
   <nav class="pane tabs" aria-label="Settings">
     {{template "brand" .}}
@@ -12,6 +11,7 @@
     {{template "me" (dict "S" $ "Settings" false)}}
   </nav>
   <section class="panel">
+    {{template "banners" .}}
     {{if .Data.Import}}{{template "import" .}}
     {{else if eq .Data.Tab "people"}}{{template "people" .}}
     {{else if eq .Data.Tab "roles"}}{{template "roles" .}}
@@ -24,6 +24,7 @@
     {{else}}{{template "masterdata" .}}{{end}}
   </section>
 </div>
+{{template "tabbar" (dict "S" . "On" "settings" "Q" "")}}
 {{end}}
 
 {{define "people"}}{{with .Data.People}}

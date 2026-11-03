@@ -250,6 +250,22 @@ func Logout(ctx context.Context, tx pgx.Tx, token string) error {
 	return err
 }
 
+// LogoutEverywhere ends all of a person's sessions, on every device (e.g. a phone was lost).
+// tx must come from db.WithTenant.
+func LogoutEverywhere(ctx context.Context, tx pgx.Tx, personID string) error {
+	tag, err := tx.Exec(ctx, `
+		UPDATE sessions SET ended_at = now()
+		WHERE tenant_id = current_tenant() AND person_id::text = $1 AND ended_at IS NULL`, personID)
+	if err != nil {
+		return fmt.Errorf("auth: end sessions: %w", err)
+	}
+	_, err = ledger.Append(ctx, tx, ledger.Event{
+		Kind: "person.logged_out_everywhere", SubjectType: "person", SubjectID: personID,
+		Payload: map[string]int64{"sessions": tag.RowsAffected()},
+	}.By(ledger.PersonActor(personID)))
+	return err
+}
+
 func roles(ctx context.Context, tx pgx.Tx, personID string) ([]string, error) {
 	rows, _ := tx.Query(ctx, `
 		SELECT role_key FROM person_roles

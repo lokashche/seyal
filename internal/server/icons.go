@@ -18,6 +18,8 @@ var icons = map[string]string{
 	"logout":   `<path d="M6.5 2.75H4a1 1 0 0 0-1 1v8.5a1 1 0 0 0 1 1h2.5M10 5.25 12.75 8 10 10.75M12.75 8H6.25"/>`,
 	"back":     `<path d="M12.75 8h-9.5M7 4.25 3.25 8 7 11.75"/>`,
 	"download": `<path d="M8 2.75v7.5M4.75 7 8 10.25 11.25 7M3 13.25h10"/>`,
+	"person":   `<circle cx="8" cy="5.5" r="2.5"/><path d="M3 13.5c.5-2.7 2.5-4.2 5-4.2s4.5 1.5 5 4.2"/>`,
+	"key":      `<circle cx="5.5" cy="10.5" r="2.75"/><path d="M7.5 8.5l5.25-5.25M10.75 5.25l1.75 1.75M9.25 6.75l1.25 1.25"/>`,
 }
 
 // icon returns the named icon as inline SVG, hidden from screen readers (the text beside it says

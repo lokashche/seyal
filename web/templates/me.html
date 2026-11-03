@@ -1,0 +1,26 @@
+{{define "title"}}Me · Seyal{{end}}
+{{define "content"}}
+<div class="center">
+  <div class="stack">
+  <section class="card profile" aria-label="You">
+    <div class="who">
+      <span class="avatar lg" aria-hidden="true">{{initials .Session.Name}}</span>
+      <span><b>{{.Session.Name}}</b><span class="r">{{.Data.Email}}</span><span class="r">{{.Business}}</span></span>
+    </div>
+    <div>
+      <span class="ctl-label">Your roles</span>
+      <p class="roles">{{range $i, $r := .Data.Roles}}{{if $i}} · {{end}}{{$r}}{{else}}<span class="why">None yet</span>{{end}}</p>
+    </div>
+    <p class="why">An admin changes your name, email and roles in Settings → People.</p>
+  </section>
+  <section class="card login-actions" aria-label="Your login">
+    <a class="btn ghost" href="/t/{{.Slug}}/password">{{icon "key"}}Change password</a>
+    <form method="post" action="/t/{{.Slug}}/logout"><button class="btn ghost">{{icon "logout"}}Log out</button></form>
+    <form method="post" action="/t/{{.Slug}}/logout-everywhere"><button class="btn warn">Log out on all devices</button></form>
+    <p class="why">“All devices” ends every login: this one and any other phone or computer, e.g. one that was lost.</p>
+  </section>
+  <a class="back-home" href="/t/{{.Slug}}/">← Back to My Work</a>
+  </div>
+</div>
+{{template "tabbar" (dict "S" . "On" "me" "Q" "")}}
+{{end}}
