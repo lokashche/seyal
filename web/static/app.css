@@ -207,6 +207,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .panel h2 { font-size: 20px; }
 .callout { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
 .callout p { margin: 0; }
+.invite { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.invite .who { font-weight: 600; min-width: 8em; }
+.invite .link { flex: 1 1 260px; min-width: 0; font: 12.5px var(--f-mono); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; background: var(--panel); color: var(--ink); }
 .rows { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 10px; }
 .rows li { padding: 10px 14px; }
 .rows li + li { border-top: 1px solid var(--line); }

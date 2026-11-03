@@ -19,15 +19,10 @@ func TestOwnPassword(t *testing.T) {
 	s := newSite(t)
 	base := "/t/" + s.slug
 
-	// Lakshmi makes Priya a new password; Priya must choose her own first.
-	_, page, _ := s.post(s.logIn(lakshmi), base+"/settings/people/"+s.people["priya"]+"/password", nil, nil)
-	m := shownPassword.FindStringSubmatch(page)
-	if m == nil || !strings.Contains(page, "They choose their own when they log in with it") {
-		t.Fatalf("new password notice:\n%s", page)
-	}
-	temporary := m[1]
-	s.passwords[priya] = temporary
+	// Priya has a password an admin made (before links, D62); she must choose her own first.
+	temporary := s.temporaryPassword(priya)
 	p := s.logIn(priya)
+	var page string
 	if code, _, h := s.get(p, base+"/"); code != http.StatusSeeOther || h.Get("Location") != base+"/password" {
 		t.Fatalf("with a temporary password, My Work = %d to %q; want the password page", code, h.Get("Location"))
 	}

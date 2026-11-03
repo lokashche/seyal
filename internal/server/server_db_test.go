@@ -25,8 +25,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"seyal/internal/ai"
+	"seyal/internal/auth"
 	"seyal/internal/channel"
 	"seyal/internal/db"
+	"seyal/internal/ledger"
 	"seyal/internal/media"
 	"seyal/internal/playbook"
 	"seyal/internal/server"
@@ -41,6 +43,8 @@ type site struct {
 	slug      string
 	tenant    string
 	store     media.Disk
+	owner     *pgxpool.Pool // for tests that must change what the app may not (e.g. age a link)
+	app       *pgxpool.Pool
 	passwords map[string]string // email → password
 	people    map[string]string // demo key → person id
 	ai        *ai.Setup         // AI is off unless a test sets a (fake) model
@@ -75,7 +79,7 @@ func newSiteWith(t *testing.T, playbooks string) *site {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &site{t: t, slug: f.Business.Slug, tenant: sum.TenantID, store: media.Disk{Dir: t.TempDir()},
+	s := &site{t: t, slug: f.Business.Slug, tenant: sum.TenantID, store: media.Disk{Dir: t.TempDir()}, owner: owner, app: app,
 		passwords: map[string]string{}, people: sum.People, ai: &ai.Setup{USDtoINR: 88}}
 	for _, email := range []string{arjun, priya, lakshmi} {
 		if s.passwords[email], err = setup.NewPassword(ctx, app, sum.TenantID, email); err != nil {
@@ -134,6 +138,46 @@ func (s *site) logIn(email string) *http.Client {
 		s.t.Fatalf("login as %s = %d to %q", email, code, h.Get("Location"))
 	}
 	return c
+}
+
+var shownLink = regexp.MustCompile(`/welcome/([A-Za-z0-9_-]{43})`)
+
+// useLink opens the set-your-password link shown on a page, chooses password, and returns the
+// browser, now logged in.
+func (s *site) useLink(page, email, password string) *http.Client {
+	s.t.Helper()
+	m := shownLink.FindStringSubmatch(page)
+	if m == nil {
+		s.t.Fatalf("no link on the page:\n%s", problem(page))
+	}
+	c := s.browser()
+	code, body, h := s.post(c, "/t/"+s.slug+"/welcome/"+m[1], url.Values{"next": {password}, "again": {password}}, nil)
+	if code != http.StatusSeeOther || h.Get("Location") != "/t/"+s.slug+"/" {
+		s.t.Fatalf("using the link = %d to %q:\n%s", code, h.Get("Location"), body)
+	}
+	s.passwords[email] = password
+	return c
+}
+
+// temporaryPassword gives someone a password made by an admin, the way it worked before links
+// (people on running servers may still have one), and returns it.
+func (s *site) temporaryPassword(email string) string {
+	s.t.Helper()
+	var password string
+	err := db.WithTenant(context.Background(), s.app, s.tenant, func(tx pgx.Tx) error {
+		var id string
+		if err := tx.QueryRow(context.Background(), `SELECT id::text FROM persons WHERE login_email = $1`, email).Scan(&id); err != nil {
+			return err
+		}
+		var err error
+		password, err = auth.NewPassword(context.Background(), tx, id, ledger.PersonActor(s.people["lakshmi"]))
+		return err
+	})
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	s.passwords[email] = password
+	return password
 }
 
 // send posts a form and expects to be sent back to the item, then returns the item page.

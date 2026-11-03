@@ -15,7 +15,7 @@ import (
 
 // Changing your own password: from your name in the left column, or straight after logging in with a
 // password an admin made (a temporary one). Like the login page, this is account plumbing, not a
-// process screen. There is no "forgot password" by email yet: an admin makes a new (temporary) one.
+// process screen. A forgotten password: an admin makes a new set-your-password link (welcome.go).
 
 func (s *Server) passwordPage(w http.ResponseWriter, r *http.Request, c *call) {
 	s.render(w, r, http.StatusOK, "password", c.page(c.session.MustChange))

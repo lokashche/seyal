@@ -82,9 +82,9 @@ docker compose run --rm seyal import private/<business>.yaml
 docker compose run --rm seyal set-password --business <slug> --email <your-email>
 ```
 
-Open `https://seyal.<your-domain>/t/<slug>/`, log in, and add the others in Settings → People (each
-gets a first password, shown once, and chooses their own at first login). Bring in lists from a
-spreadsheet in Settings → Lists.
+Open `https://seyal.<your-domain>/t/<slug>/`, log in, and add the others in Settings → People: each
+gets a one-time link (24 hours) to send them, where they choose their own password. Someone who forgot
+theirs: Edit → **Make a new link**. Bring in lists from a spreadsheet in Settings → Lists.
 
 ## 5. Nightly backups
 

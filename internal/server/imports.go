@@ -641,7 +641,7 @@ func (s *Server) importPeople(w http.ResponseWriter, r *http.Request, c *call) {
 	}
 	apply := r.FormValue("action") == "apply"
 	var iv *importView
-	var passwords []string
+	var links []invite
 	err = db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		sh, err := readSheet(text)
 		if err != nil {
@@ -663,11 +663,11 @@ func (s *Server) importPeople(w http.ResponseWriter, r *http.Request, c *call) {
 				if pp.id, err = people.Add(r.Context(), tx, pp.name, pp.email, by); err != nil {
 					return err
 				}
-				password, err := auth.NewPassword(r.Context(), tx, pp.id, by)
+				code, _, err := auth.NewLink(r.Context(), tx, pp.id, by)
 				if err != nil {
 					return err
 				}
-				passwords = append(passwords, pp.name+": "+password)
+				links = append(links, invite{Name: pp.name, code: code})
 			} else if _, _, err := people.Ensure(r.Context(), tx, pp.name, pp.email, by); err != nil {
 				return err
 			}
@@ -684,10 +684,10 @@ func (s *Server) importPeople(w http.ResponseWriter, r *http.Request, c *call) {
 		s.settingsProblem(w, r, c, "people", err)
 	case apply && iv.Problems == 0:
 		notice := imported(iv)
-		if len(passwords) > 0 {
-			notice += "\nFirst passwords for the new people (shown only now; pass each on privately; they choose their own when they log in):\n" + strings.Join(passwords, "\n")
+		if len(links) > 0 {
+			notice += "\nSend each new person their link below to set their password."
 		}
-		s.showSettings(w, r, c, "people", http.StatusOK, notice, "")
+		s.showSettings(w, r, c, "people", http.StatusOK, notice, "", s.invites(r, c, links...))
 	default:
 		s.showImport(w, r, c, "people", iv)
 	}

@@ -109,11 +109,9 @@ func Login(ctx context.Context, tx pgx.Tx, email, password, userAgent string) (t
 		return "", Session{}, ErrBadLogin
 	}
 
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
+	if token, err = newToken(); err != nil {
 		return "", Session{}, err
 	}
-	token = base64.RawURLEncoding.EncodeToString(raw)
 	s.ExpiresAt = time.Now().Add(SessionLength).UTC().Truncate(time.Second)
 	if len(userAgent) > 500 {
 		userAgent = userAgent[:500]
@@ -272,6 +270,15 @@ func roles(ctx context.Context, tx pgx.Tx, personID string) ([]string, error) {
 		WHERE tenant_id = current_tenant() AND person_id::text = $1 AND revoked_at IS NULL
 		ORDER BY role_key`, personID)
 	return pgx.CollectRows(rows, pgx.RowTo[string])
+}
+
+// newToken is 32 random bytes, written so they fit in a cookie or a web address.
+func newToken() (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
 func fingerprint(token string) string {

@@ -50,13 +50,15 @@ type tab struct {
 }
 
 type peopleView struct {
-	Rows  []personRow
-	Roles []option // all roles, for the "add a person" form
+	Rows    []personRow
+	Roles   []option // all roles, for the "add a person" form
+	Invites []invite // links just made, to send to each person
 }
 
 type personRow struct {
 	ID, Name, Email string
 	Active, Me      bool
+	SetUp           bool     // has a password (has used their link)
 	Roles           []option // all roles, Selected = held
 	RoleNames       string
 }
@@ -116,7 +118,9 @@ func (s *Server) masterPage(w http.ResponseWriter, r *http.Request, c *call) {
 var errNoTab = errors.New("no such settings page")
 
 // showSettings renders one tab, with an optional notice (e.g. a new password) or problem.
-func (s *Server) showSettings(w http.ResponseWriter, r *http.Request, c *call, tabKey string, status int, notice, problem string) {
+// more, if given, adds to the page after it is read (e.g. links just made).
+func (s *Server) showSettings(w http.ResponseWriter, r *http.Request, c *call, tabKey string, status int, notice, problem string,
+	more ...func(sv *settingsView)) {
 	sv := settingsView{Tab: tabKey, Tabs: s.tabs(c, tabKey)}
 	if tabKey != "people" && tabKey != "roles" {
 		sv.Tabs = s.tabs(c, "lists") // a list's entries
@@ -152,6 +156,9 @@ func (s *Server) showSettings(w http.ResponseWriter, r *http.Request, c *call, t
 		s.fail(w, r, err)
 		return
 	}
+	for _, m := range more {
+		m(&sv)
+	}
 	p := c.page(sv)
 	p.Notice, p.Error = notice, problem
 	s.render(w, r, status, "settings", p)
@@ -177,7 +184,7 @@ func (v *view) people() (*peopleView, error) {
 		return nil, err
 	}
 	rows, _ := v.tx.Query(v.ctx, `
-		SELECT p.id::text, p.display_name, coalesce(p.login_email, ''), p.status = 'active',
+		SELECT p.id::text, p.display_name, coalesce(p.login_email, ''), p.status = 'active', p.password_hash IS NOT NULL,
 			coalesce(array_agg(pr.role_key ORDER BY pr.role_key)
 				FILTER (WHERE pr.role_key IS NOT NULL AND pr.revoked_at IS NULL), '{}')
 		FROM persons p
@@ -186,7 +193,7 @@ func (v *view) people() (*peopleView, error) {
 		GROUP BY p.id ORDER BY p.status, p.display_name`)
 	list, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct {
 		ID, Name, Email string
-		Active          bool
+		Active, SetUp   bool
 		Held            []string
 	}])
 	if err != nil {
@@ -194,7 +201,7 @@ func (v *view) people() (*peopleView, error) {
 	}
 	pv := &peopleView{Roles: roles}
 	for _, p := range list {
-		row := personRow{ID: p.ID, Name: p.Name, Email: p.Email, Active: p.Active, Me: p.ID == v.c.session.PersonID}
+		row := personRow{ID: p.ID, Name: p.Name, Email: p.Email, Active: p.Active, SetUp: p.SetUp, Me: p.ID == v.c.session.PersonID}
 		var names []string
 		for _, r := range roles {
 			held := slices.Contains(p.Held, r.Value)
@@ -230,10 +237,10 @@ func (v *view) roleRows() ([]roleRow, error) {
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[roleRow])
 }
 
-// addPerson adds someone, gives them the chosen roles and a first password, shown once.
+// addPerson adds someone, gives them the chosen roles and a link to set their password, to send them.
 func (s *Server) addPerson(w http.ResponseWriter, r *http.Request, c *call) {
 	name, email := strings.TrimSpace(r.PostFormValue("name")), strings.TrimSpace(r.PostFormValue("email"))
-	var password string
+	var code string
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		by := ledger.PersonActor(c.session.PersonID)
 		id, err := people.Add(r.Context(), tx, name, email, by)
@@ -245,15 +252,15 @@ func (s *Server) addPerson(w http.ResponseWriter, r *http.Request, c *call) {
 				return err
 			}
 		}
-		password, err = auth.NewPassword(r.Context(), tx, id, by)
+		code, _, err = auth.NewLink(r.Context(), tx, id, by)
 		return err
 	})
 	if err != nil {
 		s.settingsProblem(w, r, c, "people", err)
 		return
 	}
-	s.showSettings(w, r, c, "people", http.StatusOK,
-		fmt.Sprintf("Added %s. Their first password (shown only now): %s. They choose their own when they log in with it.", name, password), "")
+	s.showSettings(w, r, c, "people", http.StatusOK, fmt.Sprintf("Added %s. Send them the link below to set their password.", name), "",
+		s.invites(r, c, invite{Name: name, code: code}))
 }
 
 // updatePerson saves name, email, roles and active/disabled. Admins can't lock themselves out, and
@@ -312,15 +319,17 @@ func (s *Server) updatePerson(w http.ResponseWriter, r *http.Request, c *call) {
 	s.showSettings(w, r, c, "people", http.StatusOK, "Saved.", "")
 }
 
-func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request, c *call) {
-	var name, password string
+// newLink makes a fresh set-your-password link for someone, e.g. who forgot their password. Their
+// current password keeps working until they use it; older links stop working.
+func (s *Server) newLink(w http.ResponseWriter, r *http.Request, c *call) {
+	var name, code string
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(r.Context(), `SELECT display_name FROM persons WHERE tenant_id = current_tenant() AND id::text = $1`,
 			r.PathValue("id")).Scan(&name); err != nil {
 			return err
 		}
 		var err error
-		password, err = auth.NewPassword(r.Context(), tx, r.PathValue("id"), ledger.PersonActor(c.session.PersonID))
+		code, _, err = auth.NewLink(r.Context(), tx, r.PathValue("id"), ledger.PersonActor(c.session.PersonID))
 		return err
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -332,7 +341,8 @@ func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request, c *call) 
 		return
 	}
 	s.showSettings(w, r, c, "people", http.StatusOK,
-		fmt.Sprintf("New password for %s (shown only now): %s. They choose their own when they log in with it.", name, password), "")
+		fmt.Sprintf("New link for %s. Their current password keeps working until they use it; older links stop working.", name), "",
+		s.invites(r, c, invite{Name: name, code: code}))
 }
 
 var (

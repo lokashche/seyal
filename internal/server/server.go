@@ -100,7 +100,7 @@ func New(cfg Config) (*Server, error) {
 			return m, nil
 		},
 	}
-	for _, name := range []string{"home", "login", "app", "offline", "settings", "password", "me", "report"} {
+	for _, name := range []string{"home", "login", "app", "offline", "settings", "password", "me", "welcome", "report"} {
 		t, err := template.New(name).Funcs(funcs).ParseFS(web.Files, "templates/layout.html", "templates/"+name+".html")
 		if err != nil {
 			return nil, err
@@ -155,6 +155,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /t/{slug}/manifest.webmanifest", s.manifest)
 	mux.HandleFunc("GET /t/{slug}/login", s.loginPage)
 	mux.HandleFunc("POST /t/{slug}/login", s.login)
+	mux.HandleFunc("GET /t/{slug}/welcome/{code}", s.welcomePage)
+	mux.HandleFunc("POST /t/{slug}/welcome/{code}", s.welcome)
 	mux.HandleFunc("POST /t/{slug}/logout", s.authed(s.logout))
 	mux.HandleFunc("POST /t/{slug}/logout-everywhere", s.authed(s.logoutEverywhere))
 	mux.HandleFunc("GET /t/{slug}/me", s.authed(s.mePage))
@@ -180,7 +182,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /t/{slug}/settings/master/{kind}/import", s.admin(s.importEntries))
 	mux.HandleFunc("GET /t/{slug}/settings/master/{kind}/export", s.admin(s.exportEntries))
 	mux.HandleFunc("POST /t/{slug}/settings/people/{id}", s.admin(s.updatePerson))
-	mux.HandleFunc("POST /t/{slug}/settings/people/{id}/password", s.admin(s.resetPassword))
+	mux.HandleFunc("POST /t/{slug}/settings/people/{id}/link", s.admin(s.newLink))
 	mux.HandleFunc("GET /t/{slug}/settings/roles", s.admin(s.rolesPage))
 	mux.HandleFunc("POST /t/{slug}/settings/roles", s.admin(s.addRole))
 	mux.HandleFunc("GET /t/{slug}/settings/processes", s.admin(s.processesPage))

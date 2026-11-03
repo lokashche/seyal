@@ -19,8 +19,6 @@ import (
 	"seyal/internal/ledger"
 )
 
-var shownPassword = regexp.MustCompile(`\(shown only now\): ([A-Z2-7]{16})`)
-
 func TestSettingsAccess(t *testing.T) {
 	s := newSite(t)
 	base := "/t/" + s.slug
@@ -49,15 +47,13 @@ func TestSettingsPeople(t *testing.T) {
 	base := "/t/" + s.slug
 	l := s.logIn(lakshmi)
 
-	// Add Vikram as Sales; he gets a password shown once and can log in with it.
+	// Add Vikram as Sales; he gets a link to set his password and is logged in by it.
 	code, page, _ := s.post(l, base+"/settings/people",
 		url.Values{"name": {"Vikram Rao"}, "email": {"vikram@kaveri-demo.example"}, "role": {"sales"}}, nil)
-	m := shownPassword.FindStringSubmatch(page)
-	if code != http.StatusOK || m == nil {
-		t.Fatalf("add person = %d, password shown: %v", code, m != nil)
+	if code != http.StatusOK {
+		t.Fatalf("add person = %d: %s", code, problem(page))
 	}
-	s.passwords["vikram@kaveri-demo.example"] = m[1]
-	v := s.logIn("vikram@kaveri-demo.example")
+	v := s.useLink(page, "vikram@kaveri-demo.example", "vikram-own-pass-1")
 
 	t.Run("the same email can't be used twice", func(t *testing.T) {
 		code, body, _ := s.post(l, base+"/settings/people",
@@ -99,17 +95,14 @@ func TestSettingsPeople(t *testing.T) {
 		}
 	})
 
-	t.Run("a new password replaces the old one", func(t *testing.T) {
+	t.Run("a new link sets a new password; the old one stops working", func(t *testing.T) {
 		arjunID := s.personID(t, arjun)
-		_, page, _ := s.post(l, base+"/settings/people/"+arjunID+"/password", nil, nil)
-		m := shownPassword.FindStringSubmatch(page)
-		if m == nil {
-			t.Fatal("no new password shown")
-		}
-		if code, _, _ := s.post(s.browser(), base+"/login", url.Values{"email": {arjun}, "password": {s.passwords[arjun]}}, nil); code != http.StatusUnauthorized {
+		_, page, _ := s.post(l, base+"/settings/people/"+arjunID+"/link", nil, nil)
+		old := s.passwords[arjun]
+		s.useLink(page, arjun, "arjun-new-pass-1")
+		if code, _, _ := s.post(s.browser(), base+"/login", url.Values{"email": {arjun}, "password": {old}}, nil); code != http.StatusUnauthorized {
 			t.Errorf("old password = %d, want refused", code)
 		}
-		s.passwords[arjun] = m[1]
 		s.logIn(arjun)
 	})
 

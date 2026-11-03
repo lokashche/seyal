@@ -29,6 +29,21 @@
 
 {{define "people"}}{{with .Data.People}}
 <h2>People</h2>
+{{with .Invites}}
+<div class="callout invites" role="status">
+  <p><b>Send {{if gt (len .) 1}}each person their{{else}}this{{end}} link</b> <span class="why">· it works once, for 24 hours. Whoever opens it sets the password, so send it only to that person.</span></p>
+  {{range .}}
+  <div class="invite">
+    <span class="who">{{.Name}}</span>
+    <input class="link" value="{{.URL}}" readonly aria-label="Link for {{.Name}}" data-select>
+    <span class="row">
+      <button type="button" class="btn sm" data-copy="{{.Message}}">Copy message</button>
+      <button type="button" class="btn ghost sm" data-share="{{.Message}}" hidden>Share…</button>
+    </span>
+  </div>
+  {{end}}
+</div>
+{{end}}
 <p class="why">Everyone who can log in. A disabled person can't log in and is logged out at once. Nobody is ever deleted, so the history stays.</p>
 <details class="add">
   <summary class="btn sm">+ Add a person</summary>
@@ -38,16 +53,16 @@
     <fieldset><legend>Roles</legend>
       <div class="checks">{{range .Roles}}<label><input type="checkbox" name="role" value="{{.Value}}"> {{.Label}}</label>{{end}}</div>
     </fieldset>
-    <button class="btn sm">Add and make a password</button>
+    <button class="btn sm">Add and make a link</button>
   </form>
 </details>
 {{template "sheet" (dict "Action" (printf "/t/%s/settings/people/import" $.Slug) "Export" (printf "/t/%s/settings/people/export" $.Slug)
-  "Help" "First row: Name, Email, Roles (role names separated by ;). People are matched by email. New people get a password, shown once after the import. Roles are only added, never taken away.")}}
+  "Help" "First row: Name, Email, Roles (role names separated by ;). People are matched by email. New people get a link to set their password, shown once after the import. Roles are only added, never taken away.")}}
 <ul class="rows">
   {{range .Rows}}
   <li class="{{if not .Active}}off{{end}}">
     <div class="row-head">
-      <div><b>{{.Name}}</b>{{if .Me}} <span class="pill p-draft">you</span>{{end}}{{if not .Active}} <span class="pill p-closed">disabled</span>{{end}}
+      <div><b>{{.Name}}</b>{{if .Me}} <span class="pill p-draft">you</span>{{end}}{{if not .Active}} <span class="pill p-closed">disabled</span>{{else if not .SetUp}} <span class="pill p-wait">not set up yet</span>{{end}}
         <span class="r">{{.Email}}{{with .RoleNames}} · {{.}}{{end}}</span></div>
     </div>
     <details>
@@ -63,10 +78,12 @@
         </label>
         <button class="btn sm">Save</button>
       </form>
-      <form method="post" action="/t/{{$.Slug}}/settings/people/{{.ID}}/password" class="sform inline">
-        <button class="btn ghost sm">Make a new password</button>
-        <span class="why">The old one stops working.</span>
+      {{if .Active}}
+      <form method="post" action="/t/{{$.Slug}}/settings/people/{{.ID}}/link" class="sform inline">
+        <button class="btn ghost sm">Make a new link</button>
+        <span class="why">For a new password, e.g. if they forgot theirs. Older links stop working.</span>
       </form>
+      {{end}}
     </details>
   </li>
   {{end}}

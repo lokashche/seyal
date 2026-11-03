@@ -10,7 +10,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"testing"
 )
@@ -114,15 +113,14 @@ func TestImportPeople(t *testing.T) {
 	}
 	_, page, _ = s.post(l, base+"/import", url.Values{"action": {"apply"}, "csv": {good}}, nil)
 	page = html.UnescapeString(page)
-	m := regexp.MustCompile(`Meena Pillai: ([A-Za-z0-9]+)`).FindStringSubmatch(page)
-	if !strings.Contains(page, "Imported: 1 new, 1 changed, 1 unchanged.") || m == nil {
+	if !strings.Contains(page, "Imported: 1 new, 1 changed, 1 unchanged.") || !strings.Contains(page, "Hi Meena Pillai, here is your link") {
 		t.Fatalf("import:\n%s", page)
 	}
 	_, roles, _ := s.get(l, "/t/"+s.slug+"/settings/roles")
 	if !strings.Contains(roles, "Karthik Subramanian, Meena Pillai, Priya Raman") {
 		t.Errorf("Operations should now be Karthik, Meena and Priya:\n%s", roles)
 	}
-	s.passwords["meena@kaveri-demo.example"] = m[1]
+	s.useLink(page, "meena@kaveri-demo.example", "meena-own-pass-1")
 	s.logIn("meena@kaveri-demo.example") // fails the test if the password doesn't work
 
 	if code, _ := s.sendSheet(s.logIn(arjun), base+"/import", good); code != http.StatusForbidden {

@@ -61,10 +61,14 @@ func TestReviewFixes(t *testing.T) {
 
 	t.Run("a new password ends the person's other sessions", func(t *testing.T) {
 		l := s.logIn(lakshmi)
-		code, _, _ := s.post(l, base+"/settings/people/"+s.people["arjun"]+"/password", nil, nil)
+		code, page, _ := s.post(l, base+"/settings/people/"+s.people["arjun"]+"/link", nil, nil)
 		if code != http.StatusOK {
-			t.Fatalf("new password = %d", code)
+			t.Fatalf("new link = %d", code)
 		}
+		if code, _, _ := s.get(a, base+"/"); code != http.StatusOK {
+			t.Errorf("Arjun's session after a link is only made = %d; it should end only when the link is used", code)
+		}
+		s.useLink(page, arjun, "arjun-new-pass-1")
 		if code, _, h := s.get(a, base+"/"); code != http.StatusSeeOther || !strings.HasSuffix(h.Get("Location"), "/login") {
 			t.Errorf("Arjun's old session after a new password = %d to %q, want the login page", code, h.Get("Location"))
 		}

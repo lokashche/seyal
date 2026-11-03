@@ -281,6 +281,49 @@
       navigator.serviceWorker.register("/sw.js").catch(function () { /* the app works without it */ });
     });
   }
+  // --- Sending a set-your-password link -------------------------------------------------------
+  // "Copy message" puts the message (with the link) on the clipboard; "Share…" opens the phone's
+  // share sheet (WhatsApp and others) where the browser has one. Tapping the link box selects it.
+
+  function showShare() {
+    if (!navigator.share) return;
+    document.querySelectorAll("[data-share][hidden]").forEach(function (b) { b.hidden = false; });
+  }
+  document.addEventListener("DOMContentLoaded", showShare);
+  document.addEventListener("htmx:afterSettle", showShare);
+
+  function copied(button, ok) {
+    var label = button.textContent;
+    button.textContent = ok ? "Copied ✓" : "Select the link and copy it";
+    setTimeout(function () { button.textContent = label; }, 2500);
+  }
+  function copyText(text, button) {
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(function () { copied(button, true); }, function () { copied(button, false); });
+      return;
+    }
+    // Plain http (e.g. trying it on the local network): the older way.
+    var area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (_) { /* not allowed */ }
+    area.remove();
+    copied(button, ok);
+  }
+  document.addEventListener("click", function (e) {
+    var copy = e.target.closest("[data-copy]");
+    if (copy) copyText(copy.getAttribute("data-copy"), copy);
+    var share = e.target.closest("[data-share]");
+    if (share && navigator.share) navigator.share({ text: share.getAttribute("data-share") }).catch(function () { /* closed */ });
+    var box = e.target.closest("[data-select]");
+    if (box) box.select();
+  });
+
   document.addEventListener("click", function (e) {
     if (e.target.closest("[data-reload]")) location.reload();
     if (e.target.closest("[data-print]")) window.print(); // the browser offers "Save as PDF"

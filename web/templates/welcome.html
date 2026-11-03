@@ -1,0 +1,28 @@
+{{define "title"}}Welcome · Seyal{{end}}
+{{define "content"}}
+<div class="center">
+  {{with .Data}}{{if .Bad}}
+  <div class="card">
+    <h1>Seyal<span class="tamil" lang="ta">செயல்</span></h1>
+    <p class="lede">This link has expired or was already used.</p>
+    <p class="small">Ask an admin in your business for a new link. If you have already set your password,
+      <a href="/t/{{$.Slug}}/login">log in</a>.</p>
+  </div>
+  {{else}}
+  <form method="post" class="card">
+    <h1>Seyal<span class="tamil" lang="ta">செயல்</span></h1>
+    <p class="lede">Welcome to {{$.Business}}, {{.Name}}. Choose your password to start.</p>
+    {{with $.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
+    <input type="email" name="email" autocomplete="username" value="{{.Email}}" hidden>
+    <label>Your login email <input type="email" value="{{.Email}}" disabled></label>
+    <label>New password (at least 10 characters)
+      <input type="password" name="next" autocomplete="new-password" required minlength="10" autofocus>
+    </label>
+    <label>New password again
+      <input type="password" name="again" autocomplete="new-password" required minlength="10">
+    </label>
+    <button class="btn">Save and start</button>
+  </form>
+  {{end}}{{end}}
+</div>
+{{end}}
