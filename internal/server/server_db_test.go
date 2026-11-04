@@ -45,15 +45,17 @@ type site struct {
 	store     media.Disk
 	owner     *pgxpool.Pool // for tests that must change what the app may not (e.g. age a link)
 	app       *pgxpool.Pool
-	passwords map[string]string // email → password
+	passwords map[string]string // demo key (or a made-up name like vikram) → password
 	people    map[string]string // demo key → person id
 	ai        *ai.Setup         // AI is off unless a test sets a (fake) model
 }
 
+// The demo people, by their key in the demo file. Each site gives them their own emails (s.mail),
+// because a login email is unique across the whole server and the test sites share one database.
 const (
-	arjun   = "arjun@kaveri-demo.example"   // sales
-	priya   = "priya@kaveri-demo.example"   // ops
-	lakshmi = "lakshmi@kaveri-demo.example" // owner and admin
+	arjun   = "arjun"   // sales
+	priya   = "priya"   // ops
+	lakshmi = "lakshmi" // owner and admin
 )
 
 func newSite(t *testing.T) *site {
@@ -75,14 +77,18 @@ func newSiteWith(t *testing.T, playbooks string) *site {
 		t.Fatal(err)
 	}
 	f.Business.Slug = "test-" + strings.ToLower(rand.Text()[:10])
+	s := &site{t: t, slug: f.Business.Slug, store: media.Disk{Dir: t.TempDir()}, owner: owner, app: app,
+		passwords: map[string]string{}, ai: &ai.Setup{USDtoINR: 88}}
+	for i, p := range f.People {
+		f.People[i].Email = s.mail(p.Key)
+	}
 	sum, err := setup.Import(ctx, owner, app, f)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &site{t: t, slug: f.Business.Slug, tenant: sum.TenantID, store: media.Disk{Dir: t.TempDir()}, owner: owner, app: app,
-		passwords: map[string]string{}, people: sum.People, ai: &ai.Setup{USDtoINR: 88}}
-	for _, email := range []string{arjun, priya, lakshmi} {
-		if s.passwords[email], err = setup.NewPassword(ctx, app, sum.TenantID, email); err != nil {
+	s.tenant, s.people = sum.TenantID, sum.People
+	for _, key := range []string{arjun, priya, lakshmi} {
+		if s.passwords[key], err = setup.NewPassword(ctx, app, sum.TenantID, s.mail(key)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -93,6 +99,12 @@ func newSiteWith(t *testing.T, playbooks string) *site {
 	s.srv = httptest.NewServer(srv.Handler())
 	t.Cleanup(s.srv.Close)
 	return s
+}
+
+// mail is the email of name (a demo key like arjun, or a made-up person like vikram) on this site
+// only: name@<slug>.kaveri-demo.example.
+func (s *site) mail(name string) string {
+	return name + "@" + s.slug + ".kaveri-demo.example"
 }
 
 // browser keeps cookies and doesn't follow redirects, so tests can see them.
@@ -130,12 +142,13 @@ func (s *site) post(c *http.Client, path string, form url.Values, header map[str
 	return resp.StatusCode, string(body), resp.Header
 }
 
-func (s *site) logIn(email string) *http.Client {
+// logIn logs the person called name in with their password (see s.passwords).
+func (s *site) logIn(name string) *http.Client {
 	s.t.Helper()
 	c := s.browser()
-	code, _, h := s.post(c, "/t/"+s.slug+"/login", url.Values{"email": {email}, "password": {s.passwords[email]}}, nil)
+	code, _, h := s.post(c, "/t/"+s.slug+"/login", url.Values{"email": {s.mail(name)}, "password": {s.passwords[name]}}, nil)
 	if code != http.StatusSeeOther || h.Get("Location") != "/t/"+s.slug+"/" {
-		s.t.Fatalf("login as %s = %d to %q", email, code, h.Get("Location"))
+		s.t.Fatalf("login as %s = %d to %q", name, code, h.Get("Location"))
 	}
 	return c
 }
@@ -143,8 +156,8 @@ func (s *site) logIn(email string) *http.Client {
 var shownLink = regexp.MustCompile(`/welcome/([A-Za-z0-9_-]{43})`)
 
 // useLink opens the set-your-password link shown on a page, chooses password, and returns the
-// browser, now logged in.
-func (s *site) useLink(page, email, password string) *http.Client {
+// browser, now logged in as name.
+func (s *site) useLink(page, name, password string) *http.Client {
 	s.t.Helper()
 	m := shownLink.FindStringSubmatch(page)
 	if m == nil {
@@ -155,18 +168,18 @@ func (s *site) useLink(page, email, password string) *http.Client {
 	if code != http.StatusSeeOther || h.Get("Location") != "/t/"+s.slug+"/" {
 		s.t.Fatalf("using the link = %d to %q:\n%s", code, h.Get("Location"), body)
 	}
-	s.passwords[email] = password
+	s.passwords[name] = password
 	return c
 }
 
 // temporaryPassword gives someone a password made by an admin, the way it worked before links
 // (people on running servers may still have one), and returns it.
-func (s *site) temporaryPassword(email string) string {
+func (s *site) temporaryPassword(name string) string {
 	s.t.Helper()
 	var password string
 	err := db.WithTenant(context.Background(), s.app, s.tenant, func(tx pgx.Tx) error {
 		var id string
-		if err := tx.QueryRow(context.Background(), `SELECT id::text FROM persons WHERE login_email = $1`, email).Scan(&id); err != nil {
+		if err := tx.QueryRow(context.Background(), `SELECT id::text FROM persons WHERE login_email = $1`, s.mail(name)).Scan(&id); err != nil {
 			return err
 		}
 		var err error
@@ -176,7 +189,7 @@ func (s *site) temporaryPassword(email string) string {
 	if err != nil {
 		s.t.Fatal(err)
 	}
-	s.passwords[email] = password
+	s.passwords[name] = password
 	return password
 }
 
@@ -230,7 +243,7 @@ func TestLoginPage(t *testing.T) {
 	})
 
 	t.Run("a made-up address answers like a wrong password", func(t *testing.T) {
-		code, body, _ := s.post(s.browser(), "/t/no-such-firm/login", url.Values{"email": {arjun}, "password": {"x"}}, nil)
+		code, body, _ := s.post(s.browser(), "/t/no-such-firm/login", url.Values{"email": {s.mail(arjun)}, "password": {"x"}}, nil)
 		if code != http.StatusUnauthorized || !strings.Contains(body, "Wrong email or password") {
 			t.Errorf("made-up address = %d", code)
 		}
@@ -241,7 +254,7 @@ func TestLoginPage(t *testing.T) {
 	})
 
 	t.Run("cookie is HttpOnly and SameSite", func(t *testing.T) {
-		_, _, h := s.post(s.browser(), home+"login", url.Values{"email": {arjun}, "password": {s.passwords[arjun]}}, nil)
+		_, _, h := s.post(s.browser(), home+"login", url.Values{"email": {s.mail(arjun)}, "password": {s.passwords[arjun]}}, nil)
 		if cookie := h.Get("Set-Cookie"); !strings.Contains(cookie, "HttpOnly") || !strings.Contains(cookie, "SameSite=Lax") {
 			t.Errorf("cookie = %q", cookie)
 		}
@@ -283,7 +296,7 @@ func TestLoginPage(t *testing.T) {
 		blocked := false
 		for i := 0; i < 12 && !blocked; i++ {
 			code, _, _ := s.post(s.browser(), home+"login",
-				url.Values{"email": {arjun}, "password": {"guess " + string(rune('a'+i))}}, nil)
+				url.Values{"email": {s.mail(arjun)}, "password": {"guess " + string(rune('a'+i))}}, nil)
 			blocked = code == http.StatusTooManyRequests
 		}
 		if !blocked {

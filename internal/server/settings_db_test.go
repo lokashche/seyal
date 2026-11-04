@@ -49,39 +49,39 @@ func TestSettingsPeople(t *testing.T) {
 
 	// Add Vikram as Sales; he gets a link to set his password and is logged in by it.
 	code, page, _ := s.post(l, base+"/settings/people",
-		url.Values{"name": {"Vikram Rao"}, "email": {"vikram@kaveri-demo.example"}, "role": {"sales"}}, nil)
+		url.Values{"name": {"Vikram Rao"}, "email": {s.mail("vikram")}, "role": {"sales"}}, nil)
 	if code != http.StatusOK {
 		t.Fatalf("add person = %d: %s", code, problem(page))
 	}
-	v := s.useLink(page, "vikram@kaveri-demo.example", "vikram-own-pass-1")
+	v := s.useLink(page, "vikram", "vikram-own-pass-1")
 
 	t.Run("the same email can't be used twice", func(t *testing.T) {
 		code, body, _ := s.post(l, base+"/settings/people",
-			url.Values{"name": {"Someone"}, "email": {"vikram@kaveri-demo.example"}}, nil)
+			url.Values{"name": {"Someone"}, "email": {s.mail("vikram")}}, nil)
 		if code != http.StatusUnprocessableEntity || !strings.Contains(problem(body), "already uses") {
 			t.Errorf("duplicate email = %d: %s", code, problem(body))
 		}
 	})
 
-	vikramID := s.personID(t, "vikram@kaveri-demo.example")
+	vikramID := s.personID(t, "vikram")
 	update := func(id string, form url.Values) (int, string) {
 		code, body, _ := s.post(l, base+"/settings/people/"+id, form, nil)
 		return code, body
 	}
 
 	t.Run("a role can be taken away and given back", func(t *testing.T) {
-		update(vikramID, url.Values{"name": {"Vikram Rao"}, "email": {"vikram@kaveri-demo.example"}, "status": {"active"}})
+		update(vikramID, url.Values{"name": {"Vikram Rao"}, "email": {s.mail("vikram")}, "status": {"active"}})
 		if s.holds(t, vikramID, "sales") {
 			t.Error("sales still held after removing it")
 		}
-		update(vikramID, url.Values{"name": {"Vikram Rao"}, "email": {"vikram@kaveri-demo.example"}, "status": {"active"}, "role": {"sales"}})
+		update(vikramID, url.Values{"name": {"Vikram Rao"}, "email": {s.mail("vikram")}, "status": {"active"}, "role": {"sales"}})
 		if !s.holds(t, vikramID, "sales") {
 			t.Error("sales not held after giving it back")
 		}
 	})
 
 	t.Run("disabling logs the person out at once", func(t *testing.T) {
-		update(vikramID, url.Values{"name": {"Vikram Rao"}, "email": {"vikram@kaveri-demo.example"}, "status": {"disabled"}})
+		update(vikramID, url.Values{"name": {"Vikram Rao"}, "email": {s.mail("vikram")}, "status": {"disabled"}})
 		if code, _, _ := s.get(v, base+"/"); code != http.StatusSeeOther {
 			t.Errorf("disabled person's page = %d, want a redirect to login", code)
 		}
@@ -89,7 +89,7 @@ func TestSettingsPeople(t *testing.T) {
 
 	t.Run("an admin can't lock themselves out", func(t *testing.T) {
 		me := s.personID(t, lakshmi)
-		code, body := update(me, url.Values{"name": {"Lakshmi Narayanan"}, "email": {lakshmi}, "status": {"active"}, "role": {"owner"}})
+		code, body := update(me, url.Values{"name": {"Lakshmi Narayanan"}, "email": {s.mail(lakshmi)}, "status": {"active"}, "role": {"owner"}})
 		if code != http.StatusUnprocessableEntity || !strings.Contains(problem(body), "own admin role") {
 			t.Errorf("removing own admin role = %d: %s", code, problem(body))
 		}
@@ -100,7 +100,7 @@ func TestSettingsPeople(t *testing.T) {
 		_, page, _ := s.post(l, base+"/settings/people/"+arjunID+"/link", nil, nil)
 		old := s.passwords[arjun]
 		s.useLink(page, arjun, "arjun-new-pass-1")
-		if code, _, _ := s.post(s.browser(), base+"/login", url.Values{"email": {arjun}, "password": {old}}, nil); code != http.StatusUnauthorized {
+		if code, _, _ := s.post(s.browser(), base+"/login", url.Values{"email": {s.mail(arjun)}, "password": {old}}, nil); code != http.StatusUnauthorized {
 			t.Errorf("old password = %d, want refused", code)
 		}
 		s.logIn(arjun)
@@ -184,11 +184,12 @@ func TestSettingsMasterData(t *testing.T) {
 	s.tablesMatchLedger(t)
 }
 
-func (s *site) personID(t *testing.T, email string) string {
+// personID is the id of the person called name on this site (see s.mail).
+func (s *site) personID(t *testing.T, name string) string {
 	t.Helper()
 	var id string
 	err := db.WithTenant(context.Background(), testdbApp(t), s.tenant, func(tx pgx.Tx) error {
-		return tx.QueryRow(context.Background(), "SELECT id::text FROM persons WHERE login_email = $1", email).Scan(&id)
+		return tx.QueryRow(context.Background(), "SELECT id::text FROM persons WHERE login_email = $1", s.mail(name)).Scan(&id)
 	})
 	if err != nil {
 		t.Fatal(err)

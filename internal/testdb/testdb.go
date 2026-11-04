@@ -75,6 +75,41 @@ func NewTenant(t testing.TB, owner *pgxpool.Pool, name string) (tenantID, person
 	return tenantID, personID
 }
 
+// Email returns a made-up email for name that no other test uses, e.g. sam@t-abcdefghij.test.example.
+// A login email is unique across the whole server, and tests share one database (and run at the
+// same time), so a fixed address would clash.
+func Email(name string) string {
+	return name + "@t-" + strings.ToLower(rand.Text()[:10]) + ".test.example"
+}
+
+// NewAccount creates a login with a made-up email (see Email) and returns its id and email. Its
+// password hash is a placeholder, so nobody can log in with it.
+func NewAccount(t testing.TB, owner *pgxpool.Pool) (accountID, email string) {
+	t.Helper()
+	email = Email("u")
+	err := owner.QueryRow(context.Background(),
+		"INSERT INTO accounts (email, password_hash) VALUES ($1, 'not a real hash') RETURNING id::text", email).
+		Scan(&accountID)
+	if err != nil {
+		t.Fatalf("create login: %v", err)
+	}
+	return accountID, email
+}
+
+// LinkPerson links a person of a business to a login, and gives the person the login's email.
+func LinkPerson(t testing.TB, owner *pgxpool.Pool, tenantID, personID, accountID string) {
+	t.Helper()
+	ctx := context.Background()
+	err := db.WithTenant(ctx, owner, tenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE persons SET account_id = $1, login_email = (SELECT email FROM accounts WHERE id = $1)
+			WHERE id = $2`, accountID, personID)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("link person: %v", err)
+	}
+}
+
 // repoRoot finds the folder that holds go.mod, starting from the current folder.
 func repoRoot() (string, error) {
 	dir, err := os.Getwd()

@@ -24,6 +24,7 @@ func TestLogin(t *testing.T) {
 	ctx := context.Background()
 	owner, app := testdb.Connect(t)
 	tenant, person := testdb.NewTenant(t, owner, "Login Test")
+	sam := testdb.Email("sam") // unique on the server, like every login email
 	in := func(fn func(tx pgx.Tx) error) error { return db.WithTenant(ctx, app, tenant, fn) }
 	login := func(email, pw string) (string, auth.Session, error) {
 		var token string
@@ -46,12 +47,12 @@ func TestLogin(t *testing.T) {
 	}
 
 	if err := in(func(tx pgx.Tx) error {
-		return auth.SetPassword(ctx, tx, person, "Sam@Example.test", password, ledger.SystemActor)
+		return auth.SetPassword(ctx, tx, person, strings.ToUpper(sam), password, ledger.SystemActor)
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	token, s, err := login("sam@example.test", password)
+	token, s, err := login(sam, password)
 	if err != nil || token == "" || s.PersonID != person {
 		t.Fatalf("login = %q, %+v, %v", token, s, err)
 	}
@@ -60,10 +61,10 @@ func TestLogin(t *testing.T) {
 	}
 
 	t.Run("wrong password and unknown email look the same", func(t *testing.T) {
-		if _, _, err := login("sam@example.test", "wrong password!!"); !errors.Is(err, auth.ErrBadLogin) {
+		if _, _, err := login(sam, "wrong password!!"); !errors.Is(err, auth.ErrBadLogin) {
 			t.Errorf("wrong password = %v", err)
 		}
-		if _, _, err := login("nobody@example.test", password); !errors.Is(err, auth.ErrBadLogin) {
+		if _, _, err := login(testdb.Email("nobody"), password); !errors.Is(err, auth.ErrBadLogin) {
 			t.Errorf("unknown email = %v", err)
 		}
 	})
@@ -71,7 +72,7 @@ func TestLogin(t *testing.T) {
 	t.Run("weak passwords are refused", func(t *testing.T) {
 		for _, pw := range []string{"short", strings.Repeat("x", 73)} {
 			err := in(func(tx pgx.Tx) error {
-				return auth.SetPassword(ctx, tx, person, "sam@example.test", pw, ledger.SystemActor)
+				return auth.SetPassword(ctx, tx, person, sam, pw, ledger.SystemActor)
 			})
 			if err == nil {
 				t.Errorf("password of %d characters accepted", len(pw))
@@ -126,7 +127,7 @@ func TestLogin(t *testing.T) {
 	})
 
 	t.Run("expired sessions don't work", func(t *testing.T) {
-		token, _, err := login("sam@example.test", password)
+		token, _, err := login(sam, password)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -142,7 +143,7 @@ func TestLogin(t *testing.T) {
 	})
 
 	t.Run("a disabled person is logged out and can't log in", func(t *testing.T) {
-		token, _, err := login("sam@example.test", password)
+		token, _, err := login(sam, password)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -155,7 +156,7 @@ func TestLogin(t *testing.T) {
 		if _, err := check(token); !errors.Is(err, auth.ErrNoSession) {
 			t.Errorf("disabled person's session = %v, want ErrNoSession", err)
 		}
-		if _, _, err := login("sam@example.test", password); !errors.Is(err, auth.ErrBadLogin) {
+		if _, _, err := login(sam, password); !errors.Is(err, auth.ErrBadLogin) {
 			t.Errorf("disabled person login = %v, want ErrBadLogin", err)
 		}
 	})

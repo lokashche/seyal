@@ -98,15 +98,15 @@ func TestImportPeople(t *testing.T) {
 	base := "/t/" + s.slug + "/settings/people"
 	l := s.logIn(lakshmi)
 
-	_, page := s.sendSheet(l, base+"/import", "Name,Email,Roles\nMeena Pillai,meena@kaveri-demo.example,Wizard\nNo Mail,,\n")
+	_, page := s.sendSheet(l, base+"/import", "Name,Email,Roles\nMeena Pillai,"+s.mail("meena")+",Wizard\nNo Mail,,\n")
 	if !strings.Contains(page, `No role called "Wizard"`) || !strings.Contains(page, "No valid email") {
 		t.Errorf("bad rows should be shown:\n%s", page)
 	}
 
 	good := "Name,Email,Roles\n" +
-		"Meena Pillai,MEENA@kaveri-demo.example,Operations; sales\n" +
-		"Karthik Subramanian,karthik@kaveri-demo.example,Operations\n" +
-		"Priya Raman,priya@kaveri-demo.example,ops\n"
+		"Meena Pillai," + strings.ToUpper(s.mail("meena")) + ",Operations; sales\n" +
+		"Karthik Subramanian," + s.mail("karthik") + ",Operations\n" +
+		"Priya Raman," + s.mail(priya) + ",ops\n"
 	_, page = s.sendSheet(l, base+"/import", good)
 	if !strings.Contains(page, "1 new · 1 changed · 1 unchanged") || !strings.Contains(page, "Gets Operations") {
 		t.Fatalf("the check:\n%s", page)
@@ -120,8 +120,8 @@ func TestImportPeople(t *testing.T) {
 	if !strings.Contains(roles, "Karthik Subramanian, Meena Pillai, Priya Raman") {
 		t.Errorf("Operations should now be Karthik, Meena and Priya:\n%s", roles)
 	}
-	s.useLink(page, "meena@kaveri-demo.example", "meena-own-pass-1")
-	s.logIn("meena@kaveri-demo.example") // fails the test if the password doesn't work
+	s.useLink(page, "meena", "meena-own-pass-1")
+	s.logIn("meena") // fails the test if the password doesn't work
 
 	if code, _ := s.sendSheet(s.logIn(arjun), base+"/import", good); code != http.StatusForbidden {
 		t.Errorf("Arjun (not an admin) importing = %d, want 403", code)

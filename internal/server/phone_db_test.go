@@ -82,7 +82,7 @@ func TestPhoneScreens(t *testing.T) {
 	t.Run("a new person's password shows inside the panel, so the page doesn't move", func(t *testing.T) {
 		l := s.logIn(lakshmi)
 		_, page, _ := s.post(l, base+"/settings/people",
-			url.Values{"name": {"Neha Joshi"}, "email": {"neha@kaveri-demo.example"}, "role": {"sales"}}, nil)
+			url.Values{"name": {"Neha Joshi"}, "email": {s.mail("neha")}, "role": {"sales"}}, nil)
 		panel := strings.Index(page, `<section class="panel">`)
 		notice := strings.Index(page, `class="banner notice"`)
 		if panel < 0 || notice < panel {
@@ -96,7 +96,7 @@ func TestPhoneScreens(t *testing.T) {
 			t.Error("your name or the Me tab doesn't open the profile")
 		}
 		code, me, _ := s.get(a, base+"/me")
-		for _, want := range []string{"Arjun Mehta", arjun, "Kaveri Associates (demo)", "Sales", `href="` + base + `/password"`,
+		for _, want := range []string{"Arjun Mehta", s.mail(arjun), "Kaveri Associates (demo)", "Sales", `href="` + base + `/password"`,
 			`action="` + base + `/logout"`, `action="` + base + `/logout-everywhere"`} {
 			if !strings.Contains(me, want) {
 				t.Errorf("the Me page is missing %s", want)

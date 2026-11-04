@@ -36,7 +36,7 @@ func TestPasswordLinks(t *testing.T) {
 	}
 
 	_, added, _ := s.post(l, base+"/settings/people",
-		url.Values{"name": {"Vikram Rao"}, "email": {"vikram@kaveri-demo.example"}, "role": {"sales"}}, nil)
+		url.Values{"name": {"Vikram Rao"}, "email": {s.mail("vikram")}, "role": {"sales"}}, nil)
 	added = html.UnescapeString(added)
 	code := codeIn(added)
 
@@ -74,7 +74,7 @@ func TestPasswordLinks(t *testing.T) {
 	})
 
 	t.Run("it works once and logs the person in", func(t *testing.T) {
-		v := s.useLink(added, "vikram@kaveri-demo.example", "vikram-own-pass-1")
+		v := s.useLink(added, "vikram", "vikram-own-pass-1")
 		if status, _, _ := s.get(v, base+"/"); status != http.StatusOK {
 			t.Errorf("after using the link, My Work = %d", status)
 		}
@@ -126,8 +126,8 @@ func TestPasswordLinks(t *testing.T) {
 		if status, _, _ := s.post(s.logIn(priya), base+"/settings/people/"+s.people["arjun"]+"/link", nil, nil); status != http.StatusForbidden {
 			t.Errorf("Priya (not an admin) making a link = %d, want 403", status)
 		}
-		vikram := s.personID(t, "vikram@kaveri-demo.example")
-		s.post(l, base+"/settings/people/"+vikram, url.Values{"name": {"Vikram Rao"}, "email": {"vikram@kaveri-demo.example"}, "status": {"disabled"}}, nil)
+		vikram := s.personID(t, "vikram")
+		s.post(l, base+"/settings/people/"+vikram, url.Values{"name": {"Vikram Rao"}, "email": {s.mail("vikram")}, "status": {"disabled"}}, nil)
 		status, body, _ := s.post(l, base+"/settings/people/"+vikram+"/link", nil, nil)
 		if status != http.StatusUnprocessableEntity || !strings.Contains(problem(body), "disabled") {
 			t.Errorf("a link for a disabled person = %d: %s", status, problem(body))

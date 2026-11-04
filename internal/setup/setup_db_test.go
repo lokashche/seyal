@@ -34,6 +34,11 @@ func TestImportDemoBusiness(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Business.Slug = "test-" + strings.ToLower(rand.Text()[:10]) // a fresh business for each run
+	// A login email is unique across the server, so each run's people get their own emails.
+	email := func(key string) string { return key + "@" + f.Business.Slug + ".kaveri-demo.example" }
+	for i, p := range f.People {
+		f.People[i].Email = email(p.Key)
+	}
 
 	first, err := setup.Import(ctx, owner, app, f)
 	if err != nil {
@@ -117,12 +122,12 @@ func TestImportDemoBusiness(t *testing.T) {
 	})
 
 	t.Run("demo people can log in with a new password", func(t *testing.T) {
-		password, err := setup.NewPassword(ctx, app, first.TenantID, "priya@kaveri-demo.example")
+		password, err := setup.NewPassword(ctx, app, first.TenantID, email("priya"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		in(func(tx pgx.Tx) error {
-			_, s, err := auth.Login(ctx, tx, "priya@kaveri-demo.example", password, "test")
+			_, s, err := auth.Login(ctx, tx, email("priya"), password, "test")
 			if err == nil && (s.Name != "Priya Raman" || len(s.Roles) != 1 || s.Roles[0] != "ops") {
 				t.Errorf("logged in as %+v, want Priya Raman with the ops role", s)
 			}
