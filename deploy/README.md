@@ -44,8 +44,27 @@ services:
 ```
 
 and in your existing tunnel add a public hostname with service **HTTP**, URL `<server-lan-ip>:8080`.
-Docker opens published ports past ufw, so other machines on the LAN can reach port 8080 too;
-logins still only work over HTTPS.)
+Docker opens published ports past ufw, so other machines on the LAN can reach port 8080 too. Let only
+the tunnel's machine in (`<lan-interface>` is the one holding `<server-lan-ip>` in `ip -br addr`):
+
+```sh
+sudo tee /etc/systemd/system/seyal-port-lock.service >/dev/null <<'EOF'
+[Unit]
+Description=Only the tunnel may reach Seyal's port 8080
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'iptables -C DOCKER-USER -i <lan-interface> -p tcp --dport 8080 ! -s <tunnel-ip> -j DROP 2>/dev/null || iptables -I DOCKER-USER -i <lan-interface> -p tcp --dport 8080 ! -s <tunnel-ip> -j DROP'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload && sudo systemctl enable --now seyal-port-lock
+```
+)
 
 (Without Cloudflare: point an **A record** `seyal.<your-domain>` at the server's IP, set
 `COMPOSE_PROFILES=caddy`, `SEYAL_DOMAIN` and `ACME_EMAIL` in `.env` in step 3, and open ports 80/443.)
