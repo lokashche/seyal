@@ -71,7 +71,7 @@ func TestStepsOnScreen(t *testing.T) {
 	}
 	_, page, _ = s.get(p, item)
 	page = html.UnescapeString(page)
-	if !strings.Contains(page, "with Operations team") || !strings.Contains(page, "the Operations team now") ||
+	if !strings.Contains(page, "with Operations team · since today") || !strings.Contains(page, "the Operations team now") ||
 		!strings.Contains(page, "What amount?") {
 		t.Errorf("after send to ops, the item should be with the Operations team and ask Ops' question:\n%s", problem(page))
 	}

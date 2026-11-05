@@ -278,7 +278,7 @@ func (c *conversation) lastAsked() (field string, of *offer, err error) {
 	var body string
 	err = c.tx.QueryRow(c.ctx, `
 		SELECT body FROM ledger
-		WHERE tenant_id = current_tenant() AND subject_type = 'work_item' AND subject_id::text = $1
+		WHERE tenant_id = current_tenant() AND subject_type = 'work_item' AND subject_id = $1::uuid
 			AND kind = 'item.asked'
 		ORDER BY seq DESC LIMIT 1`, c.reply.Item.ID).Scan(&body)
 	if errors.Is(err, pgx.ErrNoRows) {

@@ -100,8 +100,8 @@ func (s *Server) report(w http.ResponseWriter, r *http.Request, c *call) {
 		}
 		var hash []byte
 		err = tx.QueryRow(r.Context(), `
-			SELECT seq, hash FROM ledger WHERE tenant_id = current_tenant() AND subject_id::text = $1
-			ORDER BY seq DESC LIMIT 1`, id).Scan(&rv.LedgerSeq, &hash)
+			SELECT seq, hash FROM ledger WHERE tenant_id = current_tenant() AND subject_id = $1::uuid
+			ORDER BY seq DESC LIMIT 1`, it.ID).Scan(&rv.LedgerSeq, &hash)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}

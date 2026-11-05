@@ -151,3 +151,40 @@ func TestThreadTellsTheStory(t *testing.T) {
 		t.Errorf("the message with the voice note = %+v, want its file attached", voice)
 	}
 }
+
+// TestThreadUsesTheSubjectIndex checks that the thread's ledger query finds one item's events
+// through the ledger_subject index (D70), instead of reading every event of the business. A query
+// with an OR whose other branch has no index of its own can't use it.
+func TestThreadUsesTheSubjectIndex(t *testing.T) {
+	ctx := context.Background()
+	owner, app := testdb.Connect(t)
+	tenant, _ := testdb.NewTenant(t, owner, "Thread Index Test")
+	var plan []string
+	err := db.WithTenant(ctx, app, tenant, func(tx pgx.Tx) error {
+		// Tables in the test database are small, so Postgres would often read them whole anyway.
+		if _, err := tx.Exec(ctx, "SET LOCAL enable_seqscan = off"); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, "EXPLAIN "+thread.EventsQuery, "00000000-0000-0000-0000-000000000000")
+		if err != nil {
+			return err
+		}
+		plan, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The old query (with the OR) also named ledger_subject, but looked up only its tenant_id part,
+	// so it still read every event of the business. The lookup must include subject_id.
+	text := strings.Join(plan, "\n")
+	looksUpItem := false
+	for _, line := range plan {
+		if strings.Contains(line, "Index Cond") && strings.Contains(line, "subject_id =") {
+			looksUpItem = true
+		}
+	}
+	if !strings.Contains(text, "ledger_subject") || !looksUpItem {
+		t.Errorf("the thread query doesn't look the item up in the ledger_subject index; plan:\n%s", text)
+	}
+}

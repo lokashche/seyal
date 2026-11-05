@@ -224,7 +224,8 @@ func (c *checker) items() error {
 		SELECT id::text, number, playbook_version_id::text, title, state,
 			coalesce(assignee_id::text, ''), coalesce(to_char(due_on, 'YYYY-MM-DD'), ''),
 			version, fields, fields_sha256, started_via, coalesce(started_ref, ''),
-			coalesce(created_by::text, ''), coalesce(team, '')
+			coalesce(created_by::text, ''), coalesce(team, ''),
+			`+workitem.SelectHeldSince+`, coalesce(handoff_from::text, ''), coalesce(handoff_note, '')
 		FROM work_items WHERE tenant_id = current_tenant() ORDER BY id`)
 	if err != nil {
 		return err
@@ -269,6 +270,10 @@ func diffItem(w, g workitem.Item) string {
 		{"started ref", w.StartedRef, g.StartedRef},
 		{"created by", w.CreatedBy, g.CreatedBy},
 		{"team", w.Team, g.Team},
+		// An old snapshot has none of these three; they read as "", like the empty columns of old items.
+		{"held since", w.HeldSince, g.HeldSince},
+		{"handed over by", w.HandoffFrom, g.HandoffFrom},
+		{"hand-over note", w.HandoffNote, g.HandoffNote},
 	}
 	if err1 != nil || err2 != nil {
 		return "fields can't be read"

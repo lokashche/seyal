@@ -3,6 +3,7 @@
 package workitem
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -429,7 +430,7 @@ func (s session) enter(it *Item) error {
 			if id == "" {
 				continue
 			}
-			if err := s.assign(it, id, ""); err != nil {
+			if err := s.assign(it, id, "", ledger.SystemActor, handoff{How: HowRule}); err != nil {
 				return err
 			}
 		}
@@ -441,39 +442,73 @@ func (s session) enter(it *Item) error {
 // it, a person field, or a role (anyone in it, shown as the item's team). While the person field is
 // empty, the item stays where it is, or with whoever started it if nobody has it yet.
 func (s session) handOver(it *Item) error {
+	step := handoff{How: HowStep}
 	kind, name := engine.Owner(s.p, it.State)
 	switch kind {
 	case "starter":
 		if it.CreatedBy != "" {
-			return s.assign(it, it.CreatedBy, "")
+			return s.assign(it, it.CreatedBy, "", ledger.SystemActor, step)
 		}
 	case "field":
 		if id, _ := it.Fields[name].(string); id != "" {
-			return s.assign(it, id, "")
+			return s.assign(it, id, "", ledger.SystemActor, step)
 		}
 		if it.AssigneeID == "" && it.Team == "" && it.CreatedBy != "" {
-			return s.assign(it, it.CreatedBy, "")
+			return s.assign(it, it.CreatedBy, "", ledger.SystemActor, step)
 		}
 	case "role":
-		return s.assign(it, "", name)
+		return s.assign(it, "", name, ledger.SystemActor, step)
 	}
 	return nil
 }
 
-// assign gives the item to one person, or to a team (a role) when person is "".
-func (s session) assign(it *Item, person, team string) error {
+// How an item changed hands, in the "how" of its item.assigned event (D68, D70). An event without "how"
+// (written before D70) means HowStep.
+const (
+	HowStep   = "step"   // the new step's owner got it (a rule of the process; recorded as Seyal)
+	HowPass   = "pass"   // a person passed it on (recorded as that person)
+	HowTake   = "take"   // a person took it from the team (recorded as that person)
+	HowReturn = "return" // work sent back went to whoever had that step (recorded as Seyal)
+	HowRule   = "rule"   // an "assign" action of the process (recorded as Seyal)
+)
+
+// handoff says how and why an item changes hands. How and Note are always asked for; the rest are
+// added to the event only when set.
+type handoff struct {
+	How        string // one of the How… words
+	Note       string // why, in the person's words (or the reason work was sent back)
+	Via        string // button, panel, chat or voice; "" when a rule did it
+	As         string // "admin" when only being an admin allowed it
+	After      string // the move that sent the work back (HowReturn)
+	From       string // who it comes from, when that isn't simply the person who had it (a send-back)
+	Suggestion int64  // the ledger number of the suggestion confirmed with Yes, or 0
+}
+
+// assign gives the item to one person, or to a team (a role) when person is "", and records who did
+// it (by), how and why. Nothing happens if it is already there. It never changes the version: who
+// holds the work isn't one of its details, so approvals already given stay (D68 choice 5).
+func (s session) assign(it *Item, person, team string, by ledger.Actor, h handoff) error {
 	if it.AssigneeID == person && it.Team == team {
 		return nil
 	}
+	fromAssignee, fromTeam := it.AssigneeID, it.Team
+	from := cmp.Or(h.From, fromAssignee)
 	it.AssigneeID, it.Team = person, team
+	it.HeldSince, it.HandoffFrom, it.HandoffNote = heldSinceNow(), from, h.Note
 	if err := s.update(*it); err != nil {
 		return err
 	}
-	change := map[string]any{"assignee_id": person}
-	if team != "" {
-		change["team"] = team
+	change := map[string]any{"how": cmp.Or(h.How, HowStep), "assignee_id": person}
+	for key, v := range map[string]string{"team": team, "from_assignee": from, "from_team": fromTeam,
+		"note": h.Note, "via": h.Via, "as": h.As, "after": h.After} {
+		if v != "" {
+			change[key] = v
+		}
 	}
-	return s.record("item.assigned", *it, change, ledger.SystemActor)
+	if h.Suggestion != 0 {
+		change["suggestion"] = h.Suggestion
+	}
+	return s.record("item.assigned", *it, change, by)
 }
 
 // copyField copies one field's value into another (e.g. keeping a proposed amount to compare with

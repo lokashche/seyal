@@ -83,6 +83,7 @@ type itemView struct {
 	Pill    string
 	Status  string
 	With    string // who has it now: a person, or a team
+	Since   string // since when they have it: "today" or a day like "3 Nov"; "" for items from before D70
 	Heading string // the title, or the start of the first message while it has none
 	Links   []linkView
 	Closed  bool
@@ -299,6 +300,7 @@ func (v *view) item(id string) (*itemView, error) {
 		}
 		iv.With = cmp.Or(name, it.Team) + " team"
 	}
+	iv.Since = v.since(it.HeldSince)
 
 	if iv.Links, err = v.links(it.ID); err != nil {
 		return nil, err
@@ -436,6 +438,23 @@ func (v *view) quick(f playbook.Field) []string {
 		}
 	}
 	return nil
+}
+
+// since shows a hand-over's moment (workitem.HeldSinceLayout) as a day: "today", "3 Nov", or
+// "3 Nov 2025" in another year. It is "" when the item has no such moment.
+func (v *view) since(held string) string {
+	t, err := time.Parse(workitem.HeldSinceLayout, held)
+	if err != nil {
+		return ""
+	}
+	t = t.In(v.c.tenant.Zone)
+	switch {
+	case t.Format(time.DateOnly) == v.today:
+		return "today"
+	case strings.HasPrefix(v.today, t.Format("2006")):
+		return t.Format("2 Jan")
+	}
+	return t.Format("2 Jan 2006")
 }
 
 func (v *view) when(t time.Time) string {

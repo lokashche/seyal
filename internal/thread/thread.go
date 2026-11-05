@@ -101,14 +101,19 @@ func (b *builder) loadNames() error {
 	return nil
 }
 
+// eventsQuery reads one item's own events. It compares only subject_id, so Postgres can use the
+// ledger_subject index instead of reading every event of the business. Link events (item.linked)
+// are left out: starting linked work posts a message in both threads instead.
+const eventsQuery = `
+	SELECT seq, occurred_at, kind, actor_kind, coalesce(actor_person_id::text, ''),
+		coalesce(on_behalf_of::text, ''), body
+	FROM ledger
+	WHERE tenant_id = current_tenant() AND subject_id = $1::uuid
+		AND subject_type = 'work_item' AND kind <> 'item.linked'
+	ORDER BY seq`
+
 func (b *builder) addEvents(itemID string) error {
-	rows, err := b.tx.Query(b.ctx, `
-		SELECT seq, occurred_at, kind, actor_kind, coalesce(actor_person_id::text, ''),
-			coalesce(on_behalf_of::text, ''), body
-		FROM ledger
-		WHERE tenant_id = current_tenant() AND subject_type = 'work_item'
-			AND (subject_id::text = $1 OR (kind = 'item.linked' AND body::jsonb -> 'payload' ->> 'to' = $1))
-		ORDER BY seq`, itemID)
+	rows, err := b.tx.Query(b.ctx, eventsQuery, itemID)
 	if err != nil {
 		return fmt.Errorf("thread: events: %w", err)
 	}
@@ -123,8 +128,6 @@ func (b *builder) addEvents(itemID string) error {
 			Payload struct {
 				Change map[string]any `json:"change"`
 				Item   workitem.Item  `json:"item"`
-				// item.linked has these instead
-				From, To, Kind string
 			} `json:"payload"`
 		}
 		if err := json.Unmarshal([]byte(body), &parsed); err != nil {
@@ -132,11 +135,8 @@ func (b *builder) addEvents(itemID string) error {
 		}
 		e.Who = b.who(actorKind, actor, behalf)
 		pl := parsed.Payload
-		// Links aren't lines of their own: starting linked work posts a message in both threads.
-		if e.Kind != "item.linked" {
-			e.Text = b.describe(e.Kind, pl.Change, pl.Item)
-			b.before = pl.Item.Fields
-		}
+		e.Text = b.describe(e.Kind, pl.Change, pl.Item)
+		b.before = pl.Item.Fields
 		if e.Text != "" {
 			b.entries = append(b.entries, e)
 		}
@@ -220,12 +220,48 @@ func (b *builder) describe(kind string, change map[string]any, it workitem.Item)
 	case "item.posted":
 		return str("text")
 	case "item.assigned":
-		if team := str("team"); team != "" {
-			return "handed it to the " + cmp.Or(b.roles[team], team) + " team"
-		}
-		return "assigned it to " + b.name(str("assignee_id"))
+		return b.handOver(str)
 	}
 	return ""
+}
+
+// handOver describes an item.assigned event by how it changed hands (D70). Events written before D70
+// have no "how" and read as a step's owner getting it.
+func (b *builder) handOver(str func(string) string) string {
+	to := b.name(str("assignee_id"))
+	if team := str("team"); team != "" {
+		to = b.team(team)
+	}
+	var text string
+	switch str("how") {
+	case workitem.HowPass:
+		text = "passed it to " + to
+	case workitem.HowTake:
+		text = "took it"
+		if from := str("from_team"); from != "" {
+			text += " from " + b.team(from)
+		}
+	case workitem.HowReturn:
+		text = "gave it back to " + to // the reason is already in the move's own line
+	default: // a step's owner, or an "assign" action of the process
+		if str("team") != "" {
+			text = "handed it to " + to
+		} else {
+			text = "assigned it to " + to
+		}
+	}
+	if str("as") == "admin" {
+		text += " (as an admin)"
+	}
+	if note := str("note"); note != "" && str("how") != workitem.HowReturn {
+		text += ": " + note
+	}
+	return text
+}
+
+// team names a role's team, e.g. "the Ops team".
+func (b *builder) team(role string) string {
+	return "the " + cmp.Or(b.roles[role], role) + " team"
 }
 
 // who names the actor of an event the way people expect to read it.

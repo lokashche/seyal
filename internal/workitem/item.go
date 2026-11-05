@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	_ "time/tzdata" // time zone data built in, so tenant time zones work on any server
 
 	"github.com/jackc/pgx/v5"
@@ -36,6 +37,24 @@ type Item struct {
 	StartedRef        string        `json:"started_ref,omitempty"`
 	CreatedBy         string        `json:"created_by,omitempty"`
 	Team              string        `json:"team,omitempty"` // a role that has the item, while no one person does
+	// The latest hand-over (D70): when whoever has it now got it (UTC, see HeldSinceLayout), from which
+	// person, and the note given with it. Old snapshots don't have them, and read as "".
+	HeldSince   string `json:"held_since,omitempty"`
+	HandoffFrom string `json:"handoff_from,omitempty"`
+	HandoffNote string `json:"handoff_note,omitempty"`
+}
+
+// HeldSinceLayout is how held_since is written in the snapshot: UTC, to whole microseconds (what
+// Postgres keeps). SelectHeldSince reads the column back in exactly this form, so `seyal verify`
+// compares two equal strings.
+const HeldSinceLayout = "2006-01-02T15:04:05.000000Z"
+
+// SelectHeldSince reads the held_since column as HeldSinceLayout does, or "".
+const SelectHeldSince = `coalesce(to_char(held_since AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '')`
+
+// heldSinceNow is the moment of a hand-over, in the form the snapshot keeps.
+func heldSinceNow() string {
+	return time.Now().UTC().Truncate(time.Microsecond).Format(HeldSinceLayout)
 }
 
 // ErrNotFound means there is no work item with that id.
@@ -45,7 +64,8 @@ const selectItems = `
 	SELECT id::text, number, playbook_version_id::text, title, state,
 		coalesce(assignee_id::text, ''), coalesce(to_char(due_on, 'YYYY-MM-DD'), ''),
 		version, fields, fields_sha256, started_via, coalesce(started_ref, ''),
-		coalesce(created_by::text, ''), coalesce(team, '')
+		coalesce(created_by::text, ''), coalesce(team, ''),
+		` + SelectHeldSince + `, coalesce(handoff_from::text, ''), coalesce(handoff_note, '')
 	FROM work_items WHERE tenant_id = current_tenant()`
 
 const selectItem = selectItems + ` AND id::text = $1`
@@ -128,7 +148,8 @@ func getForUpdate(ctx context.Context, tx pgx.Tx, id string) (Item, error) {
 func scanItem(row pgx.Row) (Item, error) {
 	var it Item
 	err := row.Scan(&it.ID, &it.Number, &it.PlaybookVersionID, &it.Title, &it.State, &it.AssigneeID,
-		&it.DueOn, &it.Version, &it.Fields, &it.FieldsHash, &it.StartedVia, &it.StartedRef, &it.CreatedBy, &it.Team)
+		&it.DueOn, &it.Version, &it.Fields, &it.FieldsHash, &it.StartedVia, &it.StartedRef, &it.CreatedBy, &it.Team,
+		&it.HeldSince, &it.HandoffFrom, &it.HandoffNote)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Item{}, ErrNotFound
 	}
@@ -192,9 +213,11 @@ func (s session) update(it Item) error {
 	_, err := s.tx.Exec(s.ctx, `
 		UPDATE work_items SET title = $2, state = $3, assignee_id = nullif($4::text, '')::uuid,
 			due_on = nullif($5::text, '')::date, version = $6, fields = $7, fields_sha256 = $8,
-			team = nullif($9::text, ''), updated_at = now()
+			team = nullif($9::text, ''), held_since = nullif($10::text, '')::timestamptz,
+			handoff_from = nullif($11::text, '')::uuid, handoff_note = nullif($12::text, ''), updated_at = now()
 		WHERE tenant_id = current_tenant() AND id::text = $1`,
-		it.ID, it.Title, it.State, it.AssigneeID, it.DueOn, it.Version, it.Fields, it.FieldsHash, it.Team)
+		it.ID, it.Title, it.State, it.AssigneeID, it.DueOn, it.Version, it.Fields, it.FieldsHash, it.Team,
+		it.HeldSince, it.HandoffFrom, it.HandoffNote)
 	if err != nil {
 		return fmt.Errorf("workitem: update: %w", err)
 	}

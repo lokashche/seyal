@@ -130,6 +130,10 @@ func TestTamperingWithTablesIsFound(t *testing.T) {
 			SELECT a.tenant_id, a.work_item_id, a.item_version, a.fields_sha256, 'ops', p.id, 'approve'
 			FROM approvals a, persons p WHERE a.work_item_id = $1 AND a.slot = 'sales' AND p.display_name = 'Fake Approver'`,
 			"approvals", "not in the ledger"},
+		// The three hand-over columns (D70) are checked like the others.
+		{"hand-over note added", "", "UPDATE work_items SET handoff_note = 'quietly added' WHERE id = $1", "work_items", "hand-over note is quietly added"},
+		{"held since changed", "", "UPDATE work_items SET held_since = now() WHERE id = $1", "work_items", "held since is 20"},
+		{"handed over by changed", "", "UPDATE work_items SET handoff_from = created_by WHERE id = $1", "work_items", "handed over by is"},
 		{"link removed", "", "DELETE FROM work_item_links WHERE from_item_id = $1", "work_item_links", "missing"},
 		{"standard fee changed in master data", "", `UPDATE master_items SET fields = '{"standard_fee": 1}' WHERE key = 'monthly-books' AND $1::text <> ''`,
 			"master_items", "differs from the ledger"},
