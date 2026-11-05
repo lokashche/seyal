@@ -135,6 +135,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .msg.bot { background: var(--accent-soft); border-color: transparent; }
 .msg audio { display: block; margin-top: 6px; max-width: 100%; }
 .msg img { display: block; margin-top: 6px; max-width: 100%; max-height: 240px; border-radius: 6px; }
+.found { list-style: none; margin: 8px 0 4px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.found a { color: inherit; }
+.found .r { display: block; color: var(--muted); font-size: 12.5px; }
 .evt { align-self: center; font-size: 12px; color: var(--muted); text-align: center; max-width: 92%; }
 .quick { display: flex; gap: 6px; flex-wrap: wrap; }
 .quick form { margin: 0; }
@@ -152,10 +155,18 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .composer select { font: inherit; font-size: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); padding: 3px 6px; margin-left: 6px; }
 .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .btn[data-voice="record"][aria-pressed="true"] { background: var(--warn); border-color: var(--warn); color: #fff; }
+/* Hold to talk: a long press on a phone mustn't open a menu, select text or scroll the page. */
+.btn.rec { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.heard { font-size: 12.5px; color: var(--muted); }
+.heard[hidden], .heard p[hidden] { display: none; }
+.heard p { margin: 4px 0 0; padding: 6px 10px; border-left: 2px solid var(--line); white-space: pre-wrap; }
+.linkish { border: 0; background: none; padding: 0; font: inherit; color: var(--accent-ink); text-decoration: underline; cursor: pointer; }
 .voice-preview { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 8px; border: 1px solid var(--line); background: var(--bg); border-radius: 10px; }
 .voice-preview[hidden] { display: none; }
 .voice-preview audio { max-width: 100%; height: 36px; }
 .voice-label { display: block; font-size: 12px; color: var(--muted); margin-top: 4px; }
+.play { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--panel); color: var(--ink); font-size: 10px; cursor: pointer; vertical-align: middle; }
+.play[aria-pressed="true"] { background: var(--ink); color: var(--panel); }
 .attach { position: relative; overflow: hidden; display: inline-flex; align-items: center; }
 .attach input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .attach:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -320,6 +331,7 @@ a.biz:hover { color: var(--ink); text-decoration: underline; }
    the message box has the room. Each screen fills the height and scrolls inside itself. */
 @media (max-width: 960px) {
   body { height: 100dvh; }
+  .play { width: 36px; height: 36px; font-size: 12px; } /* big enough to tap on a phone */
   .app { display: flex; flex-direction: column; overflow: hidden; }
   .app > .pane { flex: 1 1 auto; }
   .pane + .pane { border-left: 0; }

@@ -29,7 +29,8 @@ func Register(name string, open func(model string, get func(string) string) (Mod
 
 // FromEnv reads the AI settings. For each purpose, SEYAL_AI_<PURPOSE> is "provider:model" (empty
 // = off) and SEYAL_AI_<PURPOSE>_PRICE is "input,cached,cache-write,output" in US dollars per
-// million tokens. SEYAL_USD_INR is the rupee rate used in the cost report (default 88).
+// million tokens. SEYAL_USD_INR is the rupee rate used in the cost report (default 88). The speech
+// service for voice notes has its own settings (SEYAL_AI_TRANSCRIBE..., see speech.go).
 func FromEnv(get func(string) string) (*Setup, error) {
 	s := &Setup{USDtoINR: 88}
 	if v := strings.TrimSpace(get("SEYAL_USD_INR")); v != "" {
@@ -69,6 +70,9 @@ func FromEnv(get func(string) string) (*Setup, error) {
 			return nil, fmt.Errorf("%s_PRICE: %w", key, err)
 		}
 		s.Set(p, Choice{Name: spec, Model: m, Price: price})
+	}
+	if err := speechFromEnv(s, get); err != nil {
+		return nil, err
 	}
 	return s, nil
 }

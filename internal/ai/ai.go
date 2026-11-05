@@ -10,7 +10,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -40,6 +39,9 @@ type Request struct {
 	Schema map[string]any
 	// MaxTokens limits the length of the answer.
 	MaxTokens int
+	// Timeout, when set, limits the whole call to the model (every try), for a caller that can't
+	// wait long. The call is still recorded when it runs out.
+	Timeout time.Duration
 }
 
 // Usage is the tokens one call used, the same way for every provider.
@@ -83,6 +85,7 @@ type Choice struct {
 // Setup holds the model chosen for each purpose. The zero value has AI off everywhere.
 type Setup struct {
 	choices  map[Purpose]Choice
+	speech   *Speech // voice notes to words (speech.go); nil = off
 	USDtoINR float64 // for showing costs in rupees
 }
 
@@ -115,32 +118,37 @@ type Link struct {
 // cost, time, success). It returns ErrOff when AI is off for the purpose. tx must come from
 // db.WithTenant; the record is written even when the model fails.
 func (s *Setup) Call(ctx context.Context, tx pgx.Tx, p Purpose, r Request, link Link) (Response, error) {
-	c, ok := s.For(p)
-	if !ok {
+	resp, call, callErr := s.Ask(ctx, p, r, link)
+	if errors.Is(callErr, ErrOff) {
 		return Response{}, ErrOff
 	}
-	start := time.Now()
-	resp, callErr := c.Model.Complete(ctx, r)
-	took := time.Since(start)
+	if err := call.Record(ctx, tx); err != nil {
+		return Response{}, err
+	}
+	return resp, callErr
+}
 
-	msg := ""
+// Ask is Call without the database: it sends the request and returns the answer and the call, which
+// the caller records with Called.Record (also when the model failed). It is for callers that must
+// not keep a database transaction open while the model works. It returns ErrOff (and no call to
+// record) when AI is off for the purpose.
+func (s *Setup) Ask(ctx context.Context, p Purpose, r Request, link Link) (Response, Called, error) {
+	c, ok := s.For(p)
+	if !ok {
+		return Response{}, Called{}, ErrOff
+	}
+	start := time.Now()
+	modelCtx := ctx
+	if r.Timeout > 0 {
+		var cancel context.CancelFunc
+		modelCtx, cancel = context.WithTimeout(ctx, r.Timeout)
+		defer cancel()
+	}
+	resp, callErr := c.Model.Complete(modelCtx, r)
+	call := Called{Purpose: p, Model: c.Name, Link: link, Usage: resp.Usage, CostUSD: c.Price.Cost(resp.Usage),
+		Took: time.Since(start), Err: callErr}
 	if callErr != nil {
-		msg = callErr.Error()
-		if len(msg) > 500 {
-			msg = msg[:500]
-		}
+		return Response{}, call, fmt.Errorf("ai: %s: %w", c.Name, callErr)
 	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO ai_calls (tenant_id, purpose, model, person_id, work_item_id, input_tokens, cached_tokens,
-			cache_write_tokens, output_tokens, cost_usd, duration_ms, ok, error)
-		VALUES (current_tenant(), $1, $2, nullif($3::text, '')::uuid, nullif($4::text, '')::uuid, $5, $6, $7, $8,
-			$9, $10, $11, $12)`,
-		string(p), c.Name, link.PersonID, link.ItemID, resp.Usage.Input, resp.Usage.Cached, resp.Usage.CacheWrite,
-		resp.Usage.Output, c.Price.Cost(resp.Usage), took.Milliseconds(), callErr == nil, strings.ToValidUTF8(msg, "")); err != nil {
-		return Response{}, fmt.Errorf("ai: record call: %w", err)
-	}
-	if callErr != nil {
-		return Response{}, fmt.Errorf("ai: %s: %w", c.Name, callErr)
-	}
-	return resp, nil
+	return resp, call, nil
 }

@@ -90,3 +90,36 @@ func TestCallsAreRecordedAndReported(t *testing.T) {
 		}
 	})
 }
+
+// waits is a model that never answers: it waits until the call is given up.
+type waits struct{}
+
+func (waits) Complete(ctx context.Context, _ ai.Request) (ai.Response, error) {
+	<-ctx.Done()
+	return ai.Response{}, ctx.Err()
+}
+
+// TestCallTimeout: a request with a Timeout gives up on a model that doesn't answer, and the call is
+// still recorded (with the same transaction, which stays usable).
+func TestCallTimeout(t *testing.T) {
+	ctx := context.Background()
+	owner, app := testdb.Connect(t)
+	tenant, person := testdb.NewTenant(t, owner, "AI Timeout Test")
+	s := &ai.Setup{}
+	s.Set(ai.Understand, ai.Choice{Name: "fake:slow", Model: waits{}})
+	err := db.WithTenant(ctx, app, tenant, func(tx pgx.Tx) error {
+		start := time.Now()
+		_, err := s.Call(ctx, tx, ai.Understand, ai.Request{Input: "hello", Timeout: 50 * time.Millisecond}, ai.Link{PersonID: person})
+		if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 5*time.Second {
+			t.Errorf("call = %v after %v, want it given up after the timeout", err, time.Since(start))
+		}
+		var n int
+		if err := tx.QueryRow(ctx, "SELECT count(*) FROM ai_calls WHERE NOT ok").Scan(&n); err != nil || n != 1 {
+			t.Errorf("%d failed calls recorded (%v), want 1", n, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

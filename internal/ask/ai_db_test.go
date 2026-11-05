@@ -37,6 +37,8 @@ func (o *office) withFake(answers map[string]string) *ai.Fake {
 	return f
 }
 
+// begin sends a message on Tell Seyal as Sam. A question about the work is then answered in a
+// second transaction, as the web app does.
 func (o *office) begin(text string) ask.Reply {
 	o.t.Helper()
 	var r ask.Reply
@@ -45,6 +47,13 @@ func (o *office) begin(text string) ask.Reply {
 		r, err = ask.Begin(o.ctx, tx, o.env(), o.pv, channel.Incoming{Channel: "web", PersonID: o.sam, Text: text})
 		return err
 	})
+	if r.Asked != nil {
+		o.in(func(tx pgx.Tx) error {
+			var err error
+			r.Answer, r.Seyal, err = ask.AnswerAsked(o.ctx, tx, o.env(), *r.Asked)
+			return err
+		})
+	}
 	return r
 }
 

@@ -46,6 +46,10 @@ type Message struct {
 	Text       string    `json:"text"`
 	Media      []Media   `json:"media,omitempty"`
 	SentAt     time.Time `json:"sent_at"`
+	// Transcript is set when the text came from a voice note (speak instead of type): the words the
+	// speech service heard (and the AI tidy-up's, if used), next to the final text the person sent
+	// (voice.go).
+	Transcript *Transcript `json:"transcript,omitempty"`
 }
 
 // Media describes one stored file. The bytes are in the media store, under the fingerprint.
@@ -64,8 +68,11 @@ type Incoming struct {
 	From       string // the sender's id on other channels, matched via channel identities
 	Text       string
 	Files      []File
-	ThreadID   string    // optional work item id
-	SentAt     time.Time // optional; now if zero
+	// Spoken is set when the text came from a voice note (speak instead of type): the recording and
+	// what was heard in it. The recording goes first among the message's files (voice.go).
+	Spoken   *Spoken
+	ThreadID string    // optional work item id
+	SentAt   time.Time // optional; now if zero
 }
 
 // File is a file sent with a message.
@@ -91,7 +98,7 @@ var (
 // file stays in the store with nothing pointing at it; that's harmless, because files are stored by
 // fingerprint and never served without a message.
 func Receive(ctx context.Context, tx pgx.Tx, store media.Store, in Incoming) (m Message, isNew bool, err error) {
-	if strings.TrimSpace(in.Text) == "" && len(in.Files) == 0 {
+	if strings.TrimSpace(in.Text) == "" && len(in.Files) == 0 && in.Spoken == nil {
 		return Message{}, false, ErrEmpty
 	}
 	if utf8.RuneCountInString(in.Text) > MaxText {
@@ -119,6 +126,11 @@ func Receive(ctx context.Context, tx pgx.Tx, store media.Store, in Incoming) (m 
 		m.SentAt = time.Now()
 	}
 	m.SentAt = m.SentAt.UTC().Truncate(time.Microsecond) // Postgres keeps microseconds
+	if in.Spoken != nil {
+		if err := saveSpoken(ctx, tx, store, personID, *in.Spoken, &m); err != nil {
+			return Message{}, false, err
+		}
+	}
 	for _, f := range in.Files {
 		md, err := saveFile(ctx, tx, store, personID, f)
 		if err != nil {
@@ -279,11 +291,11 @@ func saveFile(ctx context.Context, tx pgx.Tx, store media.Store, personID string
 func insert(ctx context.Context, tx pgx.Tx, m *Message, identityID string) error {
 	err := tx.QueryRow(ctx, `
 		INSERT INTO messages (tenant_id, work_item_id, author_kind, author_person_id, channel,
-			channel_identity_id, external_id, text, sent_at)
+			channel_identity_id, external_id, text, sent_at, transcript_id)
 		VALUES (current_tenant(), nullif($1::text, '')::uuid, $2, nullif($3::text, '')::uuid, $4,
-			nullif($5::text, '')::uuid, nullif($6::text, ''), $7, $8)
+			nullif($5::text, '')::uuid, nullif($6::text, ''), $7, $8, nullif($9::text, '')::uuid)
 		RETURNING id::text`,
-		m.ThreadID, m.AuthorKind, m.PersonID, m.Channel, identityID, m.ExternalID, m.Text, m.SentAt).Scan(&m.ID)
+		m.ThreadID, m.AuthorKind, m.PersonID, m.Channel, identityID, m.ExternalID, m.Text, m.SentAt, transcriptID(m)).Scan(&m.ID)
 	if err != nil {
 		return fmt.Errorf("channel: save message: %w", err)
 	}
@@ -297,17 +309,30 @@ func insert(ctx context.Context, tx pgx.Tx, m *Message, identityID string) error
 	return nil
 }
 
+func transcriptID(m *Message) string {
+	if m.Transcript == nil {
+		return ""
+	}
+	return m.Transcript.ID
+}
+
 const selectMessage = `
 	SELECT id::text, coalesce(work_item_id::text, ''), author_kind, coalesce(author_person_id::text, ''),
-		channel, coalesce(external_id, ''), text, sent_at
+		channel, coalesce(external_id, ''), text, sent_at, coalesce(transcript_id::text, '')
 	FROM messages WHERE tenant_id = current_tenant() AND `
 
 func load(ctx context.Context, tx pgx.Tx, where string, args ...any) (Message, error) {
 	var m Message
+	var transcript string
 	err := tx.QueryRow(ctx, selectMessage+where, args...).
-		Scan(&m.ID, &m.ThreadID, &m.AuthorKind, &m.PersonID, &m.Channel, &m.ExternalID, &m.Text, &m.SentAt)
+		Scan(&m.ID, &m.ThreadID, &m.AuthorKind, &m.PersonID, &m.Channel, &m.ExternalID, &m.Text, &m.SentAt, &transcript)
 	if err != nil {
 		return Message{}, err
+	}
+	if transcript != "" {
+		if err := loadTranscript(ctx, tx, &m, transcript); err != nil {
+			return Message{}, err
+		}
 	}
 	rows, _ := tx.Query(ctx, `
 		SELECT md.id::text, md.content_type, md.size, md.sha256

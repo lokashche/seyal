@@ -42,8 +42,24 @@
   <div class="pane-h"><b>Tell Seyal</b></div>
   {{template "banners" .}}
   <div class="thread" id="thread">
-    {{with .Data.Tell}}{{with .Pending}}
-    <div class="msg me"><span class="who">{{$.Session.Name}}</span>{{with .Text}}<p>{{.}}</p>{{end}}{{if .Files}}<p class="why">{{.Files}} file{{if gt .Files 1}}s{{end}} attached</p>{{end}}</div>
+    {{with .Data.Tell}}{{with .Answer}}
+    <div class="msg me"><span class="who">{{$.Session.Name}}</span><p>{{.Question}}</p></div>
+    <div class="msg bot answer"><span class="who">Seyal</span>
+      <p>{{.Line}}</p>
+      {{with .Items}}<ul class="found">
+        {{range .}}<li><a href="/t/{{$.Slug}}/items/{{.ID}}"><b>{{.Number}}</b> {{.Title}}</a><span class="r">{{.Process}} · {{.Status}}{{with .With}} · with {{.}}{{end}}</span></li>{{end}}
+      </ul>{{end}}
+      {{with .More}}<p class="why">and {{.}} more. Ask about a shorter time, one process or one person to see the rest.</p>{{end}}
+    </div>
+    {{if and .MessageID $.Data.Tell.StartAs}}
+    <form class="quick confirm" method="post" action="/t/{{$.Slug}}/tell">
+      <input type="hidden" name="message" value="{{.MessageID}}">
+      <span class="why">Meant new work?</span>
+      {{range $.Data.Tell.StartAs}}<button name="playbook" value="{{.ID}}">Start it as {{.Name}}</button>{{end}}
+    </form>
+    {{end}}
+    {{else}}{{with .Pending}}
+    <div class="msg me"><span class="who">{{$.Session.Name}}</span>{{with .Text}}<p>{{.}}</p>{{end}}{{with .Spoken}}<span class="voice-label"><button type="button" class="play" data-play="{{.}}" aria-label="Play the original voice note" title="Play the original voice note">▶</button> spoken</span>{{end}}{{if .Files}}<p class="why">{{.Files}} file{{if gt .Files 1}}s{{end}} attached</p>{{end}}</div>
     <div class="msg bot"><span class="who">Seyal</span>
       <p>{{with .Suggested}}{{if .Fallback}}This doesn't fit any of your processes. Start it as {{.Name}}?{{else}}This looks like {{.Name}}. Start it?{{end}}{{else}}Which process is this for?{{end}}</p>
     </div>
@@ -54,13 +70,13 @@
       {{range .Others}}<button name="playbook" value="{{.ID}}">{{.Name}}</button>{{end}}
     </form>
     {{else}}
-    <div class="empty">Type the work as you would tell a colleague. Seyal turns it into a work item and asks only for what's missing.</div>
-    {{end}}{{else}}
+    <div class="empty">Type the work as you would tell a colleague. Seyal turns it into a work item and asks only for what's missing.{{if .CanAsk}} You can also ask about the work, for example “What is overdue?”{{end}}</div>
+    {{end}}{{end}}{{else}}
     <div class="empty">Type the work as you would tell a colleague. Seyal turns it into a work item and asks only for what's missing.</div>
     {{end}}
   </div>
   {{with .Data.Tell}}
-  <form class="composer" id="tell-form" method="post" action="/t/{{$.Slug}}/tell" enctype="multipart/form-data">
+  <form class="composer" id="tell-form" method="post" action="/t/{{$.Slug}}/tell" enctype="multipart/form-data"{{if $.Speech}} data-transcribe="/t/{{$.Slug}}/voice"{{end}}>
     {{if eq (len .Processes) 1}}{{range .Processes}}<input type="hidden" name="playbook" value="{{.ID}}">{{end}}{{end}}
     <label for="msg" class="ctl-label">Message</label>
     <textarea id="msg" name="text" placeholder="{{.Placeholder}}"></textarea>
@@ -104,6 +120,10 @@
 {{end}}
 
 {{define "tools"}}
+    <div class="heard" data-heard hidden>
+      <button type="button" class="linkish" data-heard-toggle aria-expanded="false">As heard</button>
+      <p data-heard-text hidden></p>
+    </div>
     <div class="voice-preview" data-voice-preview hidden>
       <audio controls></audio>
       <button type="button" class="btn ok sm" data-voice="send">Send voice note</button>
@@ -111,7 +131,7 @@
     </div>
     <div class="row">
       <button class="btn">Send</button>
-      <button type="button" class="btn ghost" data-voice="record" aria-pressed="false">🎙 Record</button>
+      <button type="button" class="btn ghost rec" data-voice="record" aria-pressed="false" title="Tap to start and tap again to stop, or hold to talk and let go">🎙 Record</button>
       <label class="btn ghost attach">📎 Attach
         <input type="file" name="file" accept="audio/*,image/png,image/jpeg,image/webp,image/heic,application/pdf" multiple>
       </label>
@@ -141,8 +161,10 @@
       <div class="msg {{.Kind}}">
         <span class="who">{{.Who}} · {{.Time}}</span>
         {{with .Text}}<p>{{.}}</p>{{end}}
+        {{$e := .}}
         {{range .Media}}
-          {{if .Audio}}<span class="voice-label">🎙 Voice note</span><audio controls preload="none" src="{{.URL}}"></audio>
+          {{if .Spoken}}<span class="voice-label"><button type="button" class="play" data-play="{{.URL}}" aria-label="Play the original voice note" title="Play the original voice note">▶</button> spoken{{if $e.Tidied}}, tidied by AI{{end}}{{if $e.Edited}}, corrected before sending{{end}}</span>
+          {{else if .Audio}}<span class="voice-label">🎙 Voice note</span><audio controls preload="none" src="{{.URL}}"></audio>
           {{else if .Image}}<a href="{{.URL}}" hx-boost="false"><img src="{{.URL}}" alt="Attached image" loading="lazy"></a>
           {{else}}<a href="{{.URL}}" hx-boost="false">Attached file</a>{{end}}
         {{end}}
@@ -156,7 +178,7 @@
     {{end}}
   </div>
   {{if not .Closed}}
-  <form class="composer" method="post" action="/t/{{$.Slug}}/items/{{.Item.ID}}/say" enctype="multipart/form-data">
+  <form class="composer" method="post" action="/t/{{$.Slug}}/items/{{.Item.ID}}/say" enctype="multipart/form-data"{{if $.Speech}} data-transcribe="/t/{{$.Slug}}/voice" data-item="{{.Item.ID}}"{{end}}>
     <label for="msg" class="ctl-label">Message</label>
     <textarea id="msg" name="text" placeholder="Answer Seyal, give a short command like submit, or write a note"></textarea>
     {{template "tools"}}

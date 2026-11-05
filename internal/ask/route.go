@@ -35,10 +35,13 @@ type Routing struct {
 	Message   channel.Message
 	Suggested string            // the version id of the most likely process, or "" if unsure
 	Seyal     []channel.Message // Seyal's reply, when the message starts nothing (e.g. a greeting)
+	Answer    *Answer           // Seyal's answer, when it can't read a question now (D67)
+	Asked     *Asked            // a question about the work, to answer with AnswerAsked in a new transaction
 }
 
-// Route saves a message from Tell Seyal and suggests the process it is for. A greeting or a
-// question gets a reply instead, and nothing is suggested. tx must come from db.WithTenant.
+// Route saves a message from Tell Seyal and suggests the process it is for. A greeting gets a reply
+// instead, and a question about the work comes back as Asked; nothing is suggested for either.
+// tx must come from db.WithTenant.
 func Route(ctx context.Context, tx pgx.Tx, env Env, processes []Process, in channel.Incoming) (Routing, error) {
 	in.ThreadID = ""
 	msg, _, err := channel.Receive(ctx, tx, env.Store, in)
@@ -49,13 +52,21 @@ func Route(ctx context.Context, tx pgx.Tx, env Env, processes []Process, in chan
 	text := strings.TrimSpace(msg.Text)
 	kind, suggested, reply := routeWithAI(ctx, tx, env, processes, msg.PersonID, text)
 	if kind == "" { // AI off or no usable answer
-		if isGreeting(text) {
+		switch {
+		case isGreeting(text):
 			kind, reply = "greeting", greetingReply
-		} else {
+		case looksLikeQuestion(text) && wordsOnly(msg): // a clear question: Seyal can't answer it now
+			r.Answer = Unread(env, msg.ID, text, "")
+			return r, nil
+		default:
 			kind, suggested = "work", routeByWords(processes, text)
 		}
 	}
-	if (kind == "greeting" || kind == "question") && len(msg.Media) == 0 {
+	if kind == "question" && wordsOnly(msg) { // answered from the data after this transaction (D67)
+		r.Asked = &Asked{MessageID: msg.ID, PersonID: msg.PersonID, Question: text, Reply: reply}
+		return r, nil
+	}
+	if kind == "greeting" && wordsOnly(msg) {
 		m, err := channel.Post(ctx, tx, "", limit(strings.TrimSpace(reply), 600))
 		if err != nil {
 			return Routing{}, err
@@ -87,7 +98,8 @@ Answer only with JSON that follows the given schema.
 - kind "work": the message is about work to start or report. Put the id of the best matching process in
   "process", or "" if none fits or you can't tell.
 - kind "greeting": hello, thanks, small talk. Put a short friendly reply in "reply".
-- kind "question": a question to Seyal. Put a short, helpful reply in "reply"; never promise anything.
+- kind "question": a question to Seyal, including questions about the work (what is open, overdue, done, by
+  whom; Seyal looks those up itself). Put a short, helpful reply in "reply"; never promise anything.
 
 Processes:
 `)

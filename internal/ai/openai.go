@@ -16,7 +16,8 @@ import (
 )
 
 // Services that speak the OpenAI-style chat API ("chat/completions"). Many providers and local servers
-// do, so one small connector covers them. Each preset has its own settings in the private .env:
+// do, so one small connector covers them. The same presets also offer speech to text
+// ("audio/transcriptions", whisper.go). Each preset has its own settings in the private .env:
 //
 //	groq:<model>    SEYAL_GROQ_API_KEY (and optionally SEYAL_GROQ_BASE_URL)
 //	openai:<model>  SEYAL_OPENAI_API_KEY (and optionally SEYAL_OPENAI_BASE_URL)
@@ -38,24 +39,37 @@ var presets = []preset{
 func init() {
 	for _, p := range presets {
 		Register(p.name, func(model string, get func(string) string) (Model, error) { return newChat(p, model, get) })
+		RegisterSpeech(p.name, func(model string, get func(string) string) (Transcriber, error) {
+			return newWhisper(p, model, get)
+		})
 	}
 }
 
-func newChat(p preset, model string, get func(string) string) (Model, error) {
+// connect reads a preset's address and key from the settings: SEYAL_<PRESET>_BASE_URL (optional for
+// the named services) and SEYAL_<PRESET>_API_KEY. Chat models and speech share them.
+func (p preset) connect(get func(string) string) (base, key string, err error) {
 	env := "SEYAL_" + strings.ToUpper(p.name)
-	base := strings.TrimSpace(get(env + "_BASE_URL"))
+	base = strings.TrimSpace(get(env + "_BASE_URL"))
 	if base == "" {
 		base = p.baseURL
 	}
 	if base == "" {
-		return nil, fmt.Errorf("set %s_BASE_URL to the service's address", env)
+		return "", "", fmt.Errorf("set %s_BASE_URL to the service's address", env)
 	}
-	key := strings.TrimSpace(get(env + "_API_KEY"))
+	key = strings.TrimSpace(get(env + "_API_KEY"))
 	if p.needsKey && key == "" {
-		return nil, fmt.Errorf("set %s_API_KEY in the private .env file", env)
+		return "", "", fmt.Errorf("set %s_API_KEY in the private .env file", env)
+	}
+	return strings.TrimSuffix(base, "/"), key, nil
+}
+
+func newChat(p preset, model string, get func(string) string) (Model, error) {
+	base, key, err := p.connect(get)
+	if err != nil {
+		return nil, err
 	}
 	return &chat{
-		provider: p.name, model: model, url: strings.TrimSuffix(base, "/") + "/chat/completions", key: key,
+		provider: p.name, model: model, url: base + "/chat/completions", key: key,
 		newerTokens: p.newerTokens,
 	}, nil
 }
@@ -170,19 +184,15 @@ func (c *chat) send(ctx context.Context, r Request, withSchema bool) (Response, 
 		return Response{}, fmt.Errorf("%s: reading the answer: %w", c.provider, err)
 	}
 	if res.StatusCode != http.StatusOK {
-		msg := strings.TrimSpace(string(raw))
-		if len(msg) > 300 {
-			msg = msg[:300] + "…"
-		}
-		if withSchema && res.StatusCode == http.StatusBadRequest {
+		if body := string(raw); withSchema && res.StatusCode == http.StatusBadRequest {
 			switch {
-			case strings.Contains(msg, "json_validate_failed"):
+			case strings.Contains(body, "json_validate_failed"):
 				return Response{}, errSchemaMissed
-			case strings.Contains(msg, "response_format") || strings.Contains(msg, "json_schema"):
+			case strings.Contains(body, "response_format") || strings.Contains(body, "json_schema"):
 				return Response{}, errSchemaRefused
 			}
 		}
-		return Response{}, fmt.Errorf("%s answered %s: %s", c.provider, res.Status, msg)
+		return Response{}, fmt.Errorf("%s answered %s: %s", c.provider, res.Status, serviceSaid(raw))
 	}
 	var reply chatReply
 	if err := json.Unmarshal(raw, &reply); err != nil {
@@ -195,4 +205,25 @@ func (c *chat) send(ctx context.Context, r Request, withSchema bool) (Response, 
 		return Response{Usage: usage}, fmt.Errorf("%s: the answer was empty", c.provider)
 	}
 	return Response{Text: reply.Choices[0].Message.Content, Usage: usage}, nil
+}
+
+// serviceSaid is what a service's error answer says, for the error recorded in AI usage: the message
+// of an OpenAI-style error ({"error": {"message": ...}}), else the answer itself, cut to 300 bytes.
+// Only the message, because some services add what the model wrote to the error (Groq's
+// "failed_generation"), which can hold the words of a voice note; AI usage rows are kept for good,
+// also when the person discards the note (D66).
+func serviceSaid(raw []byte) string {
+	var e struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	msg := strings.TrimSpace(string(raw))
+	if json.Unmarshal(raw, &e) == nil && strings.TrimSpace(e.Error.Message) != "" {
+		msg = strings.TrimSpace(e.Error.Message)
+	}
+	if len(msg) > 300 {
+		msg = msg[:300] + "…"
+	}
+	return msg
 }

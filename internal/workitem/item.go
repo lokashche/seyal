@@ -97,6 +97,25 @@ func List(ctx context.Context, tx pgx.Tx) ([]Item, error) {
 	return items, rows.Err()
 }
 
+// All returns every work item of the tenant, open and closed, most recently started first.
+// tx must come from db.WithTenant.
+func All(ctx context.Context, tx pgx.Tx) ([]Item, error) {
+	rows, err := tx.Query(ctx, selectItems+` ORDER BY created_at DESC, number`)
+	if err != nil {
+		return nil, fmt.Errorf("workitem: all: %w", err)
+	}
+	defer rows.Close()
+	var items []Item
+	for rows.Next() {
+		it, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, it)
+	}
+	return items, rows.Err()
+}
+
 // getForUpdate returns one work item and locks it until the transaction ends, so two people
 // changing the same item at once take turns. The ledger is locked first (see ledger.Lock).
 func getForUpdate(ctx context.Context, tx pgx.Tx, id string) (Item, error) {

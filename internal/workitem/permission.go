@@ -47,3 +47,21 @@ func MayChange(ctx context.Context, tx pgx.Tx, it Item, by ledger.Actor) error {
 	}
 	return ErrNotYours
 }
+
+// Visible keeps the items the person may see, for everything that shows or answers about many items
+// at once, such as asking Seyal about the work (D67). Today that is every item of the business (D55):
+// its work is open to everyone in it. A person who isn't active in this business sees nothing. A later
+// rule (for example "only your team's work") belongs here, so every answer follows it at once.
+// tx must come from db.WithTenant.
+func Visible(ctx context.Context, tx pgx.Tx, personID string, items []Item) ([]Item, error) {
+	var active bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM persons WHERE tenant_id = current_tenant() AND id::text = $1 AND status = 'active')`,
+		personID).Scan(&active); err != nil {
+		return nil, fmt.Errorf("workitem: visible: %w", err)
+	}
+	if !active {
+		return nil, nil
+	}
+	return items, nil
+}

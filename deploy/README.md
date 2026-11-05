@@ -294,4 +294,9 @@ Bash):
     who then uses their link.
 - `docker compose logs -f seyal` shows what Seyal is doing; errors never include passwords or keys.
 - AI is off until you set `SEYAL_AI_UNDERSTAND` in `.env`. Decide first what your provider may
-  receive (see its data policy).
+  receive (see its data policy). Turning voice notes into words (`SEYAL_AI_TRANSCRIBE`) sends the
+  recordings themselves to the provider: check its terms for audio (training use, how long it keeps
+  them) before switching it on. The optional tidy-up (`SEYAL_AI_TIDY`) sends the words heard to a
+  chat model too. The speech service is paid per minute: Seyal sends at most 240 minutes of audio a
+  day per business and 60 per login (`SEYAL_AI_TRANSCRIBE_DAY_MINUTES`,
+  `SEYAL_AI_TRANSCRIBE_LOGIN_DAY_MINUTES`).

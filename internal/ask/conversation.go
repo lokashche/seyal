@@ -28,6 +28,8 @@ type Reply struct {
 	Message channel.Message   // what the person wrote, as stored
 	Seyal   []channel.Message // what Seyal answered, in order
 	Item    workitem.Item     // the work item afterwards
+	Answer  *Answer           // on Tell Seyal: the answer to a question about the work (D67); nothing starts
+	Asked   *Asked            // on Tell Seyal: a question to answer with AnswerAsked, in a new transaction
 }
 
 // Env is what a conversation uses besides the database.
@@ -42,7 +44,8 @@ const greetingReply = "Hello! Tell me about the work you want to start, and I'll
 // Begin handles a message on Tell Seyal. New work starts a work item: the message becomes the first
 // entry of its thread, the details it gives are filled in (when AI is on), and Seyal asks for the
 // next missing one. A greeting or a question starts nothing; Seyal just replies, and the returned
-// Reply has no Item. tx must come from db.WithTenant.
+// Reply has no Item. A question about the work comes back as Asked, for the caller to answer after
+// this transaction (see Asked). tx must come from db.WithTenant.
 func Begin(ctx context.Context, tx pgx.Tx, env Env, playbookVersionID string, in channel.Incoming) (Reply, error) {
 	in.ThreadID = ""
 	msg, isNew, err := channel.Receive(ctx, tx, env.Store, in)
@@ -60,14 +63,26 @@ func Begin(ctx context.Context, tx pgx.Tx, env Env, playbookVersionID string, in
 	}
 	text := strings.TrimSpace(msg.Text)
 	pr := c.understand(text, "")
+	// A question about the work gets an answer from the data (D67), after this transaction. When the
+	// model couldn't read the message (AI off, or failing just now), only a clear question counts:
+	// Seyal says it can't answer now, starts nothing, and offers to start it as work.
 	switch {
-	case pr != nil && (pr.Kind == "greeting" || pr.Kind == "question" || pr.Kind == "note") && len(msg.Media) == 0:
+	case !wordsOnly(msg):
+	case pr != nil && pr.Kind == "question":
+		c.reply.Asked = &Asked{MessageID: msg.ID, PersonID: msg.PersonID, Question: text, Reply: pr.Reply}
+		return c.reply, nil
+	case pr == nil && looksLikeQuestion(text):
+		c.reply.Answer = Unread(env, msg.ID, text, "")
+		return c.reply, nil
+	}
+	switch {
+	case pr != nil && (pr.Kind == "greeting" || pr.Kind == "note") && wordsOnly(msg):
 		reply := strings.TrimSpace(pr.Reply)
 		if reply == "" {
 			reply = greetingReply
 		}
 		return c.replyWithoutItem(limit(reply, 600))
-	case pr == nil && isGreeting(text) && len(msg.Media) == 0:
+	case pr == nil && isGreeting(text) && wordsOnly(msg):
 		return c.replyWithoutItem(greetingReply)
 	}
 
@@ -212,7 +227,16 @@ type conversation struct {
 	person    string
 	today     time.Time
 	reply     Reply
+	// spoken: the message's words came from a voice note (it has a transcript, which the server
+	// checked). Such words never run a command (see voiceGuard).
+	spoken bool
 }
+
+// voiceGuard is Seyal's reply when words from a voice note read as a command (move, cancel,
+// approve, ...). Speech services mishear, names most of all, so a spoken command never runs at once;
+// the person types it or taps the button (moving-work design, decision 15). A spoken answer to
+// Seyal's question is still used.
+const voiceGuard = "To do that, type it or tap the button."
 
 func newConversation(ctx context.Context, tx pgx.Tx, env Env, versionID string, it workitem.Item, msg channel.Message) (*conversation, error) {
 	p, err := workitem.PlaybookFor(ctx, tx, workitem.Item{PlaybookVersionID: versionID})
@@ -228,7 +252,7 @@ func newConversation(ctx context.Context, tx pgx.Tx, env Env, versionID string, 
 		return nil, err
 	}
 	return &conversation{ctx: ctx, tx: tx, env: env, versionID: versionID, p: p, person: msg.PersonID, today: time.Now().In(loc),
-		reply: Reply{Message: msg, Item: it}}, nil
+		reply: Reply{Message: msg, Item: it}, spoken: msg.Transcript != nil}, nil
 }
 
 // pending returns the field Seyal last asked about, if it is still empty, and the offer to add a new
@@ -333,6 +357,8 @@ func (c *conversation) commandBy(text string, by ledger.Actor) error {
 	switch {
 	case !ok:
 		return nil
+	case c.spoken:
+		return c.say(voiceGuard)
 	case waiting && (word == engine.Approve || word == engine.Reject):
 		return c.decide(word, reason)
 	}

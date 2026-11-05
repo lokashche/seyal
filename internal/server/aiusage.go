@@ -37,8 +37,9 @@ type aiLine struct {
 var purposeWhat = map[ai.Purpose]string{
 	ai.Understand: "Reads chat messages: what they are and which details they give.",
 	ai.Draft:      "Drafts process definitions from a plain description.",
-	ai.Tidy:       "Tidies voice transcripts without changing their meaning.",
+	ai.Tidy:       "Tidies the words of voice notes (removes \"umm\"s and repeats) before the person checks them.",
 	ai.Summarize:  "Summaries and reports.",
+	ai.Transcribe: "Turns voice notes into words, which the person corrects before sending.",
 }
 
 func (s *Server) aiPage(w http.ResponseWriter, r *http.Request, c *call) {
@@ -60,6 +61,18 @@ func (s *Server) aiPage(w http.ResponseWriter, r *http.Request, c *call) {
 		}
 		av.Purposes = append(av.Purposes, ap)
 	}
+	sp := aiPurpose{Name: sentence(string(ai.Transcribe)), What: purposeWhat[ai.Transcribe], Model: "off"}
+	if speech, on := s.ai.Speech(); on {
+		sp.On, sp.Model = true, speech.Name
+		sp.Price = fmt.Sprintf("$%g per hour of audio", speech.PerHour)
+		if speech.PerHour == 0 {
+			sp.Price = "no price set: costs show as 0"
+		}
+		if speech.Language != "" {
+			sp.Model += " · language " + speech.Language
+		}
+	}
+	av.Purposes = append(av.Purposes, sp)
 
 	var rep ai.Report
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {

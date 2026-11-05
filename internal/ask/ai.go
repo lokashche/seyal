@@ -293,8 +293,12 @@ func (c *conversation) apply(pr *proposal, text string, pending *playbook.Field)
 }
 
 // aiCommand runs an action the model read from the message. Approving, refusing and actions that
-// need a reason only happen when the person typed the command itself.
+// need a reason only happen when the person typed the command itself, and nothing runs from the words
+// of a voice note (voiceGuard).
 func (c *conversation) aiCommand(pr *proposal, text string) error {
+	if c.spoken {
+		return c.say(voiceGuard)
+	}
 	if c.isCommand(text) {
 		return c.command(text)
 	}

@@ -23,7 +23,7 @@ func TestAIUsagePage(t *testing.T) {
 
 	t.Run("with AI off", func(t *testing.T) {
 		code, page, _ := s.get(l, base+"/settings/ai")
-		if code != http.StatusOK || !strings.Contains(page, "No AI calls yet") || strings.Count(page, ">off<") != len(ai.Purposes) {
+		if code != http.StatusOK || !strings.Contains(page, "No AI calls yet") || strings.Count(page, ">off<") != len(ai.Purposes)+1 { // +1: speech to text
 			t.Errorf("AI page with AI off = %d", code)
 		}
 	})

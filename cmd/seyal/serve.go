@@ -105,8 +105,8 @@ func runServe(out io.Writer) error {
 	}
 	hs := &http.Server{
 		Addr: addr, Handler: srv.Handler(),
-		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 2 * time.Minute, // voice notes can be large
-		WriteTimeout: 2 * time.Minute, IdleTimeout: 2 * time.Minute,
+		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: server.RequestLimit, // voice notes can be large
+		WriteTimeout: server.RequestLimit, IdleTimeout: 2 * time.Minute,
 	}
 	go func() {
 		<-ctx.Done()

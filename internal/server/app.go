@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"seyal/internal/ai"
 	"seyal/internal/ask"
 	"seyal/internal/auth"
 	"seyal/internal/channel"
@@ -55,12 +56,16 @@ type tellView struct {
 	Processes   []tellProcess // shown in the right pane; "let Seyal decide" is chosen until the person picks one
 	Placeholder string        // an example message from the processes
 	Pending     *pendingView  // a saved message waiting for the person to confirm its process
+	Answer      *ask.Answer   // Seyal's answer to a question about the work (D67)
+	StartAs     []tellProcess // with an answer Seyal couldn't give: the processes to start the message as instead
+	CanAsk      bool          // AI is on, so people may ask about the work here
 }
 
 // pendingView asks the person to confirm the process Seyal suggests for their message.
 type pendingView struct {
 	MessageID, Text string
-	Files           int
+	Files           int          // attached files, not counting the recording the words were spoken in
+	Spoken          string       // that recording's address, when the words were spoken
 	Suggested       *tellProcess // nil when Seyal isn't sure
 	Others          []tellProcess
 }
@@ -90,11 +95,14 @@ type itemView struct {
 }
 
 type entryView struct {
-	Kind  string // "me", "bot", "other" or "evt"
-	Who   string
-	Text  string
-	Time  string
-	Media []mediaView
+	Kind   string // "me", "bot", "other" or "evt"
+	Who    string
+	Text   string
+	Time   string
+	Media  []mediaView
+	Spoken bool // the text came from a voice note in Media (the one marked Spoken)
+	Tidied bool // the AI tidy-up changed the words heard (removed "umm"s, repeats)
+	Edited bool // the person corrected the words they were given
 }
 
 // linkView is a linked work item: the one this item is part of, or one it started.
@@ -105,6 +113,7 @@ type linkView struct {
 type mediaView struct {
 	URL          string
 	Audio, Image bool
+	Spoken       bool // the voice note the message's words came from: a small play button, not a player
 }
 
 type fieldView struct {
@@ -310,9 +319,14 @@ func (v *view) item(id string) (*itemView, error) {
 			default:
 				ev.Kind = "other"
 			}
+			if t := m.Transcript; t != nil && m.Text != "" {
+				ev.Spoken, ev.Tidied, ev.Edited = true, t.Tidied != "" && t.Tidied != t.Raw, t.Edited
+			}
 			for _, md := range m.Media {
+				audio := strings.HasPrefix(md.ContentType, "audio/")
 				ev.Media = append(ev.Media, mediaView{URL: "/t/" + v.c.tenant.Slug + "/media/" + md.ID,
-					Audio: strings.HasPrefix(md.ContentType, "audio/"), Image: strings.HasPrefix(md.ContentType, "image/")})
+					Audio: audio, Image: strings.HasPrefix(md.ContentType, "image/"),
+					Spoken: audio && ev.Spoken && md.ID == m.Transcript.MediaID})
 			}
 		}
 		iv.Thread = append(iv.Thread, ev)
@@ -459,6 +473,9 @@ func (s *Server) show(w http.ResponseWriter, r *http.Request, c *call, itemID st
 		if itemID == "" {
 			sc.TellView = r.Method == http.MethodPost || r.URL.Query().Get("view") == "tell"
 			sc.Tell, err = v.tell()
+			if sc.Tell != nil {
+				_, sc.Tell.CanAsk = s.ai.For(ai.Understand)
+			}
 			for _, m := range more {
 				m(&sc)
 			}
@@ -485,20 +502,23 @@ func (s *Server) show(w http.ResponseWriter, r *http.Request, c *call, itemID st
 // With "let Seyal decide", the message is saved, Seyal suggests a process, and the person confirms
 // it (a second post with the saved message's id).
 func (s *Server) tell(w http.ResponseWriter, r *http.Request, c *call) {
+	started := time.Now() // the request's time limit runs from about now (see answer)
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") && r.PostFormValue("message") != "" {
 		s.confirmTell(w, r, c)
 		return
 	}
 	in, err := s.incoming(w, r, c)
-	if err == nil && in.Text == "" && len(in.Files) == 0 {
+	if err == nil && in.Text == "" && len(in.Files) == 0 && in.Spoken == nil {
 		err = errors.New("please write or record what the work is")
 	}
 	if err != nil {
+		voiceRefused(w, err)
 		s.showScreen(w, r, c, "", http.StatusUnprocessableEntity, capital(err.Error())+".")
 		return
 	}
 	var reply ask.Reply
 	var routing *ask.Routing
+	picked := r.FormValue("playbook") // the process the person chose, or "auto"
 	err = db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		// New work may only start on the current version of a process that is switched on.
 		current, err := (&view{ctx: r.Context(), tx: tx}).current()
@@ -536,16 +556,34 @@ func (s *Server) tell(w http.ResponseWriter, r *http.Request, c *call) {
 		s.problem(w, r, c, "", err)
 		return
 	}
+	// A question about the work is answered now that the message is saved, in a transaction of its
+	// own: its AI call and search then keep nobody else in the business waiting (D67).
+	asked := reply.Asked
+	if routing != nil {
+		asked = routing.Asked
+	}
+	if asked != nil {
+		a, said, err := s.answer(r, c, *asked, started)
+		switch {
+		case err != nil:
+			s.problem(w, r, c, "", err)
+		case a != nil:
+			s.showAnswer(w, r, c, a, picked)
+		default:
+			s.show(w, r, c, "", http.StatusOK, "", texts(said))
+		}
+		return
+	}
 	if routing != nil {
 		s.askWhichProcess(w, r, c, *routing)
 		return
 	}
+	if reply.Answer != nil {
+		s.showAnswer(w, r, c, reply.Answer, picked)
+		return
+	}
 	if reply.Item.ID == "" { // a greeting or a question: nothing started, Seyal just answers
-		var said []string
-		for _, m := range reply.Seyal {
-			said = append(said, m.Text)
-		}
-		s.show(w, r, c, "", http.StatusOK, "", strings.Join(said, "\n"))
+		s.show(w, r, c, "", http.StatusOK, "", texts(reply.Seyal))
 		return
 	}
 	http.Redirect(w, r, "/t/"+c.tenant.Slug+"/items/"+reply.Item.ID, http.StatusSeeOther)
@@ -553,19 +591,28 @@ func (s *Server) tell(w http.ResponseWriter, r *http.Request, c *call) {
 
 // askWhichProcess shows Seyal's suggestion for a saved message, or its reply to a greeting.
 func (s *Server) askWhichProcess(w http.ResponseWriter, r *http.Request, c *call, rt ask.Routing) {
+	if rt.Answer != nil {
+		s.showAnswer(w, r, c, rt.Answer, "")
+		return
+	}
 	if len(rt.Seyal) > 0 {
-		var said []string
-		for _, m := range rt.Seyal {
-			said = append(said, m.Text)
-		}
-		s.show(w, r, c, "", http.StatusOK, "", strings.Join(said, "\n"))
+		s.show(w, r, c, "", http.StatusOK, "", texts(rt.Seyal))
 		return
 	}
 	s.show(w, r, c, "", http.StatusOK, "", "", func(sc *screen) {
 		if sc.Tell == nil {
 			return
 		}
-		pv := &pendingView{MessageID: rt.Message.ID, Text: rt.Message.Text, Files: len(rt.Message.Media)}
+		m := rt.Message
+		pv := &pendingView{MessageID: m.ID, Text: m.Text}
+		for _, md := range m.Media {
+			// The recording the words were spoken in isn't an attached file (as in the thread).
+			if t := m.Transcript; t != nil && m.Text != "" && md.ID == t.MediaID {
+				pv.Spoken = "/t/" + c.tenant.Slug + "/media/" + md.ID
+				continue
+			}
+			pv.Files++
+		}
 		for i := range sc.Tell.Processes {
 			if p := sc.Tell.Processes[i]; p.ID == rt.Suggested {
 				pv.Suggested = &p
@@ -574,6 +621,72 @@ func (s *Server) askWhichProcess(w http.ResponseWriter, r *http.Request, c *call
 			}
 		}
 		sc.Tell.Pending = pv
+	})
+}
+
+// texts joins what Seyal said, one message a line.
+func texts(said []channel.Message) string {
+	lines := make([]string, len(said))
+	for i, m := range said {
+		lines[i] = m.Text
+	}
+	return strings.Join(lines, "\n")
+}
+
+// questionsPerMinute is how many questions about the work one login may ask in a minute. Each costs
+// a second AI call; over the limit, Seyal says so and doesn't call the model.
+const questionsPerMinute = 10
+
+// answerRoom is the part of a request's time limit that answering a question leaves unused: up to
+// 10 seconds of reading the request's headers before started, then committing and writing the page.
+const answerRoom = 20 * time.Second
+
+// answer answers a question that Tell Seyal saved, in a new transaction (see ask.Asked). The limit
+// counts the login, which may be used in several businesses (D64). started is when the request
+// began: the answer must be ready before the web server's time limit for it runs out, so it gets a
+// deadline, and with too little time left (a slow first AI call) ask skips the search (D67).
+func (s *Server) answer(r *http.Request, c *call, q ask.Asked, started time.Time) (*ask.Answer, []channel.Message, error) {
+	login := c.session.AccountID
+	if login == "" {
+		login = c.tenant.ID + "/" + c.session.PersonID
+	}
+	if !s.askRate.take(login) {
+		return ask.Unread(s.env(), q.MessageID, q.Question, ask.Busy), nil, nil
+	}
+	ctx, cancel := context.WithDeadline(r.Context(), started.Add(s.limit-answerRoom))
+	defer cancel()
+	if ctx.Err() != nil { // no time left even to look: say so, rather than show an error
+		return ask.Unread(s.env(), q.MessageID, q.Question, ""), nil, nil
+	}
+	var a *ask.Answer
+	var said []channel.Message
+	err := db.WithTenant(ctx, s.app, c.tenant.ID, func(tx pgx.Tx) error {
+		var err error
+		a, said, err = ask.AnswerAsked(ctx, tx, s.env(), q)
+		return err
+	})
+	return a, said, err
+}
+
+// showAnswer shows Seyal's answer to a question about the work on Tell Seyal, with links to the
+// items it found (D67). It is shown once, not kept. When Seyal couldn't read the message, it offers
+// to start it as work: as the process the person picked, or else as any of them.
+func (s *Server) showAnswer(w http.ResponseWriter, r *http.Request, c *call, a *ask.Answer, picked string) {
+	s.show(w, r, c, "", http.StatusOK, "", "", func(sc *screen) {
+		if sc.Tell == nil {
+			return
+		}
+		sc.Tell.Answer = a
+		if a.MessageID == "" {
+			return
+		}
+		for _, p := range sc.Tell.Processes {
+			if p.ID == picked {
+				sc.Tell.StartAs = []tellProcess{p}
+				return
+			}
+		}
+		sc.Tell.StartAs = sc.Tell.Processes
 	})
 }
 
@@ -602,10 +715,11 @@ func (s *Server) confirmTell(w http.ResponseWriter, r *http.Request, c *call) {
 func (s *Server) say(w http.ResponseWriter, r *http.Request, c *call) {
 	id := r.PathValue("id")
 	in, err := s.incoming(w, r, c)
-	if err == nil && in.Text == "" && len(in.Files) == 0 {
+	if err == nil && in.Text == "" && len(in.Files) == 0 && in.Spoken == nil {
 		err = errors.New("please write a message, record a voice note or attach a file")
 	}
 	if err != nil {
+		voiceRefused(w, err)
 		s.showScreen(w, r, c, id, http.StatusUnprocessableEntity, capital(err.Error())+".")
 		return
 	}
@@ -628,7 +742,9 @@ const maxFiles = 5
 var uploads = make(chan struct{}, 4)
 
 // incoming reads the composer form: the text, plus a recorded voice note and attached files when the
-// form is sent as multipart. The whole request is limited in size before anything is read.
+// form is sent as multipart. A voice note sent with a voice token (voice_token, see voice.go) is one
+// whose words the person checked: it becomes the message's Spoken recording, with what was heard.
+// The whole request is limited in size before anything is read.
 func (s *Server) incoming(w http.ResponseWriter, r *http.Request, c *call) (channel.Incoming, error) {
 	in := channel.Incoming{Channel: channel.Web{}.Name(), PersonID: c.session.PersonID}
 	r.Body = http.MaxBytesReader(w, r.Body, maxFiles*media.MaxSize+1<<20)
@@ -644,12 +760,17 @@ func (s *Server) incoming(w http.ResponseWriter, r *http.Request, c *call) (chan
 		if err := r.ParseMultipartForm(8 << 20); err != nil {
 			return in, errors.New("the message or its files are too large")
 		}
+		token := strings.TrimSpace(r.FormValue("voice_token"))
 		for _, field := range []string{"voice", "file"} {
 			for _, fh := range r.MultipartForm.File[field] {
 				if fh.Size == 0 {
 					continue // an empty file input
 				}
-				if len(in.Files) == maxFiles {
+				count := len(in.Files)
+				if in.Spoken != nil {
+					count++
+				}
+				if count == maxFiles {
 					return in, fmt.Errorf("a message can carry at most %d files", maxFiles)
 				}
 				if fh.Size > media.MaxSize {
@@ -664,12 +785,32 @@ func (s *Server) incoming(w http.ResponseWriter, r *http.Request, c *call) (chan
 				if err != nil {
 					return in, err
 				}
-				in.Files = append(in.Files, channel.File{ContentType: fh.Header.Get("Content-Type"), Data: data})
+				file := channel.File{ContentType: fh.Header.Get("Content-Type"), Data: data}
+				if field == "voice" && token != "" && in.Spoken == nil {
+					heard, err := s.heardFrom(token, c, time.Now())
+					if err != nil {
+						return in, err
+					}
+					in.Spoken = &channel.Spoken{File: file, Heard: heard}
+					continue
+				}
+				in.Files = append(in.Files, file)
 			}
 		}
+		if token != "" && in.Spoken == nil {
+			return in, errHeard // the words came without their recording
+		}
 	}
-	in.Text = strings.TrimSpace(r.FormValue("text"))
+	in.Text = strings.TrimSpace(strings.ReplaceAll(r.FormValue("text"), "\r\n", "\n")) // browsers send line breaks as CRLF
 	return in, nil
+}
+
+// voiceRefused marks a refused message whose voice note's words Seyal can't vouch for (see
+// heardFrom), so the composer keeps the recording and can offer to send it as a plain voice note.
+func voiceRefused(w http.ResponseWriter, err error) {
+	if errors.Is(err, errHeard) || errors.Is(err, channel.ErrVoiceChanged) {
+		w.Header().Set("Seyal-Voice", "refused")
+	}
 }
 
 func (s *Server) act(w http.ResponseWriter, r *http.Request, c *call) {
@@ -720,6 +861,7 @@ func (s *Server) problem(w http.ResponseWriter, r *http.Request, c *call, itemID
 		s.fail(w, r, err)
 		return
 	}
+	voiceRefused(w, err)
 	msg := err.Error()
 	var missing *engine.MissingError
 	if errors.As(err, &missing) {

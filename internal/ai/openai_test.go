@@ -164,3 +164,33 @@ func TestChatErrors(t *testing.T) {
 		}
 	}
 }
+
+// TestServiceSaid: an error recorded in AI usage keeps the service's message, never what the model
+// wrote (Groq adds it as "failed_generation"), since that can hold the words of a voice note.
+func TestServiceSaid(t *testing.T) {
+	groq := `{"error":{"message":"Failed to generate JSON. Please adjust your prompt.","type":"invalid_request_error",` +
+		`"code":"json_validate_failed","failed_generation":"{\"text\": \"Acme Traders pays 50000\"}"}}`
+	if got := serviceSaid([]byte(groq)); got != "Failed to generate JSON. Please adjust your prompt." {
+		t.Errorf("serviceSaid(groq) = %q", got)
+	}
+	if got := serviceSaid([]byte("  <html>Bad gateway</html>\n")); got != "<html>Bad gateway</html>" {
+		t.Errorf("serviceSaid(not JSON) = %q", got)
+	}
+	if got := serviceSaid([]byte(strings.Repeat("x", 400))); len(got) != 300+len("…") {
+		t.Errorf("serviceSaid(long) has %d bytes, want it cut to 300", len(got))
+	}
+
+	// The same through a call: a plain-JSON request the service rejects.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, groq, http.StatusBadRequest)
+	}))
+	t.Cleanup(srv.Close)
+	m, err := newChat(presets[0], "m", env(map[string]string{"SEYAL_GROQ_API_KEY": "test-key", "SEYAL_GROQ_BASE_URL": srv.URL + "/v1"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.Complete(context.Background(), Request{Input: "Acme Traders pays 50000"})
+	if err == nil || !strings.Contains(err.Error(), "400") || strings.Contains(err.Error(), "Acme") || strings.Contains(err.Error(), "50000") {
+		t.Errorf("rejected call = %v; want the status and the message, never the model's words", err)
+	}
+}

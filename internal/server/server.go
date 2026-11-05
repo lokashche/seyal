@@ -7,6 +7,7 @@ package server
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -32,6 +33,7 @@ import (
 	"seyal/internal/db"
 	"seyal/internal/media"
 	"seyal/internal/playbook"
+	"seyal/internal/seal"
 	"seyal/web"
 )
 
@@ -58,7 +60,23 @@ type Server struct {
 	asset   string // fingerprint of the static files, added to their addresses
 	worker  []byte // the service worker script, with the fingerprint filled in
 	limiter *limiter
+	// speaking, voiceRate and audioUsed limit the calls to the speech service (voice.go).
+	speaking  *speechSlots
+	voiceRate *limiter
+	audioUsed *audioUse
+	// voiceKey signs what the speech service heard, for the message the person sends (voice.go). It
+	// is made anew at every start, so it is never stored anywhere.
+	voiceKey []byte
+	// askRate limits the questions about the work each login may ask (app.go).
+	askRate *limiter
+	// limit is how long the web server gives one request (RequestLimit unless a test sets another).
+	limit time.Duration
 }
+
+// RequestLimit is how long the web server gives one request to be read and answered: cmd/seyal sets
+// http.Server's ReadTimeout and WriteTimeout to it. After that the person's connection is dropped,
+// so slow work (a question's second AI call, app.go) checks the time left first.
+const RequestLimit = 2 * time.Minute
 
 // Config is what the web app needs.
 type Config struct {
@@ -70,12 +88,18 @@ type Config struct {
 	// BehindProxy says a reverse proxy we run (Caddy) is the only way in, so the visitor's address is
 	// the last one it adds to X-Forwarded-For. Never set it when people can reach the app directly.
 	BehindProxy bool
+	// RequestLimit is the web server's time limit for one request; zero means RequestLimit. Only
+	// tests set another, to show what happens when little time is left.
+	RequestLimit time.Duration
 }
 
 // New prepares the web app.
 func New(cfg Config) (*Server, error) {
 	s := &Server{app: cfg.App, store: cfg.Store, lib: cfg.Library, ai: cfg.AI, secure: cfg.SecureCookies, proxied: cfg.BehindProxy,
-		pages: map[string]*template.Template{}, limiter: newLimiter(10, 15*time.Minute)}
+		pages: map[string]*template.Template{}, limiter: newLimiter(10, 15*time.Minute),
+		speaking: newSpeechSlots(speechAtOnce, speechPerBusiness), voiceRate: newLimiter(speechPerMinute, time.Minute),
+		audioUsed: newAudioUse(), voiceKey: seal.NewKey(),
+		askRate: newLimiter(questionsPerMinute, time.Minute), limit: cmp.Or(cfg.RequestLimit, RequestLimit)}
 	if s.ai == nil {
 		s.ai = &ai.Setup{USDtoINR: 88}
 	}
@@ -174,6 +198,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /t/{slug}/password", s.authed(s.changePassword))
 	mux.HandleFunc("GET /t/{slug}/{$}", s.authed(s.tellPage))
 	mux.HandleFunc("POST /t/{slug}/tell", s.authed(s.tell))
+	mux.HandleFunc("POST /t/{slug}/voice", s.authed(s.voice))
 	mux.HandleFunc("GET /t/{slug}/items/{id}", s.authed(s.itemPage))
 	mux.HandleFunc("POST /t/{slug}/items/{id}/say", s.authed(s.say))
 	mux.HandleFunc("GET /t/{slug}/items/{id}/report", s.authed(s.report))
@@ -217,6 +242,7 @@ type page struct {
 	Admin          bool   // may open Settings
 	Notice         string // a one-time message, e.g. a new password
 	Error          string
+	Speech         bool // voice notes are turned into words in the composer (a speech service is set)
 	Data           any
 }
 
@@ -576,6 +602,7 @@ func (s *Server) setLast(w http.ResponseWriter, slug string) {
 // render runs a page template into a buffer first, so a template error never sends half a page.
 func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, name string, p page) {
 	p.Asset = s.asset
+	_, p.Speech = s.ai.Speech()
 	var buf bytes.Buffer
 	if err := s.pages[name].ExecuteTemplate(&buf, "layout", p); err != nil {
 		s.fail(w, r, err)

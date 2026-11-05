@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Package audit checks that the tables Seyal keeps for screens (work items, approvals, links,
-// master items, lists, playbook versions and messages) match what the ledger says happened. The ledger is the
+// master items, lists, playbook versions, messages and voice transcripts) match what the ledger says happened. The ledger is the
 // record; the tables are a convenient copy. Anyone who edits a table directly, bypassing Seyal,
 // is caught here.
 package audit
@@ -41,7 +41,7 @@ func CheckTables(ctx context.Context, tx pgx.Tx) ([]Problem, error) {
 		return nil, err
 	}
 	c := &checker{ctx: ctx, tx: tx, want: want}
-	for _, check := range []func() error{c.items, c.approvals, c.links, c.masters, c.kinds, c.playbooks, c.messages} {
+	for _, check := range []func() error{c.items, c.approvals, c.links, c.masters, c.kinds, c.playbooks, c.messages, c.transcripts} {
 		if err := check(); err != nil {
 			return nil, err
 		}
@@ -58,6 +58,8 @@ type expected struct {
 	kinds     map[string]kindRow       // lists, by id
 	playbooks map[string]string        // id → sha256 of the file, in hex
 	messages  map[string]channel.Message
+	// transcripts are the voice notes' words that messages in the ledger were sent with, by id
+	transcripts map[string]bool
 }
 
 type approval struct {
@@ -86,13 +88,14 @@ type masterRow struct {
 // replay reads the ledger from the first event to the last and builds the expected tables.
 func replay(ctx context.Context, tx pgx.Tx) (expected, error) {
 	want := expected{
-		items:     map[string]workitem.Item{},
-		approvals: map[string]approval{},
-		links:     map[string]bool{},
-		masters:   map[string]masterRow{},
-		kinds:     map[string]kindRow{},
-		playbooks: map[string]string{},
-		messages:  map[string]channel.Message{},
+		items:       map[string]workitem.Item{},
+		approvals:   map[string]approval{},
+		links:       map[string]bool{},
+		masters:     map[string]masterRow{},
+		kinds:       map[string]kindRow{},
+		playbooks:   map[string]string{},
+		messages:    map[string]channel.Message{},
+		transcripts: map[string]bool{},
 	}
 	rows, err := tx.Query(ctx, `SELECT body FROM ledger WHERE tenant_id = current_tenant() ORDER BY seq`)
 	if err != nil {
@@ -161,6 +164,9 @@ func (w expected) apply(kind, subject, actor string, payload json.RawMessage) er
 			return err
 		}
 		w.messages[subject] = p.Message
+		if t := p.Message.Transcript; t != nil {
+			w.transcripts[t.ID] = true
+		}
 		return nil
 	}
 	// People and roles (logins, links, identities) aren't in the tables checked here; skipping them
@@ -454,8 +460,26 @@ func (c *checker) messages() error {
 			c.add("messages", g.ID, "sender, channel or time differs from the ledger")
 		case !slices.Equal(w.Media, g.Media):
 			c.add("messages", g.ID, "attached files differ from the ledger")
+		case (w.Transcript == nil) != (g.Transcript == nil) || w.Transcript != nil && *w.Transcript != *g.Transcript:
+			c.add("messages", g.ID, "the voice note's words differ from the ledger")
 		}
 	}
 	leftovers(c, "messages", c.want.messages)
+	return nil
+}
+
+// transcripts checks that every transcript belongs to a message in the ledger. What a transcript
+// says (the words heard, the recording) is checked with its message, in messages: the message's
+// ledger event holds it. tx must come from db.WithTenant.
+func (c *checker) transcripts() error {
+	ids, err := channel.TranscriptIDs(c.ctx, c.tx)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if !c.want.transcripts[id] {
+			c.add("transcripts", id, "not in the ledger (added outside Seyal)")
+		}
+	}
 	return nil
 }
