@@ -103,8 +103,11 @@ CREATE TRIGGER persons_account_not_moved BEFORE UPDATE OF account_id ON persons
 
 -- A business "entry": this login session opened this business. It gives each business's ledger its
 -- own logged-in and logged-out events, so one business never learns when someone used another.
+-- An entry's token_sha256 is the hash of a random token nobody is ever given, so no cookie opens it.
+-- At most one open entry per login session and business; an ended one stays, and opening the
+-- business again (e.g. after being unlinked and linked again) adds a new one.
 ALTER TABLE sessions ADD COLUMN account_session text REFERENCES account_sessions (token_sha256);
-ALTER TABLE sessions ADD CONSTRAINT sessions_one_entry UNIQUE (tenant_id, account_session);
+CREATE UNIQUE INDEX sessions_one_entry ON sessions (tenant_id, account_session) WHERE ended_at IS NULL;
 
 -- The current login for this transaction. Empty means "no login".
 -- +goose StatementBegin
@@ -181,7 +184,7 @@ $$;
 DROP FUNCTION link_existing_logins(uuid);
 DROP POLICY own_account ON persons;
 DROP FUNCTION current_account();
-ALTER TABLE sessions DROP CONSTRAINT sessions_one_entry;
+DROP INDEX sessions_one_entry;
 ALTER TABLE sessions DROP COLUMN account_session;
 DROP TRIGGER persons_account_not_moved ON persons;
 DROP FUNCTION persons_account_not_moved();

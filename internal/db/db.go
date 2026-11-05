@@ -50,6 +50,14 @@ func SetScope(ctx context.Context, tx pgx.Tx, s Scope) error {
 	return err
 }
 
+// CurrentScope returns tx's scope, so code that changes it with SetScope can put it back after.
+func CurrentScope(ctx context.Context, tx pgx.Tx) (Scope, error) {
+	var s Scope
+	err := tx.QueryRow(ctx, "SELECT coalesce(current_setting('app.tenant_id', true), ''), coalesce(current_setting('app.account_id', true), '')").
+		Scan(&s.Tenant, &s.Account)
+	return s, err
+}
+
 // WithTenant runs fn in a transaction where row-level security only shows rows of tenantID.
 // The transaction commits if fn returns nil and rolls back otherwise.
 func WithTenant(ctx context.Context, db Beginner, tenantID string, fn func(pgx.Tx) error) error {

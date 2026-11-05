@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -161,7 +162,10 @@ func (w expected) apply(kind, subject, actor string, payload json.RawMessage) er
 		}
 		w.messages[subject] = p.Message
 		return nil
-	case "person.identity_added":
+	}
+	// People and roles (logins, links, identities) aren't in the tables checked here; skipping them
+	// by name means an odd payload (not an object, or with an "item" key) can't upset the replay.
+	if strings.HasPrefix(kind, "person.") || strings.HasPrefix(kind, "role.") {
 		return nil
 	}
 

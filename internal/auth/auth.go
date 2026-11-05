@@ -47,6 +47,9 @@ type Session struct {
 	// MustChange is true while the person logs in with a password an admin made: they choose their own
 	// before anything else.
 	MustChange bool
+	// AccountID and Email are the login used (see account.go); empty for an old per-business session.
+	AccountID string
+	Email     string
 }
 
 // dummyHash is compared against when an email is unknown, so a wrong email takes as long as a
@@ -207,7 +210,8 @@ func Pretend(password string) {
 }
 
 // Check returns the session for a token from a cookie, or ErrNoSession. A person who was disabled
-// is logged out at once. tx must come from db.WithTenant.
+// is logged out at once. It never takes a business entry of a login session (see CheckIn).
+// tx must come from db.WithTenant.
 func Check(ctx context.Context, tx pgx.Tx, token string) (Session, error) {
 	if token == "" {
 		return Session{}, ErrNoSession
@@ -216,7 +220,7 @@ func Check(ctx context.Context, tx pgx.Tx, token string) (Session, error) {
 	err := tx.QueryRow(ctx, `
 		SELECT s.person_id::text, p.display_name, s.expires_at, p.password_temporary
 		FROM sessions s JOIN persons p ON p.tenant_id = s.tenant_id AND p.id = s.person_id
-		WHERE s.tenant_id = current_tenant() AND s.token_sha256 = $1
+		WHERE s.tenant_id = current_tenant() AND s.token_sha256 = $1 AND s.account_session IS NULL
 			AND s.ended_at IS NULL AND s.expires_at > now() AND p.status = 'active'`,
 		fingerprint(token)).Scan(&s.PersonID, &s.Name, &s.ExpiresAt, &s.MustChange)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -234,7 +238,7 @@ func Logout(ctx context.Context, tx pgx.Tx, token string) error {
 	var personID string
 	err := tx.QueryRow(ctx, `
 		UPDATE sessions SET ended_at = now()
-		WHERE tenant_id = current_tenant() AND token_sha256 = $1 AND ended_at IS NULL
+		WHERE tenant_id = current_tenant() AND token_sha256 = $1 AND account_session IS NULL AND ended_at IS NULL
 		RETURNING person_id::text`, fingerprint(token)).Scan(&personID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil // already logged out
