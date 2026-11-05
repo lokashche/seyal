@@ -471,7 +471,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	// guessing at one person's login from many addresses, or on many business addresses, is slowed
 	// down too.
 	key, who := "ip|"+s.clientIP(r), "email|"+strings.ToLower(email)
-	if !s.limiter.allowed(key) || !s.limiter.allowed(who) {
+	if !s.limiter.take(key, who) {
 		p.Error = "Too many failed attempts. Please wait 15 minutes and try again."
 		s.render(w, r, http.StatusTooManyRequests, "login", p)
 		return
@@ -487,13 +487,12 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		member, err = activeIn(r, tx, a.ID, slug)
 		return err
 	})
-	if errors.Is(err, auth.ErrBadLogin) {
-		s.limiter.failed(key)
-		s.limiter.failed(who)
+	if errors.Is(err, auth.ErrBadLogin) { // the attempt stays counted
 		p.Error = "Wrong email or password."
 		s.render(w, r, http.StatusUnauthorized, "login", p)
 		return
 	}
+	s.limiter.refund(key, who) // the password was right (or an error came before it was checked)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -631,7 +630,7 @@ func (s *Server) clientIP(r *http.Request) string {
 	return host
 }
 
-// limiter counts failed logins per key and blocks a key after max failures within the window.
+// limiter counts password attempts per key and blocks a key after max failed ones within the window.
 type limiter struct {
 	mu     sync.Mutex
 	max    int
@@ -643,16 +642,36 @@ func newLimiter(max int, window time.Duration) *limiter {
 	return &limiter{max: max, window: window, seen: map[string][]time.Time{}}
 }
 
-func (l *limiter) allowed(key string) bool {
+// take reports whether every key may try a password now, and if so counts the attempt for each key
+// at once, before the password is checked, in one locked step. So guesses sent at the same moment
+// can't all get past the check before any of them is counted. A good password gives its attempt
+// back (refund); a wrong one stays counted.
+func (l *limiter) take(keys ...string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return len(l.recent(key)) < l.max
+	for _, key := range keys {
+		if len(l.recent(key)) >= l.max {
+			return false
+		}
+	}
+	now := time.Now()
+	for _, key := range keys {
+		l.seen[key] = append(l.recent(key), now)
+	}
+	return true
 }
 
-func (l *limiter) failed(key string) {
+// refund gives back one attempt per key: the password was right, or wasn't checked after all.
+func (l *limiter) refund(keys ...string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.seen[key] = append(l.recent(key), time.Now())
+	for _, key := range keys {
+		if kept := l.recent(key); len(kept) > 1 {
+			l.seen[key] = kept[:len(kept)-1]
+		} else {
+			delete(l.seen, key)
+		}
+	}
 }
 
 // recent drops failures older than the window. The caller holds the lock.

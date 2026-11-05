@@ -409,7 +409,7 @@ func NewPassword(ctx context.Context, tx pgx.Tx, email, personID string) (passwo
 		return "", "", errors.New("that doesn't look like an email address")
 	}
 	password = rand.Text()[:16]
-	if accountID, err = findAccount(ctx, tx, email); err != nil {
+	if accountID, err = FindAccount(ctx, tx, email); err != nil {
 		return "", "", err
 	}
 	created := false
@@ -436,10 +436,12 @@ func NewPassword(ctx context.Context, tx pgx.Tx, email, personID string) (passwo
 	return password, accountID, nil
 }
 
-// findAccount returns the id of the login with this email, or "" if there is none.
-func findAccount(ctx context.Context, tx pgx.Tx, email string) (string, error) {
+// FindAccount returns the id of the login with this email, or "" if there is none. Any transaction
+// will do.
+func FindAccount(ctx context.Context, tx pgx.Tx, email string) (string, error) {
 	var id string
-	err := tx.QueryRow(ctx, `SELECT id::text FROM accounts WHERE email = $1`, email).Scan(&id)
+	err := tx.QueryRow(ctx, `SELECT id::text FROM accounts WHERE email = $1`,
+		strings.ToLower(strings.TrimSpace(email))).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil
 	}
@@ -465,7 +467,7 @@ func addAccount(ctx context.Context, tx pgx.Tx, email, password string) (id stri
 	})
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation: made meanwhile
-		id, err = findAccount(ctx, tx, email)
+		id, err = FindAccount(ctx, tx, email)
 		return id, false, err
 	}
 	if err != nil {

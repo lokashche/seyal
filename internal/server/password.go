@@ -5,6 +5,7 @@ package server
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -12,11 +13,13 @@ import (
 	"seyal/internal/db"
 )
 
-// Changing your own password: from your name in the left column, or straight after logging in with a
-// temporary password (one an admin made, before set-your-password links). It is the login's password,
+// Changing your own password: from Me, or straight after logging in with a temporary password.
+// Nothing makes temporary passwords any more; the only ones left were made by an admin before
+// set-your-password links and carried over to logins by migration 00015. It is the login's password,
 // so it changes in every business the login belongs to. Like the login page, this is account
-// plumbing, not a process screen. A forgotten password: an admin makes a new set-your-password link
-// (welcome.go).
+// plumbing, not a process screen. A forgotten password: if the login is used in one business alone,
+// an admin there makes a new set-your-password link (welcome.go); otherwise only the server's
+// operator can reset it (`seyal set-password`, D64).
 
 func (s *Server) passwordPage(w http.ResponseWriter, r *http.Request, c *call) {
 	s.render(w, r, http.StatusOK, "password", c.page(c.session.MustChange))
@@ -37,6 +40,16 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request, c *call)
 		problem(capital(err.Error()) + ".")
 		return
 	}
+	// Checking the current password is a login: its wrong guesses count with the login form's, per
+	// visitor's address and per the login's email, so a session left open on a shared computer
+	// can't be used to guess the password faster than the login form allows.
+	ip, who := "ip|"+s.clientIP(r), "email|"+strings.ToLower(c.session.Email)
+	if !s.limiter.take(ip, who) {
+		p := c.page(c.session.MustChange)
+		p.Error = "Too many failed attempts. Please wait 15 minutes and try again."
+		s.render(w, r, http.StatusTooManyRequests, "password", p)
+		return
+	}
 	var token string
 	var a auth.Account
 	err := db.WithServer(r.Context(), s.app, func(tx pgx.Tx) error {
@@ -49,6 +62,9 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request, c *call)
 		token, a, err = auth.LogIn(r.Context(), tx, c.session.Email, next, r.UserAgent())
 		return err
 	})
+	if !errors.Is(err, auth.ErrWrongPassword) {
+		s.limiter.refund(ip, who) // only a wrong current password stays counted
+	}
 	switch {
 	case errors.Is(err, auth.ErrWrongPassword), errors.Is(err, auth.ErrSamePassword):
 		problem(capital(err.Error()) + ".")

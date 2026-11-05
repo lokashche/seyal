@@ -7,7 +7,7 @@
     {{if .Businesses}}
     <p class="lede">Choose a business.</p>
     <ul class="business-list">
-      {{range .Businesses}}<li><a class="btn ghost" href="/t/{{.Slug}}/">{{.Name}}</a></li>{{end}}
+      {{range .Businesses}}<li><a class="btn ghost" href="/t/{{.Slug}}/" hx-boost="false">{{.Name}}</a></li>{{end}}
     </ul>
     {{else}}
     <p class="lede">You're logged in as {{.Email}}, but you aren't in any business on this Seyal server yet.</p>

@@ -131,27 +131,39 @@ func newLinkFor(t *testing.T, l login, b biz) string {
 }
 
 func (l login) useLink(b biz, code, password string) (token string, err error) {
+	return l.use(b, code, auth.LinkUse{Mode: auth.ModeChoose, Password: password, UserAgent: "test browser"})
+}
+
+func (l login) use(b biz, code string, u auth.LinkUse) (token string, err error) {
 	err = l.in(b, func(tx pgx.Tx) error {
 		var err error
-		token, _, err = auth.UseLink(context.Background(), tx, code, password, "test browser")
+		token, _, err = auth.UseLink(context.Background(), tx, code, u)
 		return err
 	})
 	return token, err
 }
 
-func (l login) linkHolder(b biz, code string) (h auth.Holder, err error) {
+func (l login) linkHolder(b biz, code, token string) (h auth.Holder, err error) {
 	err = l.in(b, func(tx pgx.Tx) error {
 		var err error
-		h, err = auth.LinkHolder(context.Background(), tx, code)
+		h, err = auth.LinkHolder(context.Background(), tx, code, token)
 		return err
 	})
 	return h, err
 }
 
+func (l login) linkMode(b biz, personID string) (m auth.Mode, err error) {
+	err = l.in(b, func(tx pgx.Tx) error {
+		var err error
+		m, err = auth.LinkModeOf(context.Background(), tx, personID)
+		return err
+	})
+	return m, err
+}
+
 // TestUseLink: a set-your-password link works on the person's login. It may make one, or set the
-// password of one that is in no other business, never of one that is (D64).
+// password of the person's own login when no other business uses it, never of any other (D64).
 func TestUseLink(t *testing.T) {
-	ctx := context.Background()
 	owner, app := testdb.Connect(t)
 
 	t.Run("a new email gets a login, linked to the person", func(t *testing.T) {
@@ -195,48 +207,40 @@ func TestUseLink(t *testing.T) {
 		l.logIn(t)
 	})
 
-	t.Run("a login in no business yet: its password is set and it is linked", func(t *testing.T) {
+	t.Run("a login in no business: the link only joins it, with its password", func(t *testing.T) {
 		l := newLogin(t) // made by the operator, in no business
 		b := newBiz(t, owner, "Cobalt Couriers (link test)", l.email)
-		if _, err := l.useLink(b, newLinkFor(t, l, b), "cobalt password 1"); err != nil {
+		code := newLinkFor(t, l, b)
+		if h, err := l.linkHolder(b, code, ""); err != nil || h.Mode != auth.ModeJoin {
+			t.Errorf("link holder = %+v, %v; want join: the login isn't this business's to reset", h, err)
+		}
+		if _, err := l.useLink(b, code, "cobalt password 1"); !errors.Is(err, auth.ErrLinkChanged) {
+			t.Errorf("choosing a password = %v, want ErrLinkChanged", err)
+		}
+		if _, err := l.use(b, code, auth.LinkUse{Mode: auth.ModeJoin, Password: l.password}); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := l.tryLogIn(l.email, "cobalt password 1"); err != nil {
-			t.Errorf("log in with the link's password = %v", err)
-		}
+		l.logIn(t) // the operator's password, unchanged
+		l.wantEvents(t, b, "person.account_linked", 1)
 	})
 
-	t.Run("a login also used in another business is refused, before and when used", func(t *testing.T) {
-		l := newLogin(t, "Delta Dairy (link test)")
-		x := newBiz(t, owner, "Echo Exports (link test)", l.email) // not linked yet: a new person here
-		code := newLinkFor(t, l, x)
-		if h, err := l.linkHolder(x, code); err != nil || !h.Elsewhere || h.Linked {
-			t.Errorf("link holder = %+v, %v; want elsewhere, not linked here", h, err)
+	t.Run("forgot password, but the login is also used in another business: refused", func(t *testing.T) {
+		l := newLogin(t, "Delta Dairy (link test)", "Echo Exports (link test)")
+		y := l.biz[0]
+		code := newLinkFor(t, l, y)
+		if h, err := l.linkHolder(y, code, ""); err != nil || h.Mode != auth.ModeRefused {
+			t.Errorf("link holder = %+v, %v; want refused", h, err)
 		}
-		if _, err := l.useLink(x, code, "taken over password"); !errors.Is(err, auth.ErrLinkedElsewhere) {
-			t.Errorf("use link = %v, want ErrLinkedElsewhere", err)
+		if m, err := l.linkMode(y, y.person); err != nil || m != auth.ModeRefused {
+			t.Errorf("the mode of a new link = %q, %v; want refused, never choose", m, err)
+		}
+		for _, mode := range []auth.Mode{auth.ModeChoose, auth.ModeJoin} {
+			_, err := l.use(y, code, auth.LinkUse{Mode: mode, Password: "taken over password"})
+			if !errors.Is(err, auth.ErrLinkedElsewhere) {
+				t.Errorf("use link as %q = %v, want ErrLinkedElsewhere", mode, err)
+			}
 		}
 		l.logIn(t) // the password is unchanged
-		l.wantEvents(t, x, "person.account_linked", 0)
-
-		// The person was linked in both: a forgotten password goes to the server's operator.
-		y := l.biz[0]
-		if _, err := l.useLink(y, newLinkFor(t, l, y), "taken over password"); err != nil {
-			t.Fatalf("the only business's link = %v", err)
-		}
-		l.password = "taken over password"
-		if err := l.in(x, func(tx pgx.Tx) error {
-			return auth.Link(ctx, tx, l.id, x.person, "operator", ledger.SystemActor)
-		}); err != nil {
-			t.Fatal(err)
-		}
-		code = newLinkFor(t, l, y)
-		if h, err := l.linkHolder(y, code); err != nil || !h.Elsewhere || !h.Linked {
-			t.Errorf("link holder = %+v, %v; want elsewhere and linked here", h, err)
-		}
-		if _, err := l.useLink(y, code, "yet another password"); !errors.Is(err, auth.ErrLinkedElsewhere) {
-			t.Errorf("a linked person's link, the login now in two = %v, want ErrLinkedElsewhere", err)
-		}
-		l.logIn(t)
+		l.wantEvents(t, y, "person.link_used", 0)
 	})
 }

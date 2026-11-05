@@ -5,6 +5,7 @@
 package server_test
 
 import (
+	"fmt"
 	"html"
 	"net/http"
 	"net/url"
@@ -63,5 +64,33 @@ func TestOwnPassword(t *testing.T) {
 	}
 	if code, _, _ := s.get(a2, base+"/"); code != http.StatusSeeOther {
 		t.Error("Arjun's other device should be logged out")
+	}
+}
+
+// TestOwnPasswordRateLimit: a wrong current password on the password page counts with the login
+// form's failures (per visitor and per the login's email), so an open session can't be used to
+// guess the password faster than the login form allows (D64).
+func TestOwnPasswordRateLimit(t *testing.T) {
+	s := newSite(t)
+	base := "/t/" + s.slug
+	p := s.logIn(priya)
+	change := func(current string) (int, string) {
+		code, body, _ := s.post(p, base+"/password", url.Values{"current": {current}, "next": {"a-good-new-one"}, "again": {"a-good-new-one"}}, nil)
+		return code, html.UnescapeString(body)
+	}
+	if code, _ := change(s.passwords[priya]); code != http.StatusSeeOther { // a right one is given back
+		t.Fatalf("a good change = %d", code)
+	}
+	s.passwords[priya] = "a-good-new-one"
+	for i := range 10 {
+		if code, body := change(fmt.Sprint("wrong guess ", i)); code != http.StatusUnprocessableEntity || !strings.Contains(body, "The current password is wrong.") {
+			t.Fatalf("wrong guess %d = %d", i+1, code)
+		}
+	}
+	if code, body := change(s.passwords[priya]); code != http.StatusTooManyRequests || !strings.Contains(body, "Too many failed attempts") {
+		t.Errorf("the 11th try, with the right password = %d, want 429", code)
+	}
+	if code, _, _ := s.post(s.browser(), base+"/login", url.Values{"email": {s.mail(priya)}, "password": {s.passwords[priya]}}, nil); code != http.StatusTooManyRequests {
+		t.Errorf("the login form for her email = %d, want 429 (the same count)", code)
 	}
 }

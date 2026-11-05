@@ -31,7 +31,7 @@
 <h2>People</h2>
 {{with .Invites}}
 <div class="callout invites" role="status">
-  <p><b>Send {{if gt (len .) 1}}each person their{{else}}this{{end}} link</b> <span class="why">· it works once, for 24 hours. Whoever opens it sets the password, so send it only to that person.</span></p>
+  <p><b>Send {{if gt (len .) 1}}each person their{{else}}this{{end}} link</b> <span class="why">· it works once, for 24 hours. Whoever opens it chooses a password, or, if they already use Seyal on this server, logs in with theirs. Send it only to that person.</span></p>
   {{range .}}
   <div class="invite">
     <span class="who">{{.Name}}</span>
@@ -54,10 +54,11 @@
       <div class="checks">{{range .Roles}}<label><input type="checkbox" name="role" value="{{.Value}}"> {{.Label}}</label>{{end}}</div>
     </fieldset>
     <button class="btn sm">Add and make a link</button>
+    <span class="why">They choose a password with the link, or, if they already use Seyal on this server, log in with theirs.</span>
   </form>
 </details>
 {{template "sheet" (dict "Action" (printf "/t/%s/settings/people/import" $.Slug) "Export" (printf "/t/%s/settings/people/export" $.Slug)
-  "Help" "First row: Name, Email, Roles (role names separated by ;). People are matched by email. New people get a link to set their password, shown once after the import. Roles are only added, never taken away.")}}
+  "Help" "First row: Name, Email, Roles (role names separated by ;). People are matched by email. New people get a link, shown once after the import: whoever opens it chooses a password, or, if they already use Seyal on this server, logs in with theirs. Roles are only added, never taken away.")}}
 <ul class="rows">
   {{range .Rows}}
   <li class="{{if not .Active}}off{{end}}">
@@ -69,7 +70,9 @@
       <summary>Edit</summary>
       <form method="post" action="/t/{{$.Slug}}/settings/people/{{.ID}}" class="sform">
         <label>Name <input name="name" value="{{.Name}}" required></label>
-        <label>Login email <input type="email" name="email" value="{{.Email}}" required></label>
+        <label>Login email <input type="email" name="email" value="{{.Email}}" required{{if .Me}} readonly{{end}}></label>
+        {{if .Me}}<p class="why">Another admin can change your login email.</p>
+        {{else if .SetUp}}<p class="why">A new email logs {{.Email}} out of {{$.Business}}; the new email gets a new link.</p>{{end}}
         <fieldset><legend>Roles</legend>
           <div class="checks">{{range .Roles}}<label><input type="checkbox" name="role" value="{{.Value}}"{{if .Selected}} checked{{end}}> {{.Label}}</label>{{end}}</div>
         </fieldset>
@@ -81,7 +84,8 @@
       {{if .Active}}
       <form method="post" action="/t/{{$.Slug}}/settings/people/{{.ID}}/link" class="sform inline">
         <button class="btn ghost sm">Make a new link</button>
-        <span class="why">For a new password, e.g. if they forgot theirs. Older links stop working.</span>
+        {{if .SetUp}}<span class="why">Older links stop working. A link sets a new password (e.g. they forgot theirs) only if their login is used in {{$.Business}} alone. If they also use Seyal in another business, no link is made: the server's operator sets a new password.</span>
+        {{else}}<span class="why">Older links stop working. Whoever opens it chooses a password, or, if they already use Seyal on this server, logs in with theirs to add {{$.Business}}.</span>{{end}}
       </form>
       {{end}}
     </details>

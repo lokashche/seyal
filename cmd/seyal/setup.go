@@ -53,6 +53,44 @@ func runSeed(out io.Writer) error {
 		}
 		fmt.Fprintf(out, "  %-22s %-32s %s\n", p.Name, p.Email, password)
 	}
+	fmt.Fprintln(out, "Log in at the server's address (\"/\"): one login works in every business it belongs to.")
+	return nil
+}
+
+// runLink adds an existing login to a business: the login with the email now reaches that business's
+// person with the same email (e.g. the admin of a second business who already logs in to the first).
+// The password stays as it is.
+func runLink(args []string, out io.Writer) error {
+	flags := flag.NewFlagSet("link", flag.ContinueOnError)
+	flags.SetOutput(out)
+	email := flags.String("email", "", "the login's email")
+	slug := flags.String("business", "", "the business to add the login to, e.g. demo")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *email == "" || *slug == "" || flags.NArg() > 0 {
+		return errors.New("usage: seyal link --email <email> --business <slug>")
+	}
+	ctx := context.Background()
+	owner, app, err := pools(ctx)
+	if err != nil {
+		return err
+	}
+	defer owner.Close()
+	defer app.Close()
+	tenantID, err := tenantBySlug(ctx, app, *slug)
+	if err != nil {
+		return err
+	}
+	linked, err := setup.Link(ctx, app, *email, tenantID)
+	if err != nil {
+		return err
+	}
+	if !linked {
+		fmt.Fprintf(out, "%s already reaches %s; nothing changed.\n", *email, *slug)
+		return nil
+	}
+	fmt.Fprintf(out, "%s now reaches %s too, with the same password.\n", *email, *slug)
 	return nil
 }
 

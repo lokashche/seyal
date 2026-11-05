@@ -685,7 +685,7 @@ func (s *Server) importPeople(w http.ResponseWriter, r *http.Request, c *call) {
 	case apply && iv.Problems == 0:
 		notice := imported(iv)
 		if len(links) > 0 {
-			notice += "\nSend each new person their link below to set their password."
+			notice += "\nSend each new person their link below."
 		}
 		s.showSettings(w, r, c, "people", http.StatusOK, notice, "", s.invites(r, c, links...))
 	default:

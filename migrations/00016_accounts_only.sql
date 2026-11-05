@@ -9,9 +9,9 @@
 --   2. a linked person whose own password or email changed since then (by the old code) no longer
 --      matches their login, so they are unlinked; the carry-over then runs again, which gives one
 --      whose email changed a login with the new email. An email that already has a login with
---      another password stays unlinked: that login doesn't reach this business, and this business's
---      own copy of the password no longer works anywhere. Whoever runs the server links them, for
---      now with `seyal set-password --email --business` (which also gives the login a new password);
+--      another hash (always so for a password chosen separately: each hash has its own salt) stays
+--      unlinked: that login doesn't reach this business, and this business's own copy of the
+--      password no longer works anywhere. They are added with a join link or `seyal link`;
 --   3. linked people's old copies of their password are cleared.
 -- The notice (printed by `seyal migrate`) gives only counts, never an email.
 -- +goose StatementBegin

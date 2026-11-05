@@ -5,19 +5,28 @@
   <section class="card profile" aria-label="You">
     <div class="who">
       <span class="avatar lg" aria-hidden="true">{{initials .Session.Name}}</span>
-      <span><b>{{.Session.Name}}</b><span class="r">{{.Data.Email}}</span><span class="r">{{.Business}}</span></span>
+      <span><b>{{.Session.Name}}</b><span class="r">{{.Session.Email}}</span><span class="r">{{.Business}}</span></span>
     </div>
     <div>
       <span class="ctl-label">Your roles</span>
       <p class="roles">{{range $i, $r := .Data.Roles}}{{if $i}} · {{end}}{{$r}}{{else}}<span class="why">None yet</span>{{end}}</p>
     </div>
-    <p class="why">An admin changes your name, email and roles in Settings → People.</p>
+    <p class="why">{{if .Data.Businesses}}Your login works in every business you belong to. {{end}}An admin of {{.Business}} changes your name and roles in Settings → People.</p>
   </section>
+  {{with .Data.Businesses}}
+  {{/* Switching is a full page load (not boosted), so the page gets the new business's manifest. */}}
+  <section class="card switcher" aria-label="Your businesses">
+    <span class="ctl-label">Your businesses</span>
+    <ul class="business-list">
+      {{range .}}<li>{{if eq .Slug $.Slug}}<span class="btn ghost current" aria-current="page">{{.Name}} <span class="why">· here now</span></span>{{else}}<a class="btn ghost" href="/t/{{.Slug}}/" hx-boost="false">{{.Name}}</a>{{end}}</li>{{end}}
+    </ul>
+  </section>
+  {{end}}
   <section class="card login-actions" aria-label="Your login">
     <a class="btn ghost" href="/t/{{.Slug}}/password">{{icon "key"}}Change password</a>
     <form method="post" action="/t/{{.Slug}}/logout"><button class="btn ghost">{{icon "logout"}}Log out</button></form>
     <form method="post" action="/t/{{.Slug}}/logout-everywhere"><button class="btn warn">Log out on all devices</button></form>
-    <p class="why">“All devices” ends every login: this one and any other phone or computer, e.g. one that was lost.</p>
+    <p class="why">“All devices” ends every login: this one and any other phone or computer, e.g. one that was lost, in every business you belong to.</p>
   </section>
   <a class="back-home" href="/t/{{.Slug}}/">← Back to My Work</a>
   </div>

@@ -222,6 +222,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .sform.inline { flex-direction: row; flex-wrap: wrap; align-items: end; border: 0; padding: 0; background: none; }
 .sform label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 500; }
 .sform input:not([type="checkbox"]), .sform select, .sform textarea { font: inherit; font-size: 13.5px; font-weight: 400; border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; background: var(--panel); color: var(--ink); }
+.sform input[readonly] { background: var(--bg); color: var(--muted); }
 .sform fieldset { border: 0; padding: 0; margin: 0; }
 .sform legend { font-size: 13px; font-weight: 500; margin-bottom: 4px; }
 .panel h3 { font-size: 15px; font-weight: 600; margin: 8px 0 0; }
@@ -270,6 +271,10 @@ code, .code { font-family: var(--f-mono); font-size: 12.5px; }
 .card .small { font-size: 12.5px; }
 .card .business-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .card .business-list .btn { width: 100%; }
+.switcher { gap: 10px; }
+.business-list .current { cursor: default; border-color: var(--accent); }
+a.biz { text-decoration: none; }
+a.biz:hover { color: var(--ink); text-decoration: underline; }
 .stack { width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 12px; }
 .card.signed-in { flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 18px; }
 /* The Me page */

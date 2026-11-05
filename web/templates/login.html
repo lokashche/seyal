@@ -1,7 +1,9 @@
 {{define "title"}}Log in · Seyal{{end}}
 {{define "content"}}
 <div class="center">
-  <form method="post" class="card">
+  {{/* Not boosted: logging in on "/" may land in a business, and htmx would keep this page's <head>
+       (no manifest, or another business's), so "Install app" would install the wrong app. */}}
+  <form method="post" class="card" hx-boost="false">
     <h1>Seyal<span class="tamil" lang="ta">செயல்</span></h1>
     <p class="lede">No forms. Just tell Seyal.</p>
     {{with .Error}}<p class="error" role="alert">{{.}}</p>{{end}}
@@ -12,7 +14,8 @@
       <input type="password" name="password" autocomplete="current-password" required>
     </label>
     <button class="btn">Log in</button>
-    <p class="lede small">Forgot your password? Ask an admin of your business for a new link.</p>
+    <p class="lede small">Forgot your password? If you use Seyal in one business, ask an admin there for a new link.
+      If you use it in more than one, or in none yet, ask the server's operator (whoever runs this Seyal server).</p>
   </form>
 </div>
 {{end}}

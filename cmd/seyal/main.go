@@ -54,6 +54,8 @@ func run(args []string, out io.Writer) error {
 		return runSeed(out)
 	case "set-password":
 		return runSetPassword(args[1:], out)
+	case "link":
+		return runLink(args[1:], out)
 	case "help", "-h", "--help":
 		usage(out)
 		return nil
@@ -81,6 +83,7 @@ Commands:
   import FILE    create or update a business from a set-up file
   seed           load the fictional demo business and print its logins
   set-password   give a login a new password (--email EMAIL [--business SLUG])
+  link           add an existing login to a business (--email EMAIL --business SLUG)
   help           show this help
 `, appName)
 }

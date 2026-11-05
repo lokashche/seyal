@@ -123,8 +123,11 @@ CREATE POLICY own_account ON persons FOR SELECT
     USING (current_tenant() IS NULL AND account_id IS NOT NULL AND account_id = current_account());
 
 -- Carry-over: gives each active person who has a password a login with the same email and password,
--- and links them. If another (older) business already gave that email a login with a different
--- password, the person is left unlinked and keeps their own password; the result counts them.
+-- and links them. If another (older) business already gave that email a login, the person is linked
+-- only if their stored hash is that login's very hash. Every bcrypt hash has its own random salt, so
+-- even the same password chosen in two businesses never matches: in practice anyone in two
+-- businesses is left unlinked in the newer one and keeps their own password there; the result
+-- counts them. They are added with a join link or `seyal link` (D64).
 -- Disabled people get no login (so they can't claim an email either); if re-enabled, they need a
 -- set-your-password link.
 -- Safe to run again. Row-level security binds the owner too, so it opens the one business it works
@@ -147,7 +150,7 @@ BEGIN
         VALUES (p.login_email, p.password_hash, p.password_temporary)
         ON CONFLICT (email) DO NOTHING
         RETURNING id INTO a;
-        IF a IS NULL THEN -- the email has a login already: link only if it is this same password
+        IF a IS NULL THEN -- the email has a login already: link only if it has this very hash
             SELECT id INTO a FROM accounts WHERE email = p.login_email AND password_hash = p.password_hash;
         END IF;
         IF a IS NULL THEN

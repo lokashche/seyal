@@ -237,13 +237,13 @@ func (v *view) roleRows() ([]roleRow, error) {
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[roleRow])
 }
 
-// addPerson adds someone, gives them the chosen roles and a link to set their password, to send them.
-// If their email's login is also used in another business, a link can't work yet (D64): no link is
-// made, and the notice says who can add them.
+// addPerson adds someone, gives them the chosen roles and a link to send them. Whoever opens the
+// link chooses a password, or, if their email already has a login (e.g. one used in another
+// business), logs in with it to add this business (D64). The page doesn't say which, so it doesn't tell this business
+// who uses Seyal elsewhere.
 func (s *Server) addPerson(w http.ResponseWriter, r *http.Request, c *call) {
 	name, email := strings.TrimSpace(r.PostFormValue("name")), strings.TrimSpace(r.PostFormValue("email"))
 	var code string
-	var refused bool
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		by := ledger.PersonActor(c.session.PersonID)
 		id, err := people.Add(r.Context(), tx, name, email, by)
@@ -255,9 +255,6 @@ func (s *Server) addPerson(w http.ResponseWriter, r *http.Request, c *call) {
 				return err
 			}
 		}
-		if refused, _, err = auth.LinkRefused(r.Context(), tx, id); err != nil || refused {
-			return err
-		}
 		code, _, err = auth.NewLink(r.Context(), tx, id, by)
 		return err
 	})
@@ -265,27 +262,18 @@ func (s *Server) addPerson(w http.ResponseWriter, r *http.Request, c *call) {
 		s.settingsProblem(w, r, c, "people", err)
 		return
 	}
-	if refused {
-		s.showSettings(w, r, c, "people", http.StatusOK, fmt.Sprintf("Added %s. %s", name, linkRefused(false)), "")
-		return
-	}
-	s.showSettings(w, r, c, "people", http.StatusOK, fmt.Sprintf("Added %s. Send them the link below to set their password.", name), "",
+	s.showSettings(w, r, c, "people", http.StatusOK, fmt.Sprintf("Added %s. Send them the link below.", name), "",
 		s.invites(r, c, invite{Name: name, code: code}))
 }
 
-// linkRefused says why no link was made for someone whose login is also used in another business
-// (auth.LinkRefused), and who can help. linked: they already have that login here.
-func linkRefused(linked bool) string {
-	if linked {
-		return "Their Seyal login is also used for another business, so a link from here can't change its password. " +
-			"Ask whoever runs this Seyal server to give them a new password."
-	}
-	return "Their email already has a Seyal login that is also used for another business, so a link can't add them. " +
-		"Ask whoever runs this Seyal server to add them."
-}
+// noLinkElsewhere says why no link was made for someone whose login is also used in another
+// business (auth.ModeRefused): a link from here can't change its password.
+const noLinkElsewhere = "Their Seyal login is also used for another business, so a link from here can't change its password. " +
+	"Ask the server's operator (whoever runs this Seyal server) to give them a new password."
 
 // updatePerson saves name, email, roles and active/disabled. Admins can't lock themselves out, and
-// at least one active admin always remains.
+// at least one active admin always remains. A new email unlinks the person's login here (D64), so
+// the old address no longer reaches this business; a new link for the new email is shown at once.
 func (s *Server) updatePerson(w http.ResponseWriter, r *http.Request, c *call) {
 	id := r.PathValue("id")
 	if err := r.ParseForm(); err != nil {
@@ -299,9 +287,19 @@ func (s *Server) updatePerson(w http.ResponseWriter, r *http.Request, c *call) {
 			"You can't disable yourself or remove your own admin role. Ask another admin.")
 		return
 	}
+	if id == c.session.PersonID && strings.ToLower(strings.TrimSpace(r.PostForm.Get("email"))) != c.session.Email {
+		// It would unlink their own login and log them out here at once. The email is tidied exactly as
+		// people.Update stores it (not strings.EqualFold, which calls some different addresses equal).
+		s.showSettings(w, r, c, "people", http.StatusUnprocessableEntity, "",
+			"You can't change your own login email. Ask another admin.")
+		return
+	}
+	var u people.Updated
+	var name, code string
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		by := ledger.PersonActor(c.session.PersonID)
-		if _, err := people.Update(r.Context(), tx, id, r.PostForm.Get("name"), r.PostForm.Get("email"), by); err != nil {
+		var err error
+		if u, err = people.Update(r.Context(), tx, id, r.PostForm.Get("name"), r.PostForm.Get("email"), by); err != nil {
 			return err
 		}
 		all, err := (&view{ctx: r.Context(), tx: tx}).allRoles()
@@ -331,28 +329,42 @@ func (s *Server) updatePerson(w http.ResponseWriter, r *http.Request, c *call) {
 		if admins == 0 {
 			return errors.New("at least one active admin must remain")
 		}
-		return nil
+		if u.OldEmail != "" && active {
+			// The old links stopped working with the old email: one for the new email, to send on.
+			name = strings.TrimSpace(r.PostForm.Get("name"))
+			code, _, err = auth.NewLink(r.Context(), tx, id, by)
+		}
+		return err
 	})
 	if err != nil {
 		s.settingsProblem(w, r, c, "people", err)
 		return
 	}
-	s.showSettings(w, r, c, "people", http.StatusOK, "Saved.", "")
+	notice := "Saved."
+	if u.Unlinked {
+		notice += fmt.Sprintf(" %s will no longer reach %s.", u.OldEmail, c.tenant.Name)
+	}
+	if code == "" {
+		s.showSettings(w, r, c, "people", http.StatusOK, notice, "")
+		return
+	}
+	s.showSettings(w, r, c, "people", http.StatusOK, notice+" Send the link below to "+name+"'s new email.", "",
+		s.invites(r, c, invite{Name: name, code: code}))
 }
 
-// newLink makes a fresh set-your-password link for someone, e.g. who forgot their password. Their
-// current password keeps working until they use it; older links stop working. For a login also used
-// in another business no link is made, as it couldn't work (D64), and nothing changes.
+// newLink makes a fresh link for someone, e.g. who forgot their password. Their current password
+// keeps working until they use it; older links stop working. For someone whose login is also used in
+// another business no link is made, as it couldn't change the password (D64), and nothing changes.
 func (s *Server) newLink(w http.ResponseWriter, r *http.Request, c *call) {
 	var name, code string
-	var refused, linked bool
+	var refused bool
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(r.Context(), `SELECT display_name FROM persons WHERE tenant_id = current_tenant() AND id::text = $1`,
 			r.PathValue("id")).Scan(&name); err != nil {
 			return err
 		}
-		var err error
-		if refused, linked, err = auth.LinkRefused(r.Context(), tx, r.PathValue("id")); err != nil || refused {
+		mode, err := auth.LinkModeOf(r.Context(), tx, r.PathValue("id"))
+		if refused = mode == auth.ModeRefused; err != nil || refused {
 			return err
 		}
 		code, _, err = auth.NewLink(r.Context(), tx, r.PathValue("id"), ledger.PersonActor(c.session.PersonID))
@@ -367,7 +379,7 @@ func (s *Server) newLink(w http.ResponseWriter, r *http.Request, c *call) {
 		return
 	}
 	if refused {
-		s.showSettings(w, r, c, "people", http.StatusConflict, "", fmt.Sprintf("No link made for %s. %s", name, linkRefused(linked)))
+		s.showSettings(w, r, c, "people", http.StatusConflict, "", fmt.Sprintf("No link made for %s. %s", name, noLinkElsewhere))
 		return
 	}
 	s.showSettings(w, r, c, "people", http.StatusOK,

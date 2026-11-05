@@ -451,3 +451,38 @@ func NewPassword(ctx context.Context, app *pgxpool.Pool, email, tenantID string)
 	})
 	return password, err
 }
+
+// Link adds an existing login to a business (`seyal link`): the login with this email now reaches
+// the business's person with the same email. The password doesn't change and no session ends, so
+// nothing changes for the login's other businesses. It returns false if they were already linked.
+// The operator is trusted, like set-password; a business's admin can do the same only with a link
+// that asks for the login's password (D64).
+func Link(ctx context.Context, app *pgxpool.Pool, email, tenantID string) (bool, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	var linked bool
+	err := db.WithTenant(ctx, app, tenantID, func(tx pgx.Tx) error {
+		accountID, err := auth.FindAccount(ctx, tx, email)
+		if err != nil {
+			return err
+		}
+		if accountID == "" {
+			return fmt.Errorf("there is no login with the email %s yet; to make one, use seyal set-password", email)
+		}
+		personID, err := people.ByEmail(ctx, tx, email)
+		if err != nil {
+			return fmt.Errorf("%w in this business; add them first (Settings → People, or the set-up file)", err)
+		}
+		var current string
+		if err := tx.QueryRow(ctx, `
+			SELECT coalesce(account_id::text, '') FROM persons WHERE tenant_id = current_tenant() AND id::text = $1`,
+			personID).Scan(&current); err != nil {
+			return err
+		}
+		if current == accountID {
+			return nil
+		}
+		linked = true
+		return auth.Link(ctx, tx, accountID, personID, "operator", ledger.SystemActor)
+	})
+	return linked, err
+}

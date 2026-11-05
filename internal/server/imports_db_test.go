@@ -113,7 +113,7 @@ func TestImportPeople(t *testing.T) {
 	}
 	_, page, _ = s.post(l, base+"/import", url.Values{"action": {"apply"}, "csv": {good}}, nil)
 	page = html.UnescapeString(page)
-	if !strings.Contains(page, "Imported: 1 new, 1 changed, 1 unchanged.") || !strings.Contains(page, "Hi Meena Pillai, here is your link") {
+	if !strings.Contains(page, "Imported: 1 new, 1 changed, 1 unchanged.") || !strings.Contains(page, "Hi Meena Pillai, here is your Seyal link") {
 		t.Fatalf("import:\n%s", page)
 	}
 	_, roles, _ := s.get(l, "/t/"+s.slug+"/settings/roles")

@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"seyal/internal/auth"
 	"seyal/internal/ledger"
 )
 
@@ -127,24 +128,52 @@ func SetActive(ctx context.Context, tx pgx.Tx, personID string, active bool, by 
 	return true, record(ctx, tx, kind, "person", personID, nil, by)
 }
 
-// Update changes a person's name and login email. It returns whether anything changed.
-// tx must come from db.WithTenant.
-func Update(ctx context.Context, tx pgx.Tx, personID, name, email string, by ledger.Actor) (bool, error) {
+// Updated is what Update changed.
+type Updated struct {
+	Changed bool
+	// OldEmail is the email before, if it changed ("" if it didn't).
+	OldEmail string
+	// Unlinked is true when the person's login no longer reaches them here, because their email
+	// changed (auth.EmailChanged). They need a new link for the new email.
+	Unlinked bool
+}
+
+// Update changes a person's name and login email. A new email unlinks the person's login here, in
+// the same transaction (see auth.EmailChanged); the login itself is never changed, so a business
+// can't move a login another business uses to another address. tx must come from db.WithTenant.
+func Update(ctx context.Context, tx pgx.Tx, personID, name, email string, by ledger.Actor) (Updated, error) {
 	name, email = strings.TrimSpace(name), strings.ToLower(strings.TrimSpace(email))
 	if name == "" || !strings.Contains(email, "@") {
-		return false, errors.New("a person needs a name and an email address")
+		return Updated{}, errors.New("a person needs a name and an email address")
 	}
-	tag, err := tx.Exec(ctx, `
-		UPDATE persons SET display_name = $2, login_email = $3
-		WHERE tenant_id = current_tenant() AND id::text = $1
-			AND (display_name, coalesce(login_email, '')) IS DISTINCT FROM ($2, $3)`, personID, name, email)
-	if err != nil {
-		return false, fmt.Errorf("people: update: %w", err)
+	var oldName, oldEmail string
+	err := tx.QueryRow(ctx, `
+		SELECT display_name, coalesce(login_email, '') FROM persons
+		WHERE tenant_id = current_tenant() AND id::text = $1 FOR UPDATE`, personID).Scan(&oldName, &oldEmail)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return Updated{}, errors.New("no such person")
+	case err != nil:
+		return Updated{}, err
+	case oldName == name && oldEmail == email:
+		return Updated{}, nil
 	}
-	if tag.RowsAffected() == 0 {
-		return false, nil
+	if _, err := tx.Exec(ctx, `
+		UPDATE persons SET display_name = $2, login_email = $3 WHERE tenant_id = current_tenant() AND id::text = $1`,
+		personID, name, email); err != nil {
+		return Updated{}, fmt.Errorf("people: update: %w", err)
 	}
-	return true, record(ctx, tx, "person.updated", "person", personID, map[string]string{"name": name, "email": email}, by)
+	u := Updated{Changed: true}
+	if err := record(ctx, tx, "person.updated", "person", personID, map[string]string{"name": name, "email": email}, by); err != nil {
+		return Updated{}, err
+	}
+	if oldEmail != email {
+		u.OldEmail = oldEmail
+		if u.Unlinked, err = auth.EmailChanged(ctx, tx, personID, by); err != nil {
+			return Updated{}, err
+		}
+	}
+	return u, nil
 }
 
 // ByEmail returns the id of the person with this login email. tx must come from db.WithTenant.

@@ -8,23 +8,55 @@
     <p class="small">Ask an admin in your business for a new link. If you have already set your password,
       <a href="/t/{{$.Slug}}/login">log in</a>.</p>
   </div>
-  {{else if .Elsewhere}}
+  {{else if eq .Mode "refused"}}
   <div class="card">
     <h1>Seyal<span class="tamil" lang="ta">செயல்</span></h1>
-    <p class="lede">Welcome to {{$.Business}}, {{.Name}}.</p>
-    {{if .Linked}}
+    <p class="lede">Hello {{.Name}}. This link can't set a new password.</p>
+    {{with $.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
     <p class="small">Your Seyal login, {{.Email}}, is also used for another business, so a link from
-      {{$.Business}} can't change its password. Ask whoever runs this Seyal server for a new password.</p>
-    {{else}}
-    <p class="small">{{.Email}} already has a Seyal login that is also used for another business, so
-      this link can't set its password. Ask whoever runs this Seyal server to add you to {{$.Business}}.</p>
-    {{end}}
+      {{$.Business}} can't change its password. Only the server's operator (whoever runs this Seyal server) can set
+      a new one: ask them.
+      If you remember it, <a href="/t/{{$.Slug}}/login">log in</a>.</p>
   </div>
+  {{else if and (eq .Mode "join") .Other}}
+  <form method="post" action="/logout" class="card">
+    <h1>Seyal<span class="tamil" lang="ta">செயல்</span></h1>
+    {{with $.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
+    <p class="lede">This link is for another login. Log out first.</p>
+    <p class="small">Then open the link again.</p>
+    <button class="btn ghost">{{icon "logout"}}Log out</button>
+  </form>
+  {{else if and (eq .Mode "join") .Same}}
+  <form method="post" class="card">
+    <h1>Seyal<span class="tamil" lang="ta">செயல்</span></h1>
+    <p class="lede">Welcome to {{$.Business}}, {{.Name}}.</p>
+    {{with $.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
+    <p class="small">You're logged in as {{.Email}}. Your login and its password stay as they are.</p>
+    <input type="hidden" name="mode" value="join">
+    <button class="btn">Add {{$.Business}}</button>
+  </form>
+  {{else if eq .Mode "join"}}
+  <form method="post" class="card">
+    <h1>Seyal<span class="tamil" lang="ta">செயல்</span></h1>
+    <p class="lede">Welcome to {{$.Business}}, {{.Name}}.</p>
+    {{with $.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
+    <p class="small">You already have a Seyal login ({{.Email}}). Enter its password to add {{$.Business}}.</p>
+    <input type="hidden" name="mode" value="join">
+    <input type="email" name="email" autocomplete="username" value="{{.Email}}" hidden>
+    <label>Password
+      <input type="password" name="password" autocomplete="current-password" required autofocus>
+    </label>
+    <button class="btn">Add {{$.Business}}</button>
+    <p class="small">Forgot it? If you use Seyal in just one other business, ask an admin there for a link to set a new
+      password. If you use it in more than one, or in none yet, only the server's operator (whoever runs this Seyal
+      server) can set a new one: ask them. Then open this link again.</p>
+  </form>
   {{else}}
   <form method="post" class="card">
     <h1>Seyal<span class="tamil" lang="ta">செயல்</span></h1>
     <p class="lede">Welcome to {{$.Business}}, {{.Name}}. Choose your password to start.</p>
     {{with $.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
+    <input type="hidden" name="mode" value="choose">
     <input type="email" name="email" autocomplete="username" value="{{.Email}}" hidden>
     <label>Your login email <input type="email" value="{{.Email}}" disabled></label>
     <label>New password (at least 10 characters)

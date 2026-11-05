@@ -754,13 +754,9 @@ func TestLink(t *testing.T) {
 	})
 
 	t.Run("one person per login in a business", func(t *testing.T) {
-		// The old email edit doesn't unlink yet (build part 4), so a second person can get the email.
-		if err := l.in(a, func(tx pgx.Tx) error {
-			_, err := people.Update(ctx, tx, a.person, "Renamed", testdb.Email("moved"), ledger.SystemActor)
-			return err
-		}); err != nil {
-			t.Fatal(err)
-		}
+		// An email edit in the app unlinks the person (people.Update), so only data from before could
+		// look like this: a linked person whose email is no longer the login's. The owner makes it.
+		sqlIn(t, l.owner, a.tenant, "UPDATE persons SET login_email = $1 WHERE id = $2", testdb.Email("moved"), a.person)
 		second := addPerson(a, "Second Person", l.email)
 		wantRefused(link(a, l.id, second), "already reaches someone else")
 	})

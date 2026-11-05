@@ -164,7 +164,7 @@ func (s *site) useLink(page, name, password string) *http.Client {
 		s.t.Fatalf("no link on the page:\n%s", problem(page))
 	}
 	c := s.browser()
-	code, body, h := s.post(c, "/t/"+s.slug+"/welcome/"+m[1], url.Values{"next": {password}, "again": {password}}, nil)
+	code, body, h := s.post(c, "/t/"+s.slug+"/welcome/"+m[1], url.Values{"mode": {"choose"}, "next": {password}, "again": {password}}, nil)
 	if code != http.StatusSeeOther || h.Get("Location") != "/t/"+s.slug+"/" {
 		s.t.Fatalf("using the link = %d to %q:\n%s", code, h.Get("Location"), body)
 	}
