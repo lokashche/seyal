@@ -12,7 +12,11 @@ import (
 
 	"seyal/internal/ask"
 	"seyal/internal/channel"
+	"seyal/internal/engine"
+	"seyal/internal/ledger"
 	"seyal/internal/playbook"
+	"seyal/internal/testdb"
+	"seyal/internal/workitem"
 )
 
 // chatWho is a made-up request: Sales starts it, then Ops has it, and only whoever has it may move it.
@@ -136,6 +140,137 @@ func TestRefusedWhoKeepsTheRest(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(said, " | "), "Mia Maker hasn't joined yet") {
 		t.Errorf("Seyal said %q; want it to explain why Mia can't have it", said)
+	}
+	o.checkLedger()
+}
+
+// chatPair is a made-up task: whoever "Approver" names has it now, and whoever "Closer" names gets it
+// in the next step (an assign action), so both fields carry power (D68, choice 14).
+const chatPair = `id: chat-pair
+version: "1"
+description: A made-up task one person checks and another closes.
+numbering: "P-{seq:4}"
+fields:
+  - { key: what, label: What needs doing, type: text, required: true, from_message: true }
+  - { key: approver, label: Approver, type: person }
+  - { key: closer, label: Closer, type: person }
+states: [open, closing, done]
+initial: open
+steps:
+  open: { owner: "field:approver", needs: [what] }
+transitions:
+  - { action: hand_on, from: [open], to: closing }
+  - { action: finish, from: [closing], to: done }
+on:
+  closing:
+    - { do: assign, to: closer }
+`
+
+// TestOwnerFieldSavedLast: one message names both the step's owner field (Approver) and another power
+// field (Closer). The owner field sorts first, but it is saved last: saving it hands the item over, and
+// the starter, who no longer had it, could then not set Closer (D72 review fix).
+func TestOwnerFieldSavedLast(t *testing.T) {
+	o := newOffice(t)
+	owner, _ := testdb.Connect(t)
+	for _, person := range []string{o.sam, o.olga, o.mia} {
+		account, _ := testdb.NewAccount(t, owner)
+		testdb.LinkPerson(t, owner, o.tenant, person, account)
+	}
+	p, err := playbook.Parse([]byte(chatPair))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pv string
+	o.in(func(tx pgx.Tx) error {
+		pv, _, err = playbook.Register(o.ctx, tx, p)
+		return err
+	})
+	o.withFake(map[string]string{
+		"Olga": `{"kind":"new_work","fields":{"approver":"Olga Ops","closer":"Mia Maker"},"new_items":[],"command":"","reason":"","reply":""}`,
+	})
+	var r ask.Reply
+	o.in(func(tx pgx.Tx) error {
+		var err error
+		r, err = ask.Begin(o.ctx, tx, o.env(), pv, channel.Incoming{Channel: "web", PersonID: o.sam,
+			Text: "Olga checks the petty cash, Mia closes it"})
+		return err
+	})
+	if r.Item.Fields["approver"] != o.olga || r.Item.Fields["closer"] != o.mia || r.Item.AssigneeID != o.olga {
+		var said []string
+		for _, m := range r.Seyal {
+			said = append(said, m.Text)
+		}
+		t.Errorf("fields = %v, with %q (Seyal said %q); want both saved and the item with Olga", r.Item.Fields, r.Item.AssigneeID, said)
+	}
+	o.checkLedger()
+}
+
+// chatCloser is a made-up request: Sam starts it, then the Ops team has it. Picking a kind of work
+// fills in the Closer, who gets it at the end (an assign action), so the kind of work fills in a field
+// that carries power.
+const chatCloser = `id: chat-closer
+version: "1"
+description: A made-up request Sam starts and Ops closes.
+numbering: "R-{seq:4}"
+roles: [sales, ops]
+fields:
+  - { key: what, label: What needs doing, type: text, required: true, from_message: true }
+  - { key: kind_of_work, label: Kind of work, type: master, kind: work_type, prefill: { closer: maker } }
+  - { key: closer, label: Closer, type: person }
+  - { key: note, label: Note, type: text }
+states: [new, with_ops, closing, done]
+initial: new
+steps:
+  new: { owner: starter }
+  with_ops: { owner: "role:ops" }
+transitions:
+  - { action: send, from: [new], to: with_ops }
+  - { action: close, from: [with_ops], to: closing }
+  - { action: finish, from: [closing], to: done }
+on:
+  closing:
+    - { do: assign, to: closer }
+`
+
+// TestRefusedFillKeepsTheRest: while Ops has the item, Sam names a kind of work that would change the
+// Closer, which only whoever has the item may do (D72 review fix). That is refused, but the note from
+// the same message is still saved.
+func TestRefusedFillKeepsTheRest(t *testing.T) {
+	o := newOffice(t)
+	p, err := playbook.Parse([]byte(chatCloser))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pv string
+	o.in(func(tx pgx.Tx) error {
+		pv, _, err = playbook.Register(o.ctx, tx, p)
+		return err
+	})
+	var r ask.Reply
+	o.in(func(tx pgx.Tx) error {
+		var err error
+		r, err = ask.Begin(o.ctx, tx, o.env(), pv, channel.Incoming{Channel: "web", PersonID: o.sam, Text: "Order new chairs"})
+		if err != nil {
+			return err
+		}
+		by := ledger.PersonActor(o.sam)
+		if _, err = workitem.SetFields(o.ctx, tx, r.Item.ID, engine.Fields{"closer": o.olga}, by); err != nil {
+			return err
+		}
+		_, err = workitem.Act(o.ctx, tx, r.Item.ID, "send", "", by)
+		return err
+	})
+	o.withFake(map[string]string{
+		"audit": `{"kind":"answer","fields":{"kind_of_work":"monthly","note":"for the audit"},"new_items":[],"command":"","reason":"","reply":""}`,
+	})
+	r = o.write(r.Item.ID, o.sam, "It is monthly work, for the audit")
+	var said []string
+	for _, m := range r.Seyal {
+		said = append(said, m.Text)
+	}
+	if r.Item.Fields["note"] != "for the audit" || r.Item.Fields["kind_of_work"] != nil || r.Item.Fields["closer"] != o.olga ||
+		!strings.Contains(strings.Join(said, " | "), "Closer") {
+		t.Errorf("fields = %v (Seyal said %q); want the note saved, the kind of work refused, Olga still the closer", r.Item.Fields, said)
 	}
 	o.checkLedger()
 }

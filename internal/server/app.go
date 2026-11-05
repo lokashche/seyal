@@ -166,6 +166,7 @@ type slotView struct {
 type actionView struct {
 	Name, Label string
 	NeedsReason bool
+	Hint        string // where the item goes, when worth saying (workitem.Landing)
 }
 
 // view is everything read for one page, inside one transaction.
@@ -398,12 +399,17 @@ func (v *view) item(id string) (*itemView, error) {
 		return nil, err
 	}
 	kind, owner := engine.Owner(p, it.State)
+	power := engine.PowerFields(p)
 	for _, f := range p.Fields {
-		// The field that says who has the item in this step changes only by passing it on (D68, choice 14).
-		open := changeable && (kind != "field" || f.Key != owner || (iv.Hand != nil && iv.Hand.CanPass))
+		// A person field that says who gets the item or who may take a move is changed only by whoever
+		// has the item or an admin; the one for this step hands the item over (D68, choice 14).
+		open := changeable && (!power[f.Key] || (iv.Hand != nil && iv.Hand.CanPass))
 		fv, err := v.field(f, it.Fields[f.Key], open)
 		if err != nil {
 			return nil, err
+		}
+		if fv.Editable && kind == "field" && f.Key == owner {
+			fv.Options = receiverChoices(iv.Hand, it.AssigneeID, it.Fields[f.Key], fv.Options)
 		}
 		fv.Missing = !iv.Closed && slices.Contains(toAsk, f.Key)
 		fv.From = from[f.Key]
@@ -430,6 +436,10 @@ func (v *view) item(id string) (*itemView, error) {
 				if t.Action == name && t.Needs == "reason" {
 					a.NeedsReason = true
 				}
+			}
+			// "Goes back to Asha.", or a warning before the move (D68, choices 7 and 13).
+			if a.Hint, err = workitem.Landing(v.ctx, v.tx, it, name, v.actor()); err != nil {
+				return nil, err
 			}
 			iv.Actions = append(iv.Actions, a)
 		}

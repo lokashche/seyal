@@ -94,7 +94,7 @@ func Start(ctx context.Context, tx pgx.Tx, in NewItem) (Item, error) {
 			return Item{}, err
 		}
 	}
-	if err := s.enter(&it); err != nil {
+	if err := s.enter(&it, arrival{}); err != nil {
 		return Item{}, err
 	}
 	return it, nil
@@ -104,7 +104,9 @@ func Start(ctx context.Context, tx pgx.Tx, in NewItem) (Item, error) {
 // really changed, the version goes up, so earlier approvals stop counting, and an approved item
 // goes back to waiting for approvals. A change to the field that says who has the item in this step
 // (its owner field) is a pass on, with the same checks (D68, choice 14): only whoever has it or an
-// admin may make it, and only to someone who may receive it here. tx must come from db.WithTenant.
+// admin may make it, and only to someone who may receive it here. The checks look at what the change
+// really does, so a field a list entry fills in (a work type's maker) counts too (D72 review fix).
+// tx must come from db.WithTenant.
 func SetFields(ctx context.Context, tx pgx.Tx, id string, values engine.Fields, by ledger.Actor) (Item, error) {
 	it, err := getForUpdate(ctx, tx, id)
 	if err != nil {
@@ -117,17 +119,49 @@ func SetFields(ctx context.Context, tx pgx.Tx, id string, values engine.Fields, 
 	if err != nil {
 		return Item{}, err
 	}
-	h, err := s.ownerFieldChange(it, values, by)
+	changes, err := s.powerChanges(it, values, by)
 	if err != nil {
 		return Item{}, err
 	}
+	h, err := s.ownerFieldChange(it, changes, by)
+	if err != nil {
+		return Item{}, err
+	}
+	if err := s.powerFieldChange(it, changes, by); err != nil {
+		return Item{}, err
+	}
 	return s.setFields(it, values, by, h)
+}
+
+// powerChanges returns values plus every person field that carries power (engine.PowerFields) whose
+// value the change really alters, with its new value (nil when cleared). It tries the change on a copy
+// of the item, so a value filled in from a list entry (picking a work type fills in its maker) is
+// checked like a value a person gives.
+func (s session) powerChanges(it Item, values engine.Fields, by ledger.Actor) (engine.Fields, error) {
+	try := it
+	try.Fields = maps.Clone(it.Fields)
+	if try.Fields == nil {
+		try.Fields = engine.Fields{}
+	}
+	if err := s.apply(&try, values, by.Kind == ledger.System); err != nil {
+		return nil, err
+	}
+	changes := engine.Fields{}
+	maps.Copy(changes, values)
+	for key := range engine.PowerFields(s.p) {
+		if !engine.SameValue(try.Fields[key], it.Fields[key]) {
+			changes[key] = try.Fields[key]
+		}
+	}
+	return changes, nil
 }
 
 // setFields is SetFields after its checks. h is how the item changes hands when the owner field gets
 // a new person (nil: Seyal's own change, recorded as the step's owner getting it).
 func (s session) setFields(it Item, values engine.Fields, by ledger.Actor, h *handoff) (Item, error) {
 	before := it.FieldsHash
+	_, ownerKey := engine.Owner(s.p, it.State)
+	ownerBefore := it.Fields[ownerKey]
 	if err := s.apply(&it, values, by.Kind == ledger.System); err != nil {
 		return Item{}, err
 	}
@@ -152,16 +186,18 @@ func (s session) setFields(it Item, values engine.Fields, by ledger.Actor, h *ha
 		return Item{}, err
 	}
 	if it.State != from {
-		if err := s.enter(&it); err != nil {
+		if err := s.enter(&it, arrival{}); err != nil {
 			return Item{}, err
 		}
-	} else if kind, name := engine.Owner(s.p, it.State); kind == "field" && values[name] != nil {
-		// The step belongs to whoever this field names, so a new name hands the item over.
+	} else if kind, name := engine.Owner(s.p, it.State); kind == "field" && it.Fields[name] != nil &&
+		(values[name] != nil || !engine.SameValue(it.Fields[name], ownerBefore)) {
+		// The step belongs to whoever this field names, so a new name hands the item over: one given
+		// here, or one a list entry filled in.
 		if h == nil {
-			if err := s.handOver(&it); err != nil {
+			if err := s.handOver(&it, arrival{}); err != nil {
 				return Item{}, err
 			}
-		} else if err := s.assign(&it, values[name].(string), "", by, *h); err != nil {
+		} else if err := s.assign(&it, it.Fields[name].(string), "", by, *h); err != nil {
 			return Item{}, err
 		}
 	} else if a := s.p.Approvals; a != nil && it.State == a.In {
@@ -215,7 +251,8 @@ func Act(ctx context.Context, tx pgx.Tx, id, action, reason string, by ledger.Ac
 	if reason != "" {
 		change["reason"] = reason
 	}
-	if err := s.move(&it, to, change, by); err != nil {
+	in := arrival{action: action, back: line.Back, from: a.ID, note: strings.TrimSpace(reason)}
+	if err := s.move(&it, to, change, by, in); err != nil {
 		return Item{}, err
 	}
 	return it, nil
@@ -387,10 +424,10 @@ func (s session) prefill(it *Item, f playbook.Field, key string) error {
 	return nil
 }
 
-// move puts the item into a new state, records it, and runs what happens on entering it.
-// Entering the approval state starts a new approval round: the version goes up, so decisions
-// from an earlier round (e.g. a rejection) don't count again.
-func (s session) move(it *Item, to string, change map[string]any, by ledger.Actor) error {
+// move puts the item into a new state, records it, and runs what happens on entering it. in says how
+// it got there (see arrival). Entering the approval state starts a new approval round: the version
+// goes up, so decisions from an earlier round (e.g. a rejection) don't count again.
+func (s session) move(it *Item, to string, change map[string]any, by ledger.Actor, in arrival) error {
 	from := it.State
 	it.State = to
 	if a := s.p.Approvals; a != nil && to == a.In && from != a.In {
@@ -403,14 +440,18 @@ func (s session) move(it *Item, to string, change map[string]any, by ledger.Acto
 	if err := s.record("item.state_changed", *it, change, by); err != nil {
 		return err
 	}
-	return s.enter(it)
+	return s.enter(it, in)
 }
 
-// enter hands the item to the owner of its new step, runs the playbook's actions for the state, then
-// follows any automatic move (all approvals given, or one rejected).
-func (s session) enter(it *Item) error {
-	if err := s.handOver(it); err != nil {
+// enter hands the item to whoever should have it in its new step, runs the playbook's actions for the
+// state, then follows any automatic move (all approvals given, or one rejected). Work sent back (in.back)
+// skips the actions: going back is not starting the step afresh (D68, choice 8).
+func (s session) enter(it *Item, in arrival) error {
+	if err := s.handOver(it, in); err != nil {
 		return err
+	}
+	if in.back {
+		return s.settle(it)
 	}
 	for _, a := range s.p.On[it.State] {
 		switch a.Do {
@@ -446,36 +487,21 @@ func (s session) enter(it *Item) error {
 			if id == "" {
 				continue
 			}
+			if ok, err := s.mayHold(id, ""); err != nil || !ok {
+				if err == nil {
+					err = s.postStays(it, s.goneWhy(id, "is the "+s.fieldLabel(a.To)), false)
+				}
+				if err != nil {
+					return err
+				}
+				continue
+			}
 			if err := s.assign(it, id, "", ledger.SystemActor, handoff{How: HowRule}); err != nil {
 				return err
 			}
 		}
 	}
 	return s.settle(it)
-}
-
-// handOver gives the item to the owner of its current step, if the step names one: whoever started
-// it, a person field, or a role (anyone in it, shown as the item's team). While the person field is
-// empty, the item stays where it is, or with whoever started it if nobody has it yet.
-func (s session) handOver(it *Item) error {
-	step := handoff{How: HowStep}
-	kind, name := engine.Owner(s.p, it.State)
-	switch kind {
-	case "starter":
-		if it.CreatedBy != "" {
-			return s.assign(it, it.CreatedBy, "", ledger.SystemActor, step)
-		}
-	case "field":
-		if id, _ := it.Fields[name].(string); id != "" {
-			return s.assign(it, id, "", ledger.SystemActor, step)
-		}
-		if it.AssigneeID == "" && it.Team == "" && it.CreatedBy != "" {
-			return s.assign(it, it.CreatedBy, "", ledger.SystemActor, step)
-		}
-	case "role":
-		return s.assign(it, "", name, ledger.SystemActor, step)
-	}
-	return nil
 }
 
 // How an item changed hands, in the "how" of its item.assigned event (D68, D70). An event without "how"
@@ -560,11 +586,16 @@ func (s session) settle(it *Item) error {
 	if err != nil || st.Next == "" || st.Next == it.State {
 		return err
 	}
-	action := "approvals_complete"
+	in := arrival{action: "approvals_complete"}
 	if st.Rejected != nil {
-		action = "rejected"
+		// "From Chitra: <her reason>": a refusal comes back from whoever refused it. With on_reject_back
+		// it is a rewind (D68, choice 8); older versions behave as before.
+		in.action, in.back = "rejected", a.OnRejectBack
+		if in.from, in.note, err = s.rejection(*it, st.Rejected); err != nil {
+			return err
+		}
 	}
-	return s.move(it, st.Next, map[string]any{"action": action}, ledger.SystemActor)
+	return s.move(it, st.Next, map[string]any{"action": in.action}, ledger.SystemActor, in)
 }
 
 func (s session) status(it Item) (engine.ApprovalStatus, error) {

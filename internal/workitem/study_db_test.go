@@ -131,9 +131,15 @@ func TestSampleRequirementStudy(t *testing.T) {
 		t.Errorf("studied_work_type = %v, want payroll", job.Fields["studied_work_type"])
 	}
 	backToSales()
+	if job.State != "draft" || job.AssigneeID != f.sales || job.HandoffFrom != f.ops {
+		t.Errorf("sent back = %s, with %q from %q; want draft, with Sales, from Olga", job.State, job.AssigneeID, job.HandoffFrom)
+	}
 	if job, err = act(job.ID, "send_to_ops", by); err != nil || job.State != "with_ops" || studies() != 1 {
 		t.Errorf("sent again for the same work type = %v, %s, %d studies; want with_ops and still one study",
 			err, job.State, studies())
+	}
+	if job.Team != "ops" || job.AssigneeID != "" { // nobody had taken it, so the team had with_ops last
+		t.Errorf("sent again: with %q team %q; want the ops team, which had with_ops last", job.AssigneeID, job.Team)
 	}
 	backToSales()
 	f.tx(func(tx pgx.Tx) error {

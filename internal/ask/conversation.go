@@ -490,31 +490,88 @@ func (c *conversation) roles() ([]string, error) {
 	return pgx.CollectRows(rows, pgx.RowTo[string])
 }
 
-// setFields saves values read from one message, as by. The field that says who has the item in this
-// step (its owner field) is saved on its own, after the others: changing it is a pass on with its own
-// checks (D68, choice 14), so if it is refused the other values are still kept. It returns the
-// problems in plain words.
+// setFields saves values read from one message, as by. Each person field that carries power (it says
+// who gets the item or who may take a move, engine.PowerFields) is saved on its own, after the others:
+// changing it has its own checks (D68, choice 14), so if it is refused the other values are still
+// kept. The field that says who has the item in this step goes very last: saving it hands the item
+// over, and the new holder's checks would then refuse the rest. A list field whose entry fills in a
+// power field (a work type fills in its maker) is checked the same way; if that refuses the others,
+// they are saved without it. It returns the problems in plain words.
 func (c *conversation) setFields(values engine.Fields, by ledger.Actor) (problems []string, err error) {
 	changes := []engine.Fields{values}
-	if kind, owner := engine.Owner(c.p, c.reply.Item.State); kind == "field" && len(values) > 1 {
-		if who, ok := values[owner]; ok {
-			rest := maps.Clone(values)
-			delete(rest, owner)
-			changes = []engine.Fields{rest, {owner: who}}
+	power := engine.PowerFields(c.p)
+	if len(values) > 1 {
+		kind, owner := engine.Owner(c.p, c.reply.Item.State)
+		rest := maps.Clone(values)
+		var own, last []engine.Fields
+		for _, key := range slices.Sorted(maps.Keys(values)) {
+			switch {
+			case kind == "field" && key == owner:
+				last = append(last, engine.Fields{key: values[key]})
+			case power[key]:
+				own = append(own, engine.Fields{key: values[key]})
+			default:
+				continue
+			}
+			delete(rest, key)
 		}
+		changes = nil
+		if len(rest) > 0 {
+			changes = append(changes, rest)
+		}
+		changes = append(append(changes, own...), last...)
 	}
 	for _, change := range changes {
-		problem, err := c.try(func(sp pgx.Tx) (workitem.Item, error) {
-			return workitem.SetFields(c.ctx, sp, c.reply.Item.ID, change, by)
-		})
+		problem, err := c.save(change, by)
 		if err != nil {
 			return nil, err
+		}
+		if problem != "" {
+			// Retry without the fields that fill in a power field, saving each of them on its own first,
+			// so they still come before the others (whose values win over what they fill in).
+			var fills []engine.Fields
+			others := maps.Clone(change)
+			for _, f := range c.p.Fields {
+				if _, ok := change[f.Key]; ok && fillsPower(f, power) {
+					fills = append(fills, engine.Fields{f.Key: change[f.Key]})
+					delete(others, f.Key)
+				}
+			}
+			if len(fills) > 0 && len(others) > 0 {
+				problem = ""
+				for _, retry := range append(fills, others) {
+					p, err := c.save(retry, by)
+					if err != nil {
+						return nil, err
+					}
+					if p != "" {
+						problems = append(problems, p)
+					}
+				}
+			}
 		}
 		if problem != "" {
 			problems = append(problems, problem)
 		}
 	}
 	return problems, nil
+}
+
+// fillsPower reports whether choosing an entry for f fills in a field that carries power.
+func fillsPower(f playbook.Field, power map[string]bool) bool {
+	for target := range f.Prefill {
+		if power[target] {
+			return true
+		}
+	}
+	return false
+}
+
+// save saves one change, as by, inside a savepoint (see try).
+func (c *conversation) save(change engine.Fields, by ledger.Actor) (problem string, err error) {
+	return c.try(func(sp pgx.Tx) (workitem.Item, error) {
+		return workitem.SetFields(c.ctx, sp, c.reply.Item.ID, change, by)
+	})
 }
 
 // try runs a change inside a savepoint. A refusal (wrong value, not allowed now, ...) is undone and

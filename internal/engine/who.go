@@ -149,6 +149,35 @@ func ActionsFor(p *playbook.Playbook, it Item, a Actor) []string {
 	return out
 }
 
+// PowerFields returns the person fields that carry power (D68, choice 14): a field that says who gets
+// the item (a step's owner "field:<f>", or an "assign" action), or who may take a move or receive the
+// item ("field:<f>" in who or pass_to). Only whoever has the item or an admin may change them.
+func PowerFields(p *playbook.Playbook) map[string]bool {
+	power := map[string]bool{}
+	add := func(words ...string) {
+		for _, w := range words {
+			if name, ok := strings.CutPrefix(w, "field:"); ok {
+				power[name] = true
+			}
+		}
+	}
+	for _, st := range p.Steps {
+		add(st.Owner)
+		add(st.PassTo...)
+	}
+	for _, t := range p.Transitions {
+		add(t.Who...)
+	}
+	for _, actions := range p.On {
+		for _, a := range actions {
+			if a.Do == "assign" && a.To != "" {
+				power[a.To] = true
+			}
+		}
+	}
+	return power
+}
+
 // DescribeWho says in plain words who the who words mean, e.g. "whoever has it or whoever started
 // it". roleName and fieldName turn keys into the names people know.
 func DescribeWho(who []string, roleName, fieldName func(string) string) string {

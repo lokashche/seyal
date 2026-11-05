@@ -287,20 +287,22 @@
     {{with .Actions}}
     <details class="sec first-on-phones" open><summary>Actions</summary>
     <div class="acts">
-      {{range .}}
+      {{range $a := .}}
         {{if .NeedsReason}}
         <details>
           <summary>{{.Label}}…</summary>
           <form method="post" action="/t/{{$.Slug}}/items/{{$.Data.Item.Item.ID}}/act" class="reason">
             <input type="hidden" name="action" value="{{.Name}}">
-            <input name="reason" required placeholder="Why?" aria-label="Reason">
-            <button class="btn warn sm">{{.Label}}</button>
+            <input name="reason" required placeholder="Why?" aria-label="Reason"{{if .Hint}} aria-describedby="hint-{{.Name}}"{{end}}>
+            <button class="btn warn sm"{{if .Hint}} aria-describedby="hint-{{.Name}}"{{end}}>{{.Label}}</button>
           </form>
+          {{with .Hint}}<p class="why hint" id="hint-{{$a.Name}}">{{.}}</p>{{end}}
         </details>
         {{else}}
         <form method="post" action="/t/{{$.Slug}}/items/{{$.Data.Item.Item.ID}}/act">
           <input type="hidden" name="action" value="{{.Name}}">
-          <button class="btn sm">{{.Label}}</button>
+          <button class="btn sm"{{if .Hint}} aria-describedby="hint-{{.Name}}"{{end}}>{{.Label}}</button>
+          {{with .Hint}}<p class="why hint" id="hint-{{$a.Name}}">{{.}}</p>{{end}}
         </form>
         {{end}}
       {{end}}

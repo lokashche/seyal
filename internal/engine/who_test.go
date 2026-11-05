@@ -258,3 +258,24 @@ func TestHasAndPassTo(t *testing.T) {
 		t.Errorf("PassTo(with_team) without pass_to = %v; want the owner's role", got)
 	}
 }
+
+// TestPowerFields: the person fields that decide who gets the item or who may take a move (D68,
+// choice 14). The made-up desk process names its reviewer in a move's who; a step owned by a person
+// field and an "assign" action count too; a plain person field doesn't.
+func TestPowerFields(t *testing.T) {
+	p := whoPlaybook(t)
+	if got := PowerFields(p); len(got) != 1 || !got["reviewer"] {
+		t.Errorf("desk request: %v; want only reviewer", got)
+	}
+	p.Steps["signed_off"] = playbook.Step{Owner: "field:closer"}
+	p.On = map[string][]playbook.Action{"closed": {{Do: "assign", To: "archivist"}, {Do: "copy", From: "topic", To: "notes"}}}
+	got := PowerFields(p)
+	for _, key := range []string{"reviewer", "closer", "archivist"} {
+		if !got[key] {
+			t.Errorf("%s isn't a power field: %v", key, got)
+		}
+	}
+	if got["notes"] || got["topic"] || len(got) != 3 {
+		t.Errorf("power fields = %v; want reviewer, closer and archivist only", got)
+	}
+}

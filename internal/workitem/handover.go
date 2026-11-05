@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -362,11 +363,7 @@ func Take(ctx context.Context, tx pgx.Tx, id, seen, via string, by ledger.Actor)
 func (s session) giveTo(it *Item, person, team string, by ledger.Actor, h handoff) error {
 	if kind, name := engine.Owner(s.p, it.State); kind == "field" {
 		if person == "" {
-			label := name
-			if f := s.field(name); f != nil && f.Label != "" {
-				label = f.Label
-			}
-			return fmt.Errorf("in this step the work goes to one person (%s), not to a team", label)
+			return fmt.Errorf("in this step the work goes to one person (%s), not to a team", s.fieldLabel(name))
 		}
 		if !engine.SameValue(it.Fields[name], any(person)) {
 			state := it.State
@@ -393,10 +390,6 @@ func (s session) ownerFieldChange(it Item, values engine.Fields, by ledger.Actor
 	if kind != "field" || !ok || by.Kind == ledger.System || engine.SameValue(v, it.Fields[name]) {
 		return nil, nil
 	}
-	label := name
-	if f := s.field(name); f != nil && f.Label != "" {
-		label = f.Label
-	}
 	a, err := s.actor(by)
 	if err != nil {
 		return nil, err
@@ -404,7 +397,7 @@ func (s session) ownerFieldChange(it Item, values engine.Fields, by ledger.Actor
 	ok, asAdmin := MayPass(it, a)
 	if !ok {
 		return nil, refusal(fmt.Sprintf("only whoever has this item, or an admin, can change %q, because it says who has the work; "+
-			"you can still write a note", label))
+			"you can still write a note", s.fieldLabel(name)))
 	}
 	h := &handoff{How: HowPass, From: a.ID}
 	if asAdmin {
@@ -434,6 +427,36 @@ func (s session) ownerFieldChange(it Item, values engine.Fields, by ledger.Actor
 	}
 	h.As = "admin"
 	return h, nil
+}
+
+// powerFieldChange checks a change to the other person fields that carry power (engine.PowerFields): a
+// field that says who gets the item in a later step (for example a Maker that an "assign" action gives
+// the work to), or who may take a move or receive the item (D68, choice 14). The current step's owner
+// field hands the item over at once, so it is a pass on (see ownerFieldChange). These others only may
+// be changed by whoever has the item or an admin; the person named must be active, as for any person
+// field. values is what the change really does (see powerChanges), so a maker filled in by picking a
+// work type is checked too. Seyal changing a field on its own isn't limited.
+func (s session) powerFieldChange(it Item, values engine.Fields, by ledger.Actor) error {
+	if by.Kind == ledger.System {
+		return nil
+	}
+	kind, owner := engine.Owner(s.p, it.State)
+	power := engine.PowerFields(s.p)
+	for _, key := range slices.Sorted(maps.Keys(values)) {
+		if !power[key] || (kind == "field" && key == owner) || engine.SameValue(values[key], it.Fields[key]) {
+			continue
+		}
+		a, err := s.actor(by)
+		if err != nil {
+			return err
+		}
+		if ok, _ := MayPass(it, a); !ok {
+			return refusal(fmt.Sprintf("only whoever has this item, or an admin, can change %q, because it decides who gets "+
+				"the work; you can still write a note", s.fieldLabel(key)))
+		}
+		return nil // one check covers every field: it is about who is asking
+	}
+	return nil
 }
 
 // mayReceive says why a person who isn't a member can't receive work: they are no longer active, or

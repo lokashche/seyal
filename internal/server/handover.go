@@ -56,6 +56,31 @@ func (v *view) hand(p *playbook.Playbook, it workitem.Item) (*handView, error) {
 	return h, nil
 }
 
+// receiverChoices keeps, in the select of the field that says who has the item in this step, only the
+// people who may receive it here (and, for an admin, the others they may pass it to), plus whoever the
+// field names now, so the select shows it, and whoever has the item, who may put their own name in.
+// all is every person, as the field's select lists them.
+func receiverChoices(h *handView, holder string, current any, all []option) []option {
+	allowed := map[string]bool{}
+	if holder != "" {
+		allowed[holder] = true
+	}
+	if h != nil {
+		for _, r := range append(slices.Clone(h.To), h.Others...) {
+			if id, ok := strings.CutPrefix(r.Key, "person:"); ok {
+				allowed[id] = true
+			}
+		}
+	}
+	var out []option
+	for _, o := range all {
+		if allowed[o.Value] || o.Value == current {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
 // via is where a hand-over was asked for: the side panel, or a button on a My Work card.
 func via(r *http.Request) string {
 	if r.PostFormValue("via") == "button" {
