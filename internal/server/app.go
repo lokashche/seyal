@@ -49,6 +49,7 @@ type row struct {
 	Ago                                   string // how long since it last changed
 	Owner, OwnerName                      string // initials and name of who has it
 	Mine                                  bool   // the person (or their team) should act
+	Take                                  string // the holder the card shows (workitem.Item.HolderKey), when it offers "Take it"
 	Quoted                                bool   // Title is the start of the first message (the item has no title yet)
 }
 
@@ -88,11 +89,15 @@ type itemView struct {
 	Links   []linkView
 	Closed  bool
 	NotMine bool // open, but this person may only read it and write notes (D55)
-	Thread  []entryView
-	Quick   []string
-	Fields  []fieldView
-	Slots   []slotView
-	Actions []actionView
+	// PassOnly names the step's team when the person has the item but isn't in that team, so they may
+	// only pass it on (D68, choice 22).
+	PassOnly string
+	Hand     *handView // nil when the item is closed
+	Thread   []entryView
+	Quick    []string
+	Fields   []fieldView
+	Slots    []slotView
+	Actions  []actionView
 }
 
 type entryView struct {
@@ -109,6 +114,32 @@ type entryView struct {
 // linkView is a linked work item: the one this item is part of, or one it started.
 type linkView struct {
 	ID, Number, Title, Kind, Status, Relation string
+}
+
+// handView is the side panel's "who has it" part (D68, M1 and M2): Pass on, Take it, Give back to
+// the team. Each form sends Holder back, so a form shown before the item changed hands does nothing.
+type handView struct {
+	Holder   string           // workitem.Item.HolderKey
+	CanPass  bool             // whoever has it, or an admin
+	To       []receiverOption // who may receive it in this step
+	Others   []receiverOption // for admins: every other active person (passing to them shows a warning)
+	GiveBack *receiverOption  // the step's team, when the person took it from there
+	CanTake  bool             // it is with the person's team, or with nobody and they may take it
+	Nobody   bool             // for admins: nobody can take it, so an admin should pass it on
+	MaxNote  int              // the longest note, in letters
+	// Draft is what the person sent with a Pass on that was refused, so the form comes back open with
+	// their choice and note in it, and they needn't type the note again.
+	Draft *passDraft
+}
+
+type passDraft struct{ To, Note string }
+
+// Chosen reports whether key is the receiver a refused Pass on had chosen.
+func (h *handView) Chosen(key string) bool { return h.Draft != nil && h.Draft.To == key }
+
+type receiverOption struct {
+	Key, Name string // Key is "person:<id>" or "team:<role>"
+	Empty     bool   // a team nobody is in yet
 }
 
 type mediaView struct {
@@ -147,7 +178,8 @@ type view struct {
 	roles     map[string]string // role key → name
 	masters   map[string]string // "kind/key" → name
 	playbooks map[string]*playbook.Playbook
-	q         url.Values // the page's query: which folder, process and order My Work shows
+	q         url.Values         // the page's query: which folder, process and order My Work shows
+	active    *[]workitem.Member // active people with a login, once read (see members)
 }
 
 func (s *Server) newView(r *http.Request, tx pgx.Tx, c *call) (*view, error) {
@@ -353,14 +385,23 @@ func (v *view) item(id string) (*itemView, error) {
 		}
 	}
 	changeable := !iv.Closed && !iv.NotMine
+	if !iv.Closed {
+		if iv.Hand, err = v.hand(p, it); err != nil {
+			return nil, err
+		}
+		iv.PassOnly = v.passOnly(p, it)
+	}
 
 	toAsk := engine.ToAsk(p, it.State, it.Fields) // what Seyal asks in this step
 	from, err := v.prefilled(p, it)
 	if err != nil {
 		return nil, err
 	}
+	kind, owner := engine.Owner(p, it.State)
 	for _, f := range p.Fields {
-		fv, err := v.field(f, it.Fields[f.Key], changeable)
+		// The field that says who has the item in this step changes only by passing it on (D68, choice 14).
+		open := changeable && (kind != "field" || f.Key != owner || (iv.Hand != nil && iv.Hand.CanPass))
+		fv, err := v.field(f, it.Fields[f.Key], open)
 		if err != nil {
 			return nil, err
 		}
@@ -476,12 +517,14 @@ func (s *Server) itemPage(w http.ResponseWriter, r *http.Request, c *call) {
 }
 
 // showScreen renders the three panes, with an item open or not, and an optional problem to show.
-func (s *Server) showScreen(w http.ResponseWriter, r *http.Request, c *call, itemID string, status int, problem string) {
-	s.show(w, r, c, itemID, status, problem, "")
+func (s *Server) showScreen(w http.ResponseWriter, r *http.Request, c *call, itemID string, status int, problem string,
+	more ...func(sc *screen)) {
+	s.show(w, r, c, itemID, status, problem, "", more...)
 }
 
 // show is showScreen with an optional notice too, e.g. Seyal's reply to a greeting on Tell Seyal.
-// more, if given, adds to the screen inside the same transaction (e.g. a process to confirm).
+// more, if given, adds to the screen inside the same transaction (e.g. a process to confirm, or a
+// refused form's draft).
 func (s *Server) show(w http.ResponseWriter, r *http.Request, c *call, itemID string, status int, problem, notice string,
 	more ...func(sc *screen)) {
 	var sc screen
@@ -505,8 +548,13 @@ func (s *Server) show(w http.ResponseWriter, r *http.Request, c *call, itemID st
 			return err
 		}
 		sc.Current = itemID
-		sc.Item, err = v.item(itemID)
-		return err
+		if sc.Item, err = v.item(itemID); err != nil {
+			return err
+		}
+		for _, m := range more {
+			m(&sc)
+		}
+		return nil
 	})
 	if errors.Is(err, workitem.ErrNotFound) {
 		http.NotFound(w, r)
@@ -874,7 +922,7 @@ func (s *Server) done(w http.ResponseWriter, r *http.Request, c *call, id string
 
 // problem shows a refusal (missing fields, not allowed, ...) in plain words. Database errors are
 // logged and shown only as a general message.
-func (s *Server) problem(w http.ResponseWriter, r *http.Request, c *call, itemID string, err error) {
+func (s *Server) problem(w http.ResponseWriter, r *http.Request, c *call, itemID string, err error, more ...func(sc *screen)) {
 	if errors.Is(err, workitem.ErrNotFound) {
 		http.NotFound(w, r)
 		return
@@ -890,7 +938,7 @@ func (s *Server) problem(w http.ResponseWriter, r *http.Request, c *call, itemID
 	if errors.As(err, &missing) {
 		msg = "Still needed: " + strings.Join(s.labels(r, c, itemID, missing.Keys), ", ") + "."
 	}
-	s.showScreen(w, r, c, itemID, http.StatusUnprocessableEntity, capital(msg))
+	s.showScreen(w, r, c, itemID, http.StatusUnprocessableEntity, capital(msg), more...)
 }
 
 func (s *Server) labels(r *http.Request, c *call, itemID string, keys []string) []string {

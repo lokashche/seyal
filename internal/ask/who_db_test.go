@@ -85,3 +85,57 @@ func TestChatNamesOnlyMovesYouMayTake(t *testing.T) {
 		t.Errorf("Ops, who has it, was told %q; want to say finish", got)
 	}
 }
+
+// chatTask is a made-up task: whoever "Who does it" names has it.
+const chatTask = `id: chat-task
+version: "1"
+description: A made-up task that whoever is named does.
+numbering: "T-{seq:4}"
+fields:
+  - { key: what, label: What needs doing, type: text, required: true, from_message: true }
+  - { key: who, label: Who does it, type: person }
+  - { key: due_on, label: Due by, type: date }
+states: [open, done]
+initial: open
+steps:
+  open: { owner: "field:who", needs: [what] }
+transitions:
+  - { action: done, from: [open], to: done, when: required_filled }
+`
+
+// TestRefusedWhoKeepsTheRest: naming someone who can't receive the work (here Mia, who has no login)
+// is refused, as a pass on would be (D68, choice 14), but the other details read from the same
+// message are still saved.
+func TestRefusedWhoKeepsTheRest(t *testing.T) {
+	o := newOffice(t)
+	p, err := playbook.Parse([]byte(chatTask))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pv string
+	o.in(func(tx pgx.Tx) error {
+		pv, _, err = playbook.Register(o.ctx, tx, p)
+		return err
+	})
+	o.withFake(map[string]string{
+		"Mia": `{"kind":"new_work","fields":{"who":"Mia Maker","due_on":"2030-01-31"},"new_items":[],"command":"","reason":"","reply":""}`,
+	})
+	var r ask.Reply
+	o.in(func(tx pgx.Tx) error {
+		var err error
+		r, err = ask.Begin(o.ctx, tx, o.env(), pv, channel.Incoming{Channel: "web", PersonID: o.sam,
+			Text: "Ask Mia to water the plants by 31 January 2030"})
+		return err
+	})
+	if r.Item.Fields["due_on"] != "2030-01-31" || r.Item.Fields["who"] != nil {
+		t.Errorf("fields = %v; want the due date kept and nobody named", r.Item.Fields)
+	}
+	var said []string
+	for _, m := range r.Seyal {
+		said = append(said, m.Text)
+	}
+	if !strings.Contains(strings.Join(said, " | "), "Mia Maker hasn't joined yet") {
+		t.Errorf("Seyal said %q; want it to explain why Mia can't have it", said)
+	}
+	o.checkLedger()
+}

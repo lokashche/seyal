@@ -21,12 +21,15 @@
     </div>
     <div class="groups">
       {{range .Data.Work.Rows}}
-      <a class="item{{if .Mine}} mine{{end}}" href="/t/{{$.Slug}}/items/{{.ID}}{{$.Data.Work.Query}}"{{if eq .ID $.Data.Current}} aria-current="true"{{end}}>
+      <div class="work-card">
+      <a class="item{{if .Mine}} mine{{end}}{{if .Take}} takeable{{end}}" href="/t/{{$.Slug}}/items/{{.ID}}{{$.Data.Work.Query}}"{{if eq .ID $.Data.Current}} aria-current="true"{{end}}>
         <span class="top"><span class="t{{if .Quoted}} q{{end}}">{{if .Quoted}}“{{.Title}}”{{else}}{{or .Title "Untitled"}}{{end}}</span><span class="ago">{{.Ago}}</span></span>
         {{if .Mine}}{{with .Hint}}<span class="hint">{{.}}</span>{{end}}{{else}}<span class="hint">{{or .Hint .Preview}}</span>{{end}}
         {{if and .Mine .Preview}}<span class="preview">{{.Preview}}</span>{{end}}
         <span class="meta"><span class="id">{{.Number}}{{with .Kind}} · {{.}}{{end}}</span><span class="pill {{.Pill}}">{{.Status}}</span>{{if .Owner}}<span class="avatar sm" title="With {{.OwnerName}}">{{.Owner}}</span>{{end}}</span>
       </a>
+      {{if .Take}}<form class="take" method="post" action="/t/{{$.Slug}}/items/{{.ID}}/take"><input type="hidden" name="holder" value="{{.Take}}"><input type="hidden" name="via" value="button"><button class="btn ok sm" aria-label="Take it: {{.Number}}">Take it</button></form>{{end}}
+      </div>
       {{else}}
       <p class="none">Nothing here. Tell Seyal about new work, or look in another folder.</p>
       {{end}}
@@ -189,7 +192,31 @@
   <div class="pane-h"><b>Details</b><small>version {{.Item.Version}}</small><a class="dl" href="/t/{{$.Slug}}/items/{{.Item.ID}}/report" hx-boost="false" title="A printable report of this item; save it as PDF">Report</a></div>
   <div class="side">
     <div><span class="pill {{.Pill}}">{{.Status}}</span>{{if .With}} <span class="why">with {{.With}}{{with .Since}} · since {{.}}{{end}}</span>{{end}}</div>
-    {{if .NotMine}}<p class="why">Only {{or .With "whoever has it"}}, whoever started it, or an admin can change the details of this item. {{if .Actions}}You can still use the actions below, or write a note.{{else}}You can read it and write a note.{{end}}</p>{{end}}
+    {{with .Hand}}
+    <div class="hand">
+      {{if .Nobody}}<p class="why nobody">Nobody can take this. As an admin, pass it on to someone who can.</p>{{end}}
+      {{if .CanTake}}<form method="post" action="/t/{{$.Slug}}/items/{{$.Data.Item.Item.ID}}/take"><input type="hidden" name="holder" value="{{.Holder}}"><button class="btn ok sm">Take it</button></form>{{end}}
+      {{with .GiveBack}}<form method="post" action="/t/{{$.Slug}}/items/{{$.Data.Item.Item.ID}}/pass"><input type="hidden" name="holder" value="{{$.Data.Item.Hand.Holder}}"><input type="hidden" name="to" value="{{.Key}}"><button class="btn ghost sm">Give back to {{.Name}}</button></form>{{end}}
+      {{if and .CanPass (or .To .Others)}}
+      <details class="pass"{{if .Draft}} open{{end}}>
+        <summary>Pass on…</summary>
+        <form method="post" action="/t/{{$.Slug}}/items/{{$.Data.Item.Item.ID}}/pass" class="reason">
+          <input type="hidden" name="holder" value="{{.Holder}}">
+          <select name="to" required aria-label="Pass it to">
+            <option value="">To…</option>
+            {{range .To}}<option value="{{.Key}}"{{if $.Data.Item.Hand.Chosen .Key}} selected{{end}}>{{.Name}}{{if .Empty}} (nobody in it yet){{end}}</option>{{end}}
+            {{with .Others}}<optgroup label="Others (as an admin)">{{range .}}<option value="{{.Key}}"{{if $.Data.Item.Hand.Chosen .Key}} selected{{end}}>{{.Name}}</option>{{end}}</optgroup>{{end}}
+          </select>
+          <input name="note" maxlength="{{.MaxNote}}" placeholder="Why? (optional)" aria-label="Why? (optional)"{{with .Draft}} value="{{.Note}}"{{end}}>
+          <p class="why">Everyone in the business can see this, and it can't be deleted.</p>
+          <button class="btn sm">Pass on</button>
+        </form>
+      </details>
+      {{end}}
+    </div>
+    {{end}}
+    {{if .PassOnly}}<p class="why">You have this, but only people in {{.PassOnly}} can do this step, so pass it on to one of them. You can still write a note.</p>
+    {{else if .NotMine}}<p class="why">Only {{or .With "whoever has it"}}, whoever started it, or an admin can change the details of this item. {{if .Actions}}You can still use the actions below, or write a note.{{else}}You can read it and write a note.{{end}}</p>{{end}}
     {{with .Links}}
     <details class="sec" open><summary>Linked work</summary>
     <ul class="links">

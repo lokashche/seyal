@@ -10,7 +10,7 @@ import (
 )
 
 // The who words (D68) say which people a process means: on a move, who may take it ("who:"); on a
-// step, who may receive the item there ("pass_to:", used from build part 3 on).
+// step, who may receive the item there ("pass_to:", see PassTo).
 //
 //	holder        whoever has the item now: the person, or anyone in the team that has it. In a
 //	              step owned by a role, a person counts only while they still have that role.
@@ -98,6 +98,32 @@ func IsHolder(p *playbook.Playbook, it Item, person Person) bool {
 		return kind != "role" || slices.Contains(person.Roles, role)
 	}
 	return it.Team != "" && slices.Contains(person.Roles, it.Team)
+}
+
+// Has reports whether the item is with person: assigned to them, or with a team whose role they
+// have. Unlike IsHolder, a person who has the item but lost the step's role still has it, because
+// they may still pass it on or give it back to the team (D68, choice 22).
+func Has(it Item, person Person) bool {
+	if person.ID == "" {
+		return false
+	}
+	if it.Assignee != "" {
+		return it.Assignee == person.ID
+	}
+	return it.Team != "" && slices.Contains(person.Roles, it.Team)
+}
+
+// PassTo returns who may receive an item in state, in who words: the step's own pass_to, or the
+// default. In a step owned by a role the default is that role (its people, and its team); in any other
+// state it is anyone (people only, not teams) (D68, choice 12).
+func PassTo(p *playbook.Playbook, state string) []string {
+	if st, ok := p.Steps[state]; ok && len(st.PassTo) > 0 {
+		return st.PassTo
+	}
+	if kind, role := Owner(p, state); kind == "role" {
+		return []string{"role:" + role}
+	}
+	return []string{WhoAnyone}
 }
 
 // WhoFor returns the who words of action from state (every line of one move has the same ones; the

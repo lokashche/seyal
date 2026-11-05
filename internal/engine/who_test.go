@@ -226,3 +226,35 @@ func TestDescribeWho(t *testing.T) {
 		t.Errorf("DescribeWho(default) = %q", got)
 	}
 }
+
+// TestHasAndPassTo: Has counts a person who lost the team's role as still having the item (they may
+// only pass it on), unlike IsHolder; PassTo is the step's own list, or the default (D68, choice 12).
+func TestHasAndPassTo(t *testing.T) {
+	p := whoPlaybook(t)
+	took := Item{State: "with_team", Assignee: "ben"}
+	gone := Person{ID: "ben"} // Ben, after losing the team role
+	if !Has(took, gone) || IsHolder(p, took, gone) {
+		t.Error("Ben without the team role should still have the item, but not count as its holder")
+	}
+	team := Item{State: "with_team", Team: "team"}
+	if !Has(team, dev.Person) || Has(team, asha.Person) || Has(team, Person{}) {
+		t.Error("a team's item is with its people only")
+	}
+	if Has(took, dev.Person) {
+		t.Error("an item Ben took isn't Dev's")
+	}
+
+	if got := PassTo(p, "with_team"); !slices.Equal(got, []string{"role:team"}) {
+		t.Errorf("PassTo(with_team) = %v; want the step's own list", got)
+	}
+	if got := PassTo(p, "new"); !slices.Equal(got, []string{WhoAnyone}) {
+		t.Errorf("PassTo(new) = %v; want anyone (a step owned by the starter)", got)
+	}
+	if got := PassTo(p, "signed_off"); !slices.Equal(got, []string{WhoAnyone}) {
+		t.Errorf("PassTo(signed_off) = %v; want anyone (no step)", got)
+	}
+	p.Steps["with_team"] = playbook.Step{Owner: "role:team"} // no pass_to: the owner's role
+	if got := PassTo(p, "with_team"); !slices.Equal(got, []string{"role:team"}) {
+		t.Errorf("PassTo(with_team) without pass_to = %v; want the owner's role", got)
+	}
+}

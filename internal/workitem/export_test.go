@@ -11,7 +11,8 @@ import (
 )
 
 // This file is compiled only for tests. It lets the tests in package workitem_test reach the
-// unexported assign until build parts 3 and 4 add its real callers (Pass, Take and sending back).
+// unexported assign directly, for the kinds of hand-over that have no caller of their own yet (a
+// return, until build part 4 adds sending back).
 
 // HandForTest gives the item to person (or to team when person is "") as assign does: by whom, how,
 // with which note, and, for a send-back, from whom and after which move.

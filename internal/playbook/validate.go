@@ -481,6 +481,20 @@ func (p *Playbook) CheckNew() error {
 			}
 		}
 	}
+	// The same goes for "field:<f>" in a step's pass_to: whoever may change the details (the starter,
+	// even after someone else has the item) could name a person of their choice there, and the holder
+	// could then pass the item to anyone as an ordinary pass, with no admin and no notice (D71 review).
+	// The step's own owner field is protected, but it always names the holder, so it adds nobody.
+	for _, state := range slices.Sorted(maps.Keys(p.Steps)) {
+		for _, w := range p.Steps[state].PassTo {
+			if strings.HasPrefix(w, "field:") {
+				problems = append(problems, fmt.Sprintf(
+					"step %s: pass_to: %q can't be used yet: the person field isn't protected from being changed by others (use starter, role:<role> or anyone)",
+					state, w))
+				break
+			}
+		}
+	}
 	if len(problems) == 0 {
 		return nil
 	}

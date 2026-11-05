@@ -86,7 +86,7 @@ func (v *view) myWork() (*myWork, error) {
 			continue
 		}
 		kinds[p.ID] = true
-		bucket, hint, err := v.next(p, it)
+		bucket, hint, take, err := v.next(p, it)
 		if err != nil {
 			return nil, err
 		}
@@ -94,6 +94,9 @@ func (v *view) myWork() (*myWork, error) {
 		x := extra[it.ID]
 		r := row{ID: it.ID, Number: it.Number, Title: it.Title, Pill: pill, Status: status, Hint: hint,
 			Preview: x.preview, Ago: x.ago, OwnerName: v.holder(it), Mine: bucket <= yourTeam}
+		if take {
+			r.Take = it.HolderKey()
+		}
 		if it.AssigneeID != "" || it.Team != "" {
 			r.Owner = initials(r.OwnerName)
 		}
@@ -215,23 +218,25 @@ func initials(name string) string {
 }
 
 // next says which group an item belongs to for the person, and what happens next, in a few words.
-func (v *view) next(p *playbook.Playbook, it workitem.Item) (bucket int, hint string, err error) {
+// take is true when the card offers "Take it" (D68, M2): the item is with the person's team, or with
+// nobody and the step lets them take it.
+func (v *view) next(p *playbook.Playbook, it workitem.Item) (bucket int, hint string, take bool, err error) {
 	s := v.c.session
 	involved := it.CreatedBy == s.PersonID || it.AssigneeID == s.PersonID
-	elsewhere := func(h string) (int, string, error) {
+	elsewhere := func(h string) (int, string, bool, error) {
 		if involved {
-			return waitingOnOthers, h, nil
+			return waitingOnOthers, h, false, nil
 		}
-		return otherOpen, h, nil
+		return otherOpen, h, false, nil
 	}
 
 	if a := p.Approvals; a != nil && it.State == a.In {
 		st, err := workitem.Approvals(v.ctx, v.tx, it.ID)
 		if err != nil {
-			return 0, "", err
+			return 0, "", false, err
 		}
 		if canDecide(st, s) != nil {
-			return needsApproval, "Your approval is needed", nil
+			return needsApproval, "Your approval is needed", false, nil
 		}
 		names := make([]string, len(st.Waiting))
 		for i, slot := range st.Waiting {
@@ -242,16 +247,36 @@ func (v *view) next(p *playbook.Playbook, it workitem.Item) (bucket int, hint st
 	if waitsForLinked(p, it.State) {
 		h, err := v.waitingFor(it)
 		if err != nil {
-			return 0, "", err
+			return 0, "", false, err
 		}
 		return elsewhere(h)
 	}
 
+	members, err := v.members()
+	if err != nil {
+		return 0, "", false, err
+	}
 	// Who should act now: the assignee, the team, or (in processes without owners) whoever started it.
-	mine := it.AssigneeID == s.PersonID || (it.AssigneeID == "" && it.Team == "" && it.CreatedBy == s.PersonID)
+	// Work nobody has at all (Seyal started it, or its starter left) may be taken by anyone the step
+	// lets receive it (workitem.Free).
+	nobody := it.AssigneeID == "" && it.Team == ""
+	mine := it.AssigneeID == s.PersonID || (nobody && it.CreatedBy == s.PersonID)
 	team := it.AssigneeID == "" && it.Team != "" && slices.Contains(s.Roles, it.Team)
-	if !mine && !team {
+	free := nobody && !mine && workitem.MayTake(p, it, v.actor(), members)
+	if !mine && !team && !free {
+		if v.c.admin() && workitem.NobodyCanTake(p, it, members) {
+			return yourTeam, "Nobody can take this", false, nil // admins pass it on (D68, choice 13)
+		}
 		return elsewhere("With " + v.holder(it))
+	}
+	take = (team || free) && workitem.MayTake(p, it, v.actor(), members)
+	if team := v.passOnly(p, it); team != "" {
+		// They have it but can't work this step (not in its team): all they may do is pass it on.
+		h := "Only people in " + team + " do this step: pass it on"
+		if it.DueOn != "" && it.DueOn < v.today {
+			return overdue, h, false, nil
+		}
+		return yourTurn, h, false, nil
 	}
 	hint = "Your turn"
 	if toAsk := engine.ToAsk(p, it.State, it.Fields); len(toAsk) > 0 {
@@ -269,13 +294,46 @@ func (v *view) next(p *playbook.Playbook, it workitem.Item) (bucket int, hint st
 			}
 		}
 	}
+	// The note given with the latest hand-over says why it came, until it changes hands again.
+	if it.HandoffNote != "" {
+		hint = it.HandoffNote
+		if from := v.names[it.HandoffFrom]; from != "" {
+			hint = "From " + from + ": " + it.HandoffNote
+		}
+	}
 	switch {
 	case it.DueOn != "" && it.DueOn < v.today:
-		return overdue, hint, nil
+		return overdue, hint, take, nil
 	case mine:
-		return yourTurn, hint, nil
+		return yourTurn, hint, take, nil
 	}
-	return yourTeam, hint, nil
+	return yourTeam, hint, take, nil
+}
+
+// passOnly names the step's team when the person looking has the item but may not work its step: it
+// is owned by a role they don't have (an admin passed it to them, or they lost the role), so all they
+// can do is pass it on (D68, choice 22). Otherwise "". Admins may do everything, so it is "" for them.
+func (v *view) passOnly(p *playbook.Playbook, it workitem.Item) string {
+	a := v.actor()
+	if a.Admin || it.AssigneeID != a.ID || engine.IsHolder(p, it.Engine(), a.Person) {
+		return ""
+	}
+	if kind, role := engine.Owner(p, it.State); kind == "role" {
+		return cmp.Or(v.roles[role], role)
+	}
+	return ""
+}
+
+// members are the business's active people with a login, read once per page.
+func (v *view) members() ([]workitem.Member, error) {
+	if v.active == nil {
+		list, err := workitem.Members(v.ctx, v.tx)
+		if err != nil {
+			return nil, err
+		}
+		v.active = &list
+	}
+	return *v.active, nil
 }
 
 // actor is the person looking, as the process's who words see them.

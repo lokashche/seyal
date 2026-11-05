@@ -121,6 +121,10 @@ func TestCheckNew(t *testing.T) {
 		// Until the person field is protected (moving-work design, decision 14), field: in a move's
 		// who would let anyone who may change the details name themselves and take the move.
 		{"who: a person field", "{ action: found, from: [looking], to: with_team, who: [holder] }", "{ action: found, from: [looking], to: with_team, who: [holder, \"field:reviewer\"] }", `who: "field:reviewer" can't be used yet`},
+		// The same for pass_to: the holder (or the starter) could set the field to anyone and the
+		// holder could then pass the item to them as an ordinary pass (D71 review).
+		{"pass_to: a person field", `pass_to: ["role:team"]`, `pass_to: ["role:team", "field:reviewer"]`,
+			`step with_team: pass_to: "field:reviewer" can't be used yet`},
 		{"the approvals step owned by a person field", "  looking: {", "  waiting: { owner: \"field:reviewer\" }\n  looking: {",
 			"step waiting: owner: the approvals step"},
 		{"the approved step owned by a person field", "  looking: {", "  approved: { owner: \"field:reviewer\" }\n  looking: {",

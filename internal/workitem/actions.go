@@ -102,7 +102,9 @@ func Start(ctx context.Context, tx pgx.Tx, in NewItem) (Item, error) {
 
 // SetFields changes fields of an item, as a person (or an agent for a person) would. If anything
 // really changed, the version goes up, so earlier approvals stop counting, and an approved item
-// goes back to waiting for approvals. tx must come from db.WithTenant.
+// goes back to waiting for approvals. A change to the field that says who has the item in this step
+// (its owner field) is a pass on, with the same checks (D68, choice 14): only whoever has it or an
+// admin may make it, and only to someone who may receive it here. tx must come from db.WithTenant.
 func SetFields(ctx context.Context, tx pgx.Tx, id string, values engine.Fields, by ledger.Actor) (Item, error) {
 	it, err := getForUpdate(ctx, tx, id)
 	if err != nil {
@@ -115,6 +117,16 @@ func SetFields(ctx context.Context, tx pgx.Tx, id string, values engine.Fields, 
 	if err != nil {
 		return Item{}, err
 	}
+	h, err := s.ownerFieldChange(it, values, by)
+	if err != nil {
+		return Item{}, err
+	}
+	return s.setFields(it, values, by, h)
+}
+
+// setFields is SetFields after its checks. h is how the item changes hands when the owner field gets
+// a new person (nil: Seyal's own change, recorded as the step's owner getting it).
+func (s session) setFields(it Item, values engine.Fields, by ledger.Actor, h *handoff) (Item, error) {
 	before := it.FieldsHash
 	if err := s.apply(&it, values, by.Kind == ledger.System); err != nil {
 		return Item{}, err
@@ -145,7 +157,11 @@ func SetFields(ctx context.Context, tx pgx.Tx, id string, values engine.Fields, 
 		}
 	} else if kind, name := engine.Owner(s.p, it.State); kind == "field" && values[name] != nil {
 		// The step belongs to whoever this field names, so a new name hands the item over.
-		if err := s.handOver(&it); err != nil {
+		if h == nil {
+			if err := s.handOver(&it); err != nil {
+				return Item{}, err
+			}
+		} else if err := s.assign(&it, values[name].(string), "", by, *h); err != nil {
 			return Item{}, err
 		}
 	} else if a := s.p.Approvals; a != nil && it.State == a.In {

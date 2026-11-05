@@ -271,15 +271,11 @@ func (c *conversation) apply(pr *proposal, text string, pending *playbook.Field)
 		return true, offered, err
 	}
 	if len(values) > 0 {
-		problem, err := c.try(func(sp pgx.Tx) (workitem.Item, error) {
-			return workitem.SetFields(c.ctx, sp, c.reply.Item.ID, values, ledger.AgentActor(c.person))
-		})
+		refused, err := c.setFields(values, ledger.AgentActor(c.person))
 		if err != nil {
 			return true, false, err
 		}
-		if problem != "" {
-			problems = append(problems, problem)
-		}
+		problems = append(problems, refused...)
 	}
 	if len(problems) > 0 {
 		if err := c.say("I couldn't use all of that: " + strings.Join(problems, "; ") + "."); err != nil {

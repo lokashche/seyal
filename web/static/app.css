@@ -205,6 +205,18 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .ap summary, .acts summary { cursor: pointer; color: var(--muted); }
 .reason { display: flex; gap: 6px; margin-top: 6px; }
 .reason input { flex: 1; min-width: 0; font: inherit; font-size: 13px; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; background: var(--panel); color: var(--ink); }
+/* Who has it: Take it, Give back to the team, Pass on (D68) */
+.hand { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.hand form { margin: 0; }
+.hand .nobody { width: 100%; color: var(--warn); }
+.hand details.pass { width: 100%; font-size: 13px; }
+.hand details.pass summary { cursor: pointer; color: var(--muted); }
+.hand .pass form { flex-wrap: wrap; }
+.hand .pass select { font: inherit; font-size: 13px; border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; background: var(--panel); color: var(--ink); max-width: 100%; }
+.hand .pass .why { width: 100%; }
+.work-card { position: relative; }
+.work-card .take { position: absolute; right: 16px; bottom: 9px; margin: 0; }
+.item.takeable .meta { padding-right: 72px; }
 .acts { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 .acts form { margin: 0; }
 .why { font-size: 12.5px; color: var(--muted); margin: 0; }

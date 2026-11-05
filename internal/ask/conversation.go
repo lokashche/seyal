@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -487,6 +488,33 @@ func (c *conversation) roles() ([]string, error) {
 		SELECT role_key FROM person_roles
 		WHERE tenant_id = current_tenant() AND person_id::text = $1 AND revoked_at IS NULL`, c.person)
 	return pgx.CollectRows(rows, pgx.RowTo[string])
+}
+
+// setFields saves values read from one message, as by. The field that says who has the item in this
+// step (its owner field) is saved on its own, after the others: changing it is a pass on with its own
+// checks (D68, choice 14), so if it is refused the other values are still kept. It returns the
+// problems in plain words.
+func (c *conversation) setFields(values engine.Fields, by ledger.Actor) (problems []string, err error) {
+	changes := []engine.Fields{values}
+	if kind, owner := engine.Owner(c.p, c.reply.Item.State); kind == "field" && len(values) > 1 {
+		if who, ok := values[owner]; ok {
+			rest := maps.Clone(values)
+			delete(rest, owner)
+			changes = []engine.Fields{rest, {owner: who}}
+		}
+	}
+	for _, change := range changes {
+		problem, err := c.try(func(sp pgx.Tx) (workitem.Item, error) {
+			return workitem.SetFields(c.ctx, sp, c.reply.Item.ID, change, by)
+		})
+		if err != nil {
+			return nil, err
+		}
+		if problem != "" {
+			problems = append(problems, problem)
+		}
+	}
+	return problems, nil
 }
 
 // try runs a change inside a savepoint. A refusal (wrong value, not allowed now, ...) is undone and
