@@ -5,7 +5,6 @@ package server
 import (
 	"errors"
 	"net/http"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -14,8 +13,10 @@ import (
 )
 
 // Changing your own password: from your name in the left column, or straight after logging in with a
-// password an admin made (a temporary one). Like the login page, this is account plumbing, not a
-// process screen. A forgotten password: an admin makes a new set-your-password link (welcome.go).
+// temporary password (one an admin made, before set-your-password links). It is the login's password,
+// so it changes in every business the login belongs to. Like the login page, this is account
+// plumbing, not a process screen. A forgotten password: an admin makes a new set-your-password link
+// (welcome.go).
 
 func (s *Server) passwordPage(w http.ResponseWriter, r *http.Request, c *call) {
 	s.render(w, r, http.StatusOK, "password", c.page(c.session.MustChange))
@@ -36,19 +37,16 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request, c *call)
 		problem(capital(err.Error()) + ".")
 		return
 	}
-	var email, token string
-	var sess auth.Session
-	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
-		if err := auth.ChangePassword(r.Context(), tx, c.session.PersonID, current, next); err != nil {
+	var token string
+	var a auth.Account
+	err := db.WithServer(r.Context(), s.app, func(tx pgx.Tx) error {
+		if err := auth.ChangePassword(r.Context(), tx, c.session.AccountID, current, next); err != nil {
 			return err
 		}
-		// Every session ended with the old password; this device carries on with a new one.
-		if err := tx.QueryRow(r.Context(), `SELECT login_email FROM persons WHERE tenant_id = current_tenant() AND id::text = $1`,
-			c.session.PersonID).Scan(&email); err != nil {
-			return err
-		}
+		// Every session of the login ended with the old password, in every business; this device
+		// carries on with a new one.
 		var err error
-		token, sess, err = auth.Login(r.Context(), tx, email, next, r.UserAgent())
+		token, a, err = auth.LogIn(r.Context(), tx, c.session.Email, next, r.UserAgent())
 		return err
 	})
 	switch {
@@ -59,14 +57,6 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request, c *call)
 		s.fail(w, r, err)
 		return
 	}
-	s.setSession(w, c.tenant.Slug, token, sess.ExpiresAt)
+	s.setSession(w, token, a.ExpiresAt)
 	http.Redirect(w, r, "/t/"+c.tenant.Slug+"/", http.StatusSeeOther)
-}
-
-// setSession puts the login cookie for one business address.
-func (s *Server) setSession(w http.ResponseWriter, slug, token string, expires time.Time) {
-	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Value: token, Path: "/t/" + slug + "/", Expires: expires,
-		HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode,
-	})
 }

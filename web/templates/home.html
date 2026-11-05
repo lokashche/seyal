@@ -1,9 +1,20 @@
+{{define "title"}}Your businesses · Seyal{{end}}
 {{define "content"}}
 <div class="center">
   <div class="card">
     <h1>Seyal<span class="tamil" lang="ta">செயல்</span></h1>
-    <p class="lede">No forms. Just tell Seyal.</p>
-    <p class="lede">Open the address your business gave you to log in.</p>
+    {{with .Data}}
+    {{if .Businesses}}
+    <p class="lede">Choose a business.</p>
+    <ul class="business-list">
+      {{range .Businesses}}<li><a class="btn ghost" href="/t/{{.Slug}}/">{{.Name}}</a></li>{{end}}
+    </ul>
+    {{else}}
+    <p class="lede">You're logged in as {{.Email}}, but you aren't in any business on this Seyal server yet.</p>
+    <p class="small">Ask an admin of your business for a link.</p>
+    {{end}}
+    <form method="post" action="/logout"><button class="btn ghost">{{icon "logout"}}Log out</button></form>
+    {{end}}
   </div>
 </div>
 {{end}}

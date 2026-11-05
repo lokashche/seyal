@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"html"
 	"io"
 	"mime/multipart"
@@ -25,10 +26,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"seyal/internal/ai"
-	"seyal/internal/auth"
 	"seyal/internal/channel"
 	"seyal/internal/db"
-	"seyal/internal/ledger"
 	"seyal/internal/media"
 	"seyal/internal/playbook"
 	"seyal/internal/server"
@@ -48,6 +47,7 @@ type site struct {
 	passwords map[string]string // demo key (or a made-up name like vikram) → password
 	people    map[string]string // demo key → person id
 	ai        *ai.Setup         // AI is off unless a test sets a (fake) model
+	lib       *playbook.Library
 }
 
 // The demo people, by their key in the demo file. Each site gives them their own emails (s.mail),
@@ -78,7 +78,7 @@ func newSiteWith(t *testing.T, playbooks string) *site {
 	}
 	f.Business.Slug = "test-" + strings.ToLower(rand.Text()[:10])
 	s := &site{t: t, slug: f.Business.Slug, store: media.Disk{Dir: t.TempDir()}, owner: owner, app: app,
-		passwords: map[string]string{}, ai: &ai.Setup{USDtoINR: 88}}
+		passwords: map[string]string{}, ai: &ai.Setup{USDtoINR: 88}, lib: lib}
 	for i, p := range f.People {
 		f.People[i].Email = s.mail(p.Key)
 	}
@@ -88,7 +88,7 @@ func newSiteWith(t *testing.T, playbooks string) *site {
 	}
 	s.tenant, s.people = sum.TenantID, sum.People
 	for _, key := range []string{arjun, priya, lakshmi} {
-		if s.passwords[key], err = setup.NewPassword(ctx, app, sum.TenantID, s.mail(key)); err != nil {
+		if s.passwords[key], err = setup.NewPassword(ctx, app, s.mail(key), sum.TenantID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -172,21 +172,16 @@ func (s *site) useLink(page, name, password string) *http.Client {
 	return c
 }
 
-// temporaryPassword gives someone a password made by an admin, the way it worked before links
-// (people on running servers may still have one), and returns it.
+// temporaryPassword gives someone's login a temporary password, as an admin could make before
+// links (logins on running servers may still have one), and returns it.
 func (s *site) temporaryPassword(name string) string {
 	s.t.Helper()
-	var password string
-	err := db.WithTenant(context.Background(), s.app, s.tenant, func(tx pgx.Tx) error {
-		var id string
-		if err := tx.QueryRow(context.Background(), `SELECT id::text FROM persons WHERE login_email = $1`, s.mail(name)).Scan(&id); err != nil {
-			return err
-		}
-		var err error
-		password, err = auth.NewPassword(context.Background(), tx, id, ledger.PersonActor(s.people["lakshmi"]))
-		return err
-	})
+	password, err := setup.NewPassword(context.Background(), s.app, s.mail(name), "")
 	if err != nil {
+		s.t.Fatal(err)
+	}
+	// The app may no longer make one; the owner marks it.
+	if _, err := s.owner.Exec(context.Background(), "UPDATE accounts SET password_temporary = true WHERE email = $1", s.mail(name)); err != nil {
 		s.t.Fatal(err)
 	}
 	s.passwords[name] = password
@@ -228,13 +223,18 @@ func TestLoginPage(t *testing.T) {
 	t.Run("the login page doesn't reveal the business", func(t *testing.T) {
 		_, real, h := s.get(s.browser(), home+"login")
 		_, fake, _ := s.get(s.browser(), "/t/no-such-firm/login")
+		_, root, _ := s.get(s.browser(), "/")
 		if strings.Contains(real, "Kaveri") {
 			t.Error("the login page shows the business's name")
 		}
 		// The page contains the address you typed (for the app manifest); apart from that it
-		// must be identical, so it can't tell real addresses from made-up ones.
+		// must be identical, so it can't tell real addresses from made-up ones. "/" is the same form
+		// without a manifest.
 		if strings.ReplaceAll(fake, "no-such-firm", s.slug) != real {
 			t.Error("a real address and a made-up one give different login pages")
+		}
+		if strings.Replace(real, `<link rel="manifest" href="`+home+`manifest.webmanifest">`, "", 1) != root {
+			t.Error(`"/" doesn't show the same login form`)
 		}
 		if csp := h.Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") ||
 			!strings.Contains(csp, "script-src 'self'") || h.Get("X-Content-Type-Options") != "nosniff" {
@@ -247,30 +247,58 @@ func TestLoginPage(t *testing.T) {
 		if code != http.StatusUnauthorized || !strings.Contains(body, "Wrong email or password") {
 			t.Errorf("made-up address = %d", code)
 		}
+		_, unknown, _ := s.post(s.browser(), home+"login", url.Values{"email": {s.mail(arjun)}, "password": {"x"}}, nil)
+		if strings.ReplaceAll(body, "no-such-firm", s.slug) != unknown {
+			t.Error("a wrong password answers differently on a made-up address")
+		}
 		if code, _, h := s.get(s.browser(), "/t/no-such-firm/"); code != http.StatusSeeOther ||
 			h.Get("Location") != "/t/no-such-firm/login" {
 			t.Errorf("made-up address home = %d to %q, want the same as a real one", code, h.Get("Location"))
 		}
 	})
 
-	t.Run("cookie is HttpOnly and SameSite", func(t *testing.T) {
+	t.Run("the right password on an address the login isn't in goes to /, like a made-up one", func(t *testing.T) {
+		other := newSite(t) // its people have their own logins, in that business only
+		them := url.Values{"email": {other.mail(arjun)}, "password": {other.passwords[arjun]}}
+		code, body, h := s.post(s.browser(), home+"login", them, nil)
+		fcode, fbody, fh := s.post(s.browser(), "/t/no-such-firm/login", them, nil)
+		if code != http.StatusSeeOther || h.Get("Location") != "/" || fcode != code || fh.Get("Location") != h.Get("Location") || fbody != body {
+			t.Errorf("not a member = %d to %q, made-up = %d to %q; want the same 303 to /", code, h.Get("Location"), fcode, fh.Get("Location"))
+		}
+	})
+
+	t.Run("one login cookie for the whole server", func(t *testing.T) {
 		_, _, h := s.post(s.browser(), home+"login", url.Values{"email": {s.mail(arjun)}, "password": {s.passwords[arjun]}}, nil)
-		if cookie := h.Get("Set-Cookie"); !strings.Contains(cookie, "HttpOnly") || !strings.Contains(cookie, "SameSite=Lax") {
+		cookie := h.Get("Set-Cookie")
+		if !strings.HasPrefix(cookie, "seyal_account=") || !strings.Contains(cookie, "Path=/;") ||
+			!strings.Contains(cookie, "HttpOnly") || !strings.Contains(cookie, "SameSite=Lax") {
 			t.Errorf("cookie = %q", cookie)
 		}
 	})
 
 	t.Run("another site can't post to Seyal", func(t *testing.T) {
 		c := s.logIn(arjun)
-		if code, _, _ := s.post(c, home+"logout", nil, map[string]string{"Sec-Fetch-Site": "cross-site"}); code != http.StatusForbidden {
-			t.Errorf("cross-site logout = %d, want 403", code)
+		cross := map[string]string{"Sec-Fetch-Site": "cross-site"}
+		for _, path := range []string{"/", "/logout", home + "login", home + "logout", home + "logout-everywhere"} {
+			form := url.Values{"email": {s.mail(arjun)}, "password": {s.passwords[arjun]}}
+			if code, _, _ := s.post(c, path, form, cross); code != http.StatusForbidden {
+				t.Errorf("cross-site POST %s = %d, want 403", path, code)
+			}
+		}
+		if code, _, _ := s.get(c, home); code != http.StatusOK {
+			t.Errorf("after the refused posts, home = %d; want still logged in", code)
 		}
 	})
 
 	t.Run("logout ends the session", func(t *testing.T) {
 		c := s.logIn(arjun)
-		if code, _, h := s.post(c, home+"logout", nil, nil); code != http.StatusSeeOther || h.Get("Location") != home+"login" {
+		code, _, h := s.post(c, home+"logout", nil, nil)
+		if code != http.StatusSeeOther || h.Get("Location") != home+"login" {
 			t.Fatalf("logout = %d to %q", code, h.Get("Location"))
+		}
+		if cookies := strings.Join(h.Values("Set-Cookie"), "\n"); !strings.Contains(cookies, "seyal_account=; Path=/; Max-Age=0") ||
+			!strings.Contains(cookies, "seyal_session=; Path="+home+"; Max-Age=0") {
+			t.Errorf("logout cookies = %s; want the login cookie and this address's old one removed", cookies)
 		}
 		if code, _, _ := s.get(c, home); code != http.StatusSeeOther {
 			t.Errorf("home after logout = %d, want a redirect", code)
@@ -292,15 +320,47 @@ func TestLoginPage(t *testing.T) {
 		}
 	})
 
-	t.Run("too many wrong passwords are blocked", func(t *testing.T) {
+	t.Run("too many wrong passwords are blocked, on every address and on / together", func(t *testing.T) {
+		// Behind a proxy, each attempt can come from another visitor's address, so only the count
+		// per email blocks them.
+		srv, err := server.New(server.Config{App: s.app, Store: s.store, Library: s.lib, AI: s.ai, BehindProxy: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		proxied := httptest.NewServer(srv.Handler())
+		defer proxied.Close()
+		paths := []string{home + "login", "/", "/t/no-such-firm/login", "/t/test-" + strings.ToLower(rand.Text()[:10]) + "/login"}
+		attempt := func(i int, password string) int {
+			form := url.Values{"email": {s.mail(lakshmi)}, "password": {password}}
+			req, _ := http.NewRequest(http.MethodPost, proxied.URL+paths[i%len(paths)], strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.Header.Set("X-Forwarded-For", fmt.Sprintf("192.0.2.%d", i+1))
+			resp, err := s.browser().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			return resp.StatusCode
+		}
+		for i := 0; i < 10; i++ {
+			if code := attempt(i, "guess "+string(rune('a'+i))); code != http.StatusUnauthorized {
+				t.Fatalf("wrong password %d = %d, want 401", i+1, code)
+			}
+		}
+		if code := attempt(10, s.passwords[lakshmi]); code != http.StatusTooManyRequests {
+			t.Errorf("after 10 wrong passwords spread over addresses, the right one = %d, want 429", code)
+		}
+	})
+
+	t.Run("too many wrong passwords from one visitor are blocked, whatever the email", func(t *testing.T) {
 		blocked := false
 		for i := 0; i < 12 && !blocked; i++ {
-			code, _, _ := s.post(s.browser(), home+"login",
-				url.Values{"email": {s.mail(arjun)}, "password": {"guess " + string(rune('a'+i))}}, nil)
+			path := []string{"/", "/t/no-such-firm/login"}[i%2]
+			code, _, _ := s.post(s.browser(), path, url.Values{"email": {s.mail(fmt.Sprint("nobody", i))}, "password": {"guess"}}, nil)
 			blocked = code == http.StatusTooManyRequests
 		}
 		if !blocked {
-			t.Error("12 wrong passwords in a row were never blocked")
+			t.Error("12 wrong logins from one visitor were never blocked")
 		}
 	})
 }

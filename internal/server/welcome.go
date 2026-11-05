@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -41,16 +42,18 @@ func (s *Server) invites(r *http.Request, c *call, list ...invite) func(sv *sett
 	}
 }
 
+// welcomeView is a link's page. When Elsewhere, the email's login is also used in another business,
+// so this business's link can't set its password (D64); the page says who can help instead.
 type welcomeView struct {
-	Name, Email string
-	Bad         bool // unknown, used, replaced or expired: the page says to ask for a new link
+	auth.Holder
+	Bad bool // unknown, used, replaced or expired: the page says to ask for a new link
 }
 
 func (s *Server) welcomePage(w http.ResponseWriter, r *http.Request) {
 	s.showWelcome(w, r, http.StatusOK, "")
 }
 
-// welcome sets the password from a link and logs the person in.
+// welcome sets the login's password from a link and logs the person in.
 func (s *Server) welcome(w http.ResponseWriter, r *http.Request) {
 	next := r.PostFormValue("next")
 	if next != r.PostFormValue("again") {
@@ -71,21 +74,24 @@ func (s *Server) welcome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var token string
-	var sess auth.Session
+	var expires time.Time
 	err = db.WithTenant(r.Context(), s.app, t.ID, func(tx pgx.Tx) error {
 		var err error
-		token, sess, err = auth.UseLink(r.Context(), tx, r.PathValue("code"), next, r.UserAgent())
+		token, expires, err = auth.UseLink(r.Context(), tx, r.PathValue("code"), next, r.UserAgent())
 		return err
 	})
-	if errors.Is(err, auth.ErrBadLink) {
+	switch {
+	case errors.Is(err, auth.ErrBadLink):
 		s.showWelcome(w, r, http.StatusNotFound, "")
 		return
-	}
-	if err != nil {
+	case errors.Is(err, auth.ErrLinkedElsewhere): // it became so after the page was shown
+		s.showWelcome(w, r, http.StatusConflict, "")
+		return
+	case err != nil:
 		s.fail(w, r, err)
 		return
 	}
-	s.setSession(w, t.Slug, token, sess.ExpiresAt)
+	s.setSession(w, token, expires)
 	http.Redirect(w, r, "/t/"+t.Slug+"/", http.StatusSeeOther)
 }
 
@@ -99,7 +105,7 @@ func (s *Server) showWelcome(w http.ResponseWriter, r *http.Request, status int,
 	if err == nil {
 		err = db.WithTenant(r.Context(), s.app, t.ID, func(tx pgx.Tx) error {
 			var err error
-			wv.Name, wv.Email, err = auth.LinkHolder(r.Context(), tx, r.PathValue("code"))
+			wv.Holder, err = auth.LinkHolder(r.Context(), tx, r.PathValue("code"))
 			return err
 		})
 	}

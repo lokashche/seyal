@@ -27,7 +27,8 @@ func runImport(args []string, out io.Writer) error {
 	return err
 }
 
-// runSeed loads the fictional demo business and gives every demo person a fresh password.
+// runSeed loads the fictional demo business and gives every demo person's login a fresh password,
+// making the logins if needed and linking them to the demo people.
 func runSeed(out io.Writer) error {
 	f, err := importFile(filepath.Join("examples", "seed", "demo.yaml"), out)
 	if err != nil {
@@ -46,7 +47,7 @@ func runSeed(out io.Writer) error {
 	}
 	fmt.Fprintf(out, "\nDemo logins (new passwords, shown only now):\n")
 	for _, p := range f.People {
-		password, err := setup.NewPassword(ctx, app, tenantID, p.Email)
+		password, err := setup.NewPassword(ctx, app, p.Email, tenantID)
 		if err != nil {
 			return err
 		}
@@ -55,17 +56,19 @@ func runSeed(out io.Writer) error {
 	return nil
 }
 
-// runSetPassword gives one person a new random password and shows it once.
+// runSetPassword gives a login a new random password and shows it once, making the login if there
+// is none. The operator is trusted: this also resets a login used in several businesses. With
+// --business, the login is also linked to that business's person with this email.
 func runSetPassword(args []string, out io.Writer) error {
 	flags := flag.NewFlagSet("set-password", flag.ContinueOnError)
 	flags.SetOutput(out)
-	slug := flags.String("business", "", "the business's slug, e.g. demo")
-	email := flags.String("email", "", "the person's login email")
+	email := flags.String("email", "", "the login's email")
+	slug := flags.String("business", "", "also link the login to this business's person with the email, e.g. demo")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if *slug == "" || *email == "" {
-		return errors.New("usage: seyal set-password --business <slug> --email <email>")
+	if *email == "" || flags.NArg() > 0 {
+		return errors.New("usage: seyal set-password --email <email> [--business <slug>]")
 	}
 	ctx := context.Background()
 	owner, app, err := pools(ctx)
@@ -74,15 +77,18 @@ func runSetPassword(args []string, out io.Writer) error {
 	}
 	defer owner.Close()
 	defer app.Close()
-	tenantID, err := tenantBySlug(ctx, app, *slug)
-	if err != nil {
-		return err
+	tenantID := ""
+	if *slug != "" {
+		if tenantID, err = tenantBySlug(ctx, app, *slug); err != nil {
+			return err
+		}
 	}
-	password, err := setup.NewPassword(ctx, app, tenantID, *email)
+	password, err := setup.NewPassword(ctx, app, *email, tenantID)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "New password for %s (shown only now): %s\n", *email, password)
+	fmt.Fprintln(out, "It is the login's one password, for every business it belongs to.")
 	return nil
 }
 

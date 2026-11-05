@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package auth handles logins: passwords (stored only as bcrypt hashes) and sessions (random tokens
-// whose SHA-256 is stored). One login per person.
+// Package auth handles logins: passwords (stored only as bcrypt hashes, checked only inside the
+// database) and sessions (random tokens whose SHA-256 is stored). One login (an email and one
+// password) reaches a person in each business it belongs to; see account.go.
 package auth
 
 import (
@@ -12,14 +13,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
-	"golang.org/x/crypto/bcrypt"
-
-	"seyal/internal/ledger"
 )
 
 const (
@@ -38,156 +35,22 @@ var (
 	ErrNoSession = errors.New("please log in")
 )
 
-// Session is a logged-in person.
+// Session is a logged-in person, inside one business.
 type Session struct {
 	PersonID  string
 	Name      string
 	Roles     []string
 	ExpiresAt time.Time
-	// MustChange is true while the person logs in with a password an admin made: they choose their own
-	// before anything else.
+	// MustChange is true while the login's password is a temporary one (an admin made it, before
+	// set-your-password links): they choose their own before anything else.
 	MustChange bool
-	// AccountID and Email are the login used (see account.go); empty for an old per-business session.
+	// AccountID and Email are the login used (see account.go).
 	AccountID string
 	Email     string
 }
 
-// dummyHash is compared against when an email is unknown, so a wrong email takes as long as a
-// wrong password.
-var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("not a real password"), bcrypt.DefaultCost)
-
-// SetPassword sets a person's login email and password. The ledger records that it happened, never
-// the password or its hash. tx must come from db.WithTenant.
-func SetPassword(ctx context.Context, tx pgx.Tx, personID, email, password string, by ledger.Actor) error {
-	email = strings.ToLower(strings.TrimSpace(email))
-	if !strings.Contains(email, "@") {
-		return errors.New("that doesn't look like an email address")
-	}
-	if err := CheckNew(password); err != nil {
-		return err
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return err
-	}
-	tag, err := tx.Exec(ctx, `
-		UPDATE persons SET login_email = $2, password_hash = $3, password_temporary = false
-		WHERE tenant_id = current_tenant() AND id::text = $1`, personID, email, string(hash))
-	if err != nil {
-		return fmt.Errorf("auth: set password: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return errors.New("auth: no such person")
-	}
-	// A new password logs the person out everywhere: if the old one leaked, its sessions end too.
-	if _, err := tx.Exec(ctx, `
-		UPDATE sessions SET ended_at = now()
-		WHERE tenant_id = current_tenant() AND person_id::text = $1 AND ended_at IS NULL`, personID); err != nil {
-		return fmt.Errorf("auth: end sessions: %w", err)
-	}
-	_, err = ledger.Append(ctx, tx, ledger.Event{
-		Kind: "person.login_set", SubjectType: "person", SubjectID: personID,
-		Payload: map[string]string{"email": email},
-	}.By(by))
-	return err
-}
-
-// Login checks an email and password and starts a session. It returns the token to put in the
-// browser's cookie. tx must come from db.WithTenant (the tenant comes from the address).
-func Login(ctx context.Context, tx pgx.Tx, email, password, userAgent string) (token string, s Session, err error) {
-	email = strings.ToLower(strings.TrimSpace(email))
-	var hash string
-	err = tx.QueryRow(ctx, `
-		SELECT id::text, display_name, coalesce(password_hash, ''), password_temporary FROM persons
-		WHERE tenant_id = current_tenant() AND login_email = $1 AND status = 'active'`, email).
-		Scan(&s.PersonID, &s.Name, &hash, &s.MustChange)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows) || (err == nil && hash == ""):
-		bcrypt.CompareHashAndPassword(dummyHash, []byte(password)) // same time as a wrong password
-		return "", Session{}, ErrBadLogin
-	case err != nil:
-		return "", Session{}, err
-	}
-	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
-		return "", Session{}, ErrBadLogin
-	}
-
-	if token, err = newToken(); err != nil {
-		return "", Session{}, err
-	}
-	s.ExpiresAt = time.Now().Add(SessionLength).UTC().Truncate(time.Second)
-	if len(userAgent) > 500 {
-		userAgent = userAgent[:500]
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO sessions (token_sha256, tenant_id, person_id, expires_at, user_agent)
-		VALUES ($1, current_tenant(), $2, $3, $4)`,
-		fingerprint(token), s.PersonID, s.ExpiresAt, strings.ToValidUTF8(userAgent, "")); err != nil {
-		return "", Session{}, fmt.Errorf("auth: start session: %w", err)
-	}
-	if _, err := ledger.Append(ctx, tx, ledger.Event{
-		Kind: "person.logged_in", SubjectType: "person", SubjectID: s.PersonID,
-	}.By(ledger.PersonActor(s.PersonID))); err != nil {
-		return "", Session{}, err
-	}
-	s.Roles, err = roles(ctx, tx, s.PersonID)
-	return token, s, err
-}
-
-// NewPassword gives a person a new random password and returns it. It is shown once and never
-// stored. Passwords are 16 characters from A-Z and 2-7, so there's no 0/O or 1/l to mix up when
-// reading one out. The person must already have a login email. tx must come from db.WithTenant.
-func NewPassword(ctx context.Context, tx pgx.Tx, personID string, by ledger.Actor) (string, error) {
-	var email string
-	err := tx.QueryRow(ctx, `
-		SELECT coalesce(login_email, '') FROM persons WHERE tenant_id = current_tenant() AND id::text = $1`,
-		personID).Scan(&email)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		return "", errors.New("auth: no such person")
-	case err != nil:
-		return "", err
-	case email == "":
-		return "", errors.New("this person has no login email yet")
-	}
-	password := rand.Text()[:16]
-	if err := SetPassword(ctx, tx, personID, email, password, by); err != nil {
-		return "", err
-	}
-	// Made by an admin (a person), it is temporary: whoever logs in with it chooses their own first.
-	// Made by Seyal itself (the demo seed, `seyal set-password`), it is the person's password.
-	if by.Kind == ledger.Human {
-		if _, err := tx.Exec(ctx, `
-			UPDATE persons SET password_temporary = true WHERE tenant_id = current_tenant() AND id::text = $1`,
-			personID); err != nil {
-			return "", fmt.Errorf("auth: mark temporary: %w", err)
-		}
-	}
-	return password, nil
-}
-
 // ErrWrongPassword means the current password given to change it was wrong.
 var ErrWrongPassword = errors.New("the current password is wrong")
-
-// ChangePassword lets a person replace their password, after giving the current one. Like every
-// new password, it ends all their sessions; the caller logs them in again on this device.
-// tx must come from db.WithTenant.
-func ChangePassword(ctx context.Context, tx pgx.Tx, personID, current, next string) error {
-	var email, hash string
-	err := tx.QueryRow(ctx, `
-		SELECT coalesce(login_email, ''), coalesce(password_hash, '') FROM persons
-		WHERE tenant_id = current_tenant() AND id::text = $1 AND status = 'active'`, personID).Scan(&email, &hash)
-	if err != nil {
-		return fmt.Errorf("auth: change password: %w", err)
-	}
-	if hash == "" || bcrypt.CompareHashAndPassword([]byte(hash), []byte(current)) != nil {
-		return ErrWrongPassword
-	}
-	if next == current {
-		return ErrSamePassword
-	}
-	return SetPassword(ctx, tx, personID, email, next, ledger.PersonActor(personID))
-}
 
 // ErrSamePassword means the new password is the current one.
 var ErrSamePassword = errors.New("please choose a password different from the current one")
@@ -201,71 +64,6 @@ func CheckNew(password string) error {
 		return fmt.Errorf("a password can be at most %d bytes", maxPassword)
 	}
 	return nil
-}
-
-// Pretend spends as long as checking a real password. Use it for a login to an address that
-// doesn't exist, so the answer can't reveal which addresses do.
-func Pretend(password string) {
-	bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
-}
-
-// Check returns the session for a token from a cookie, or ErrNoSession. A person who was disabled
-// is logged out at once. It never takes a business entry of a login session (see CheckIn).
-// tx must come from db.WithTenant.
-func Check(ctx context.Context, tx pgx.Tx, token string) (Session, error) {
-	if token == "" {
-		return Session{}, ErrNoSession
-	}
-	var s Session
-	err := tx.QueryRow(ctx, `
-		SELECT s.person_id::text, p.display_name, s.expires_at, p.password_temporary
-		FROM sessions s JOIN persons p ON p.tenant_id = s.tenant_id AND p.id = s.person_id
-		WHERE s.tenant_id = current_tenant() AND s.token_sha256 = $1 AND s.account_session IS NULL
-			AND s.ended_at IS NULL AND s.expires_at > now() AND p.status = 'active'`,
-		fingerprint(token)).Scan(&s.PersonID, &s.Name, &s.ExpiresAt, &s.MustChange)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Session{}, ErrNoSession
-	}
-	if err != nil {
-		return Session{}, err
-	}
-	s.Roles, err = roles(ctx, tx, s.PersonID)
-	return s, err
-}
-
-// Logout ends the session. tx must come from db.WithTenant.
-func Logout(ctx context.Context, tx pgx.Tx, token string) error {
-	var personID string
-	err := tx.QueryRow(ctx, `
-		UPDATE sessions SET ended_at = now()
-		WHERE tenant_id = current_tenant() AND token_sha256 = $1 AND account_session IS NULL AND ended_at IS NULL
-		RETURNING person_id::text`, fingerprint(token)).Scan(&personID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil // already logged out
-	}
-	if err != nil {
-		return err
-	}
-	_, err = ledger.Append(ctx, tx, ledger.Event{
-		Kind: "person.logged_out", SubjectType: "person", SubjectID: personID,
-	}.By(ledger.PersonActor(personID)))
-	return err
-}
-
-// LogoutEverywhere ends all of a person's sessions, on every device (e.g. a phone was lost).
-// tx must come from db.WithTenant.
-func LogoutEverywhere(ctx context.Context, tx pgx.Tx, personID string) error {
-	tag, err := tx.Exec(ctx, `
-		UPDATE sessions SET ended_at = now()
-		WHERE tenant_id = current_tenant() AND person_id::text = $1 AND ended_at IS NULL`, personID)
-	if err != nil {
-		return fmt.Errorf("auth: end sessions: %w", err)
-	}
-	_, err = ledger.Append(ctx, tx, ledger.Event{
-		Kind: "person.logged_out_everywhere", SubjectType: "person", SubjectID: personID,
-		Payload: map[string]int64{"sessions": tag.RowsAffected()},
-	}.By(ledger.PersonActor(personID)))
-	return err
 }
 
 func roles(ctx context.Context, tx pgx.Tx, personID string) ([]string, error) {

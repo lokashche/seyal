@@ -11,13 +11,14 @@ import (
 	"seyal/migrations"
 )
 
-// runMigrate applies all pending database migrations as the owner role.
+// runMigrate applies all pending database migrations as the owner role, and prints the notes they
+// leave for the operator and the names of those applied.
 func runMigrate(out io.Writer) error {
 	url, err := config.Need("SEYAL_OWNER_DATABASE_URL")
 	if err != nil {
 		return err
 	}
-	applied, err := migrations.Up(context.Background(), url)
+	applied, err := migrations.Up(context.Background(), url, out)
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}

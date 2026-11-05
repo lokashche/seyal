@@ -47,7 +47,7 @@ func newLogin(t *testing.T, names ...string) login {
 	l := login{owner: owner, app: app, email: testdb.Email("asha")}
 	err := db.WithServer(ctx, app, func(tx pgx.Tx) error {
 		var err error
-		l.password, l.id, err = auth.NewAccountPassword(ctx, tx, strings.ToUpper(l.email))
+		l.password, l.id, err = auth.NewPassword(ctx, tx, strings.ToUpper(l.email), "")
 		return err
 	})
 	if err != nil {
@@ -102,7 +102,7 @@ func (l login) tryLogIn(email, password string) (token string, a auth.Account, e
 func (l login) checkIn(b biz, token string) (s auth.Session, err error) {
 	err = l.in(b, func(tx pgx.Tx) error {
 		var err error
-		s, err = auth.CheckIn(context.Background(), tx, token, "test browser")
+		s, err = auth.Check(context.Background(), tx, token, "test browser")
 		return err
 	})
 	return s, err
@@ -202,16 +202,16 @@ func TestOneLoginManyBusinesses(t *testing.T) {
 		wantNoSession(t, "no token", err)
 	})
 
-	t.Run("the old per-business check takes no login token or entry", func(t *testing.T) {
-		// Anyone who can read the database knows a login session's hash and the business's id; a
-		// cookie made from them must open nothing.
+	t.Run("an old per-business cookie can't be made from a login token or entry", func(t *testing.T) {
+		// Anyone who can read the database knows a login session's hash and the business's id; an
+		// old-style cookie made from them must open nothing (see legacy.go).
 		sum := sha256.Sum256([]byte(token))
-		for _, cookie := range []string{token, hex.EncodeToString(sum[:]) + ":" + a.tenant} {
+		for _, cookie := range []string{token, hex.EncodeToString(sum[:]), hex.EncodeToString(sum[:]) + ":" + a.tenant} {
 			err := l.in(a, func(tx pgx.Tx) error {
-				_, err := auth.Check(context.Background(), tx, cookie)
+				_, _, err := auth.Upgrade(context.Background(), tx, cookie, "test browser")
 				return err
 			})
-			wantNoSession(t, "old check of "+cookie, err)
+			wantNoSession(t, "upgrade of "+cookie, err)
 		}
 	})
 
@@ -381,7 +381,7 @@ func TestLogIn(t *testing.T) {
 		var pw, id string
 		if err := l.server(func(tx pgx.Tx) error {
 			var err error
-			pw, id, err = auth.NewAccountPassword(context.Background(), tx, l.email)
+			pw, id, err = auth.NewPassword(context.Background(), tx, l.email, "")
 			return err
 		}); err != nil {
 			t.Fatal(err)
@@ -413,7 +413,7 @@ func TestLogIn(t *testing.T) {
 		var pw, id string
 		if err := l.server(func(tx pgx.Tx) error {
 			var err error
-			pw, id, err = auth.NewAccountPassword(context.Background(), tx, email)
+			pw, id, err = auth.NewPassword(context.Background(), tx, email, "")
 			return err
 		}); err != nil || id == "" {
 			t.Fatalf("new login = %q, %v", id, err)
@@ -422,7 +422,7 @@ func TestLogIn(t *testing.T) {
 			t.Errorf("log in = %+v, %v", a, err)
 		}
 		if err := l.server(func(tx pgx.Tx) error {
-			_, _, err := auth.NewAccountPassword(context.Background(), tx, "not an email")
+			_, _, err := auth.NewPassword(context.Background(), tx, "not an email", "")
 			return err
 		}); err == nil {
 			t.Error("a login without an @ was made")
@@ -464,7 +464,7 @@ func TestFirstRequestInABusiness(t *testing.T) {
 		if err := db.SetScope(ctx, first, db.Scope{Tenant: a.tenant}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := auth.CheckIn(ctx, first, token, "first"); err != nil {
+		if _, err := auth.Check(ctx, first, token, "first"); err != nil {
 			t.Fatal(err)
 		}
 		// ...while the second, not seeing the first's entry yet, tries to add its own.
@@ -545,7 +545,7 @@ func TestLogInDuringAPasswordChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer change.Rollback(ctx)
-	if err := auth.ChangeAccountPassword(ctx, change, l.id, l.password, "quartz password 2"); err != nil {
+	if err := auth.ChangePassword(ctx, change, l.id, l.password, "quartz password 2"); err != nil {
 		t.Fatal(err)
 	}
 	login := make(chan error, 1)
@@ -636,7 +636,7 @@ func TestLogOut(t *testing.T) {
 	})
 }
 
-func TestChangeAccountPassword(t *testing.T) {
+func TestChangePassword(t *testing.T) {
 	ctx := context.Background()
 	l := newLogin(t, "Kestrel Kitchens (login test)", "Lotus Labs (login test)")
 	a, b := l.biz[0], l.biz[1]
@@ -649,7 +649,7 @@ func TestChangeAccountPassword(t *testing.T) {
 	from := first(a, b)
 	change := func(current, next string) error {
 		return l.in(from, func(tx pgx.Tx) error {
-			if err := auth.ChangeAccountPassword(ctx, tx, l.id, current, next); err != nil {
+			if err := auth.ChangePassword(ctx, tx, l.id, current, next); err != nil {
 				return err
 			}
 			return wantScope(tx, db.Scope{Tenant: from.tenant})
@@ -785,7 +785,7 @@ func TestTwoChainsStayApart(t *testing.T) {
 		func() error { return l.server(func(tx pgx.Tx) error { return auth.LogOut(ctx, tx, laptop) }) },
 		func() error {
 			return l.in(b, func(tx pgx.Tx) error {
-				return auth.ChangeAccountPassword(ctx, tx, l.id, l.password, "pebble password 2")
+				return auth.ChangePassword(ctx, tx, l.id, l.password, "pebble password 2")
 			})
 		},
 		func() error {
@@ -805,7 +805,7 @@ func TestTwoChainsStayApart(t *testing.T) {
 		},
 		func() error {
 			return l.server(func(tx pgx.Tx) error {
-				if _, _, err := auth.NewAccountPassword(ctx, tx, l.email); err != nil {
+				if _, _, err := auth.NewPassword(ctx, tx, l.email, ""); err != nil {
 					return err
 				}
 				return wantScope(tx, db.Scope{})

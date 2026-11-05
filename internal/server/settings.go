@@ -58,7 +58,7 @@ type peopleView struct {
 type personRow struct {
 	ID, Name, Email string
 	Active, Me      bool
-	SetUp           bool     // has a password (has used their link)
+	SetUp           bool     // has a login (has used their link)
 	Roles           []option // all roles, Selected = held
 	RoleNames       string
 }
@@ -184,7 +184,7 @@ func (v *view) people() (*peopleView, error) {
 		return nil, err
 	}
 	rows, _ := v.tx.Query(v.ctx, `
-		SELECT p.id::text, p.display_name, coalesce(p.login_email, ''), p.status = 'active', p.password_hash IS NOT NULL,
+		SELECT p.id::text, p.display_name, coalesce(p.login_email, ''), p.status = 'active', p.account_id IS NOT NULL,
 			coalesce(array_agg(pr.role_key ORDER BY pr.role_key)
 				FILTER (WHERE pr.role_key IS NOT NULL AND pr.revoked_at IS NULL), '{}')
 		FROM persons p
@@ -238,9 +238,12 @@ func (v *view) roleRows() ([]roleRow, error) {
 }
 
 // addPerson adds someone, gives them the chosen roles and a link to set their password, to send them.
+// If their email's login is also used in another business, a link can't work yet (D64): no link is
+// made, and the notice says who can add them.
 func (s *Server) addPerson(w http.ResponseWriter, r *http.Request, c *call) {
 	name, email := strings.TrimSpace(r.PostFormValue("name")), strings.TrimSpace(r.PostFormValue("email"))
 	var code string
+	var refused bool
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		by := ledger.PersonActor(c.session.PersonID)
 		id, err := people.Add(r.Context(), tx, name, email, by)
@@ -252,6 +255,9 @@ func (s *Server) addPerson(w http.ResponseWriter, r *http.Request, c *call) {
 				return err
 			}
 		}
+		if refused, _, err = auth.LinkRefused(r.Context(), tx, id); err != nil || refused {
+			return err
+		}
 		code, _, err = auth.NewLink(r.Context(), tx, id, by)
 		return err
 	})
@@ -259,8 +265,23 @@ func (s *Server) addPerson(w http.ResponseWriter, r *http.Request, c *call) {
 		s.settingsProblem(w, r, c, "people", err)
 		return
 	}
+	if refused {
+		s.showSettings(w, r, c, "people", http.StatusOK, fmt.Sprintf("Added %s. %s", name, linkRefused(false)), "")
+		return
+	}
 	s.showSettings(w, r, c, "people", http.StatusOK, fmt.Sprintf("Added %s. Send them the link below to set their password.", name), "",
 		s.invites(r, c, invite{Name: name, code: code}))
+}
+
+// linkRefused says why no link was made for someone whose login is also used in another business
+// (auth.LinkRefused), and who can help. linked: they already have that login here.
+func linkRefused(linked bool) string {
+	if linked {
+		return "Their Seyal login is also used for another business, so a link from here can't change its password. " +
+			"Ask whoever runs this Seyal server to give them a new password."
+	}
+	return "Their email already has a Seyal login that is also used for another business, so a link can't add them. " +
+		"Ask whoever runs this Seyal server to add them."
 }
 
 // updatePerson saves name, email, roles and active/disabled. Admins can't lock themselves out, and
@@ -320,15 +341,20 @@ func (s *Server) updatePerson(w http.ResponseWriter, r *http.Request, c *call) {
 }
 
 // newLink makes a fresh set-your-password link for someone, e.g. who forgot their password. Their
-// current password keeps working until they use it; older links stop working.
+// current password keeps working until they use it; older links stop working. For a login also used
+// in another business no link is made, as it couldn't work (D64), and nothing changes.
 func (s *Server) newLink(w http.ResponseWriter, r *http.Request, c *call) {
 	var name, code string
+	var refused, linked bool
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(r.Context(), `SELECT display_name FROM persons WHERE tenant_id = current_tenant() AND id::text = $1`,
 			r.PathValue("id")).Scan(&name); err != nil {
 			return err
 		}
 		var err error
+		if refused, linked, err = auth.LinkRefused(r.Context(), tx, r.PathValue("id")); err != nil || refused {
+			return err
+		}
 		code, _, err = auth.NewLink(r.Context(), tx, r.PathValue("id"), ledger.PersonActor(c.session.PersonID))
 		return err
 	})
@@ -338,6 +364,10 @@ func (s *Server) newLink(w http.ResponseWriter, r *http.Request, c *call) {
 	}
 	if err != nil {
 		s.settingsProblem(w, r, c, "people", err)
+		return
+	}
+	if refused {
+		s.showSettings(w, r, c, "people", http.StatusConflict, "", fmt.Sprintf("No link made for %s. %s", name, linkRefused(linked)))
 		return
 	}
 	s.showSettings(w, r, c, "people", http.StatusOK,

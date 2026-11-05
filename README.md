@@ -18,7 +18,7 @@ cp .env.example .env              # then replace the "change-me" passwords in .e
 go run ./cmd/seyal dev up         # start the local database (Docker)
 go run ./cmd/seyal migrate        # create the tables
 go run ./cmd/seyal seed           # load the fictional demo business; prints its logins
-go run ./cmd/seyal serve          # open the address it prints, e.g. http://127.0.0.1:8080/t/demo/
+go run ./cmd/seyal serve          # open the address it prints, e.g. http://127.0.0.1:8080/
 ```
 
 Log in with one of the printed demo logins and tell Seyal about some work. Everything in the demo is

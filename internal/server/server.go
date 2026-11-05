@@ -35,7 +35,15 @@ import (
 	"seyal/web"
 )
 
-const cookieName = "seyal_session"
+// Cookies. One login cookie for the whole server (D64); each page still checks, inside its business,
+// that the login reaches an active person there.
+const (
+	accountCookie = "seyal_account" // the login session's token, for every address (Path "/")
+	lastCookie    = "seyal_last"    // the business last used on this device, where "/" goes next time
+	// legacyCookie was each business address's own login cookie (Path /t/<slug>/), before one login
+	// across businesses. For one release it is swapped for the new one (auth.Upgrade); remove with it.
+	legacyCookie = "seyal_session"
+)
 
 // Server serves the web app.
 type Server struct {
@@ -150,6 +158,8 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", cacheFor(time.Hour, s.static))
 	mux.HandleFunc("GET /{$}", s.home)
+	mux.HandleFunc("POST /{$}", s.login)
+	mux.HandleFunc("POST /logout", s.logoutHere)
 	mux.HandleFunc("GET /sw.js", s.serviceWorker)
 	mux.HandleFunc("GET /offline", s.offline)
 	mux.HandleFunc("GET /t/{slug}/manifest.webmanifest", s.manifest)
@@ -250,9 +260,10 @@ func (s *Server) tenant(r *http.Request) (tenant, error) {
 	return t, nil
 }
 
-// authed lets a request through only with a valid session for this business. Without one (or for
-// an address that doesn't exist, so addresses can't be guessed) the person is sent to the login
-// page. htmx requests get an HX-Redirect so the whole page changes.
+// authed lets a request through only with a login that reaches an active person in this business.
+// Without one (or for an address that doesn't exist, so addresses can't be guessed) the person is
+// sent to the login page; a login that isn't in this business goes on from there to "/". htmx
+// requests get an HX-Redirect so the whole page changes.
 func (s *Server) authed(h func(http.ResponseWriter, *http.Request, *call)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		toLogin := func() {
@@ -273,13 +284,21 @@ func (s *Server) authed(h func(http.ResponseWriter, *http.Request, *call)) http.
 			s.fail(w, r, err)
 			return
 		}
-		c := &call{tenant: t}
-		if cookie, err := r.Cookie(cookieName); err == nil {
-			c.token = cookie.Value
-		}
+		c := &call{tenant: t, token: cookieValue(r, accountCookie)}
+		var upgraded time.Time // when the new login session ends, if an old cookie was swapped for one
 		err = db.WithTenant(r.Context(), s.app, t.ID, func(tx pgx.Tx) error {
+			// FOR ONE RELEASE (D64): an old per-business cookie becomes a login session.
+			if old := cookieValue(r, legacyCookie); c.token == "" && old != "" {
+				token, expires, err := auth.Upgrade(r.Context(), tx, old, r.UserAgent())
+				switch {
+				case err == nil:
+					c.token, upgraded = token, expires
+				case !errors.Is(err, auth.ErrNoSession):
+					return err
+				}
+			}
 			var err error
-			c.session, err = auth.Check(r.Context(), tx, c.token)
+			c.session, err = auth.Check(r.Context(), tx, c.token, r.UserAgent())
 			return err
 		})
 		if errors.Is(err, auth.ErrNoSession) {
@@ -290,7 +309,14 @@ func (s *Server) authed(h func(http.ResponseWriter, *http.Request, *call)) http.
 			s.fail(w, r, err)
 			return
 		}
-		// With a password an admin made, the person chooses their own before anything else.
+		if !upgraded.IsZero() {
+			s.setSession(w, c.token, upgraded)
+			s.clearLegacy(w, t.Slug)
+		}
+		if cookieValue(r, lastCookie) != t.Slug {
+			s.setLast(w, t.Slug)
+		}
+		// With a temporary password, the person chooses their own before anything else.
 		if pw := "/t/" + t.Slug + "/password"; c.session.MustChange && r.URL.Path != pw && !strings.HasSuffix(r.URL.Path, "/logout") {
 			if r.Header.Get("HX-Request") == "true" {
 				w.Header().Set("HX-Redirect", pw)
@@ -304,8 +330,58 @@ func (s *Server) authed(h func(http.ResponseWriter, *http.Request, *call)) http.
 	}
 }
 
+// cookieValue is the value of the request's cookie called name, or "".
+func cookieValue(r *http.Request, name string) string {
+	if c, err := r.Cookie(name); err == nil {
+		return c.Value
+	}
+	return ""
+}
+
+// homeView is "/" for someone logged in who isn't sent straight into a business.
+type homeView struct {
+	Email      string
+	Businesses []auth.Business // active memberships only; none means "not in any business yet"
+}
+
+// home is the server's front door. Logged out, it is the login form (the same one as on every
+// business address, D29). Logged in, it opens a business: the one last used on this device if the
+// login is still an active member there, else the only one, else a plain list to choose from. Like
+// the login page this is plumbing, not a process screen. It never sends anyone into a business they
+// were disabled in, so there is no loop.
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
-	s.render(w, r, http.StatusOK, "home", page{})
+	var hv homeView
+	var mine []auth.Business
+	err := db.WithServer(r.Context(), s.app, func(tx pgx.Tx) error {
+		a, err := auth.CheckAccount(r.Context(), tx, cookieValue(r, accountCookie))
+		if err != nil {
+			return err
+		}
+		hv.Email = a.Email
+		mine, err = auth.Businesses(r.Context(), tx, a.ID)
+		return err
+	})
+	if errors.Is(err, auth.ErrNoSession) {
+		s.render(w, r, http.StatusOK, "login", page{Data: ""})
+		return
+	}
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	for _, b := range mine {
+		if b.Active {
+			hv.Businesses = append(hv.Businesses, b)
+		}
+	}
+	last := cookieValue(r, lastCookie)
+	for _, b := range hv.Businesses {
+		if len(hv.Businesses) == 1 || b.Slug == last {
+			http.Redirect(w, r, "/t/"+b.Slug+"/", http.StatusSeeOther)
+			return
+		}
+	}
+	s.render(w, r, http.StatusOK, "home", page{Data: hv})
 }
 
 // serviceWorker is served from the root so it can look after every page. It is never cached
@@ -348,63 +424,92 @@ func (s *Server) manifest(w http.ResponseWriter, r *http.Request) {
 }
 
 // loginPage looks the same for every address, real or not, and never shows the business's name.
+// Someone already logged in goes on into the business if their login is in it, and to "/" if not
+// (where they choose), whether the address is real or not.
 func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
-	s.render(w, r, http.StatusOK, "login", page{Slug: r.PathValue("slug"), Data: ""})
+	slug := r.PathValue("slug")
+	if token := cookieValue(r, accountCookie); token != "" {
+		var member bool
+		err := db.WithServer(r.Context(), s.app, func(tx pgx.Tx) error {
+			a, err := auth.CheckAccount(r.Context(), tx, token)
+			if err != nil {
+				return err
+			}
+			member, err = activeIn(r, tx, a.ID, slug)
+			return err
+		})
+		switch {
+		case err == nil && member:
+			http.Redirect(w, r, "/t/"+slug+"/", http.StatusSeeOther)
+			return
+		case err == nil:
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		case !errors.Is(err, auth.ErrNoSession):
+			s.fail(w, r, err)
+			return
+		}
+	}
+	s.render(w, r, http.StatusOK, "login", page{Slug: slug, Data: ""})
 }
 
+// activeIn reports whether the login reaches an active person in the business at slug.
+func activeIn(r *http.Request, tx pgx.Tx, accountID, slug string) (bool, error) {
+	bs, err := auth.Businesses(r.Context(), tx, accountID)
+	return slices.ContainsFunc(bs, func(b auth.Business) bool { return b.Slug == slug && b.Active }), err
+}
+
+// login answers the one login form, on "/" and on every business address. The address is never
+// looked up before the password is checked, so a made-up address, a real one the login isn't in
+// and an unknown email all answer exactly as a wrong password does, in the same time (D29). After a
+// good password the login goes into the business at this address if it is in it, else to "/".
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	slug := r.PathValue("slug")
+	slug := r.PathValue("slug") // "" on "/"
 	email, password := strings.TrimSpace(r.PostFormValue("email")), r.PostFormValue("password")
 	p := page{Slug: slug, Data: email}
-	// Failed logins are counted per address and per email: guessing from many addresses at one
-	// person's login is slowed down too.
-	key, who := slug+"|"+s.clientIP(r), slug+"|email|"+strings.ToLower(email)
+	// Failed logins are counted per visitor's address and per email, over every page with the form:
+	// guessing at one person's login from many addresses, or on many business addresses, is slowed
+	// down too.
+	key, who := "ip|"+s.clientIP(r), "email|"+strings.ToLower(email)
 	if !s.limiter.allowed(key) || !s.limiter.allowed(who) {
 		p.Error = "Too many failed attempts. Please wait 15 minutes and try again."
 		s.render(w, r, http.StatusTooManyRequests, "login", p)
 		return
 	}
-	wrong := func() {
+	var token string
+	var a auth.Account
+	var member bool
+	err := db.WithServer(r.Context(), s.app, func(tx pgx.Tx) error {
+		var err error
+		if token, a, err = auth.LogIn(r.Context(), tx, email, password, r.UserAgent()); err != nil {
+			return err
+		}
+		member, err = activeIn(r, tx, a.ID, slug)
+		return err
+	})
+	if errors.Is(err, auth.ErrBadLogin) {
 		s.limiter.failed(key)
 		s.limiter.failed(who)
 		p.Error = "Wrong email or password."
 		s.render(w, r, http.StatusUnauthorized, "login", p)
-	}
-
-	t, err := s.tenant(r)
-	if errors.Is(err, errNoTenant) {
-		auth.Pretend(password) // same time and answer as a real address
-		wrong()
 		return
 	}
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	var token string
-	var sess auth.Session
-	err = db.WithTenant(r.Context(), s.app, t.ID, func(tx pgx.Tx) error {
-		var err error
-		token, sess, err = auth.Login(r.Context(), tx, email, password, r.UserAgent())
-		return err
-	})
-	if errors.Is(err, auth.ErrBadLogin) {
-		wrong()
+	s.setSession(w, token, a.ExpiresAt)
+	if member {
+		http.Redirect(w, r, "/t/"+slug+"/", http.StatusSeeOther)
 		return
 	}
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	s.setSession(w, t.Slug, token, sess.ExpiresAt)
-	http.Redirect(w, r, "/t/"+t.Slug+"/", http.StatusSeeOther)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
+// logout ends the login session, in every business, and goes back to this address's login page
+// (inside the installed app).
 func (s *Server) logout(w http.ResponseWriter, r *http.Request, c *call) {
-	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
-		return auth.Logout(r.Context(), tx, c.token)
-	})
-	if err != nil {
+	if err := s.endLogin(r, c.token); err != nil {
 		s.fail(w, r, err)
 		return
 	}
@@ -412,10 +517,59 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request, c *call) {
 	http.Redirect(w, r, "/t/"+c.tenant.Slug+"/login", http.StatusSeeOther)
 }
 
-// clearSession removes the login cookie for one business address.
+// logoutHere is logging out on "/", e.g. with a login that isn't in any business yet.
+func (s *Server) logoutHere(w http.ResponseWriter, r *http.Request) {
+	if err := s.endLogin(r, cookieValue(r, accountCookie)); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.clearSession(w, "")
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// endLogin ends a login session, if there is one.
+func (s *Server) endLogin(r *http.Request, token string) error {
+	if token == "" {
+		return nil
+	}
+	return db.WithServer(r.Context(), s.app, func(tx pgx.Tx) error {
+		return auth.LogOut(r.Context(), tx, token)
+	})
+}
+
+// setSession puts the login cookie, for every address on the server.
+func (s *Server) setSession(w http.ResponseWriter, token string, expires time.Time) {
+	http.SetCookie(w, &http.Cookie{
+		Name: accountCookie, Value: token, Path: "/", Expires: expires,
+		HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// clearSession removes the login cookie, and also the old cookie of the business address at slug
+// if one is given.
 func (s *Server) clearSession(w http.ResponseWriter, slug string) {
 	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Value: "", Path: "/t/" + slug + "/", MaxAge: -1,
+		Name: accountCookie, Value: "", Path: "/", MaxAge: -1,
+		HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode,
+	})
+	if slug != "" {
+		s.clearLegacy(w, slug)
+	}
+}
+
+// clearLegacy removes a business address's old login cookie (FOR ONE RELEASE, D64).
+func (s *Server) clearLegacy(w http.ResponseWriter, slug string) {
+	http.SetCookie(w, &http.Cookie{
+		Name: legacyCookie, Value: "", Path: "/t/" + slug + "/", MaxAge: -1,
+		HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// setLast remembers on this device the business just used, where "/" goes next time. It holds only
+// the address, which whoever uses the device already knows.
+func (s *Server) setLast(w http.ResponseWriter, slug string) {
+	http.SetCookie(w, &http.Cookie{
+		Name: lastCookie, Value: slug, Path: "/", MaxAge: 365 * 24 * 60 * 60,
 		HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteLaxMode,
 	})
 }

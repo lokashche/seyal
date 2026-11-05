@@ -425,16 +425,28 @@ func toFloat(v any) (float64, bool) {
 	return 0, false
 }
 
-// NewPassword gives the person with this email a new random password (auth.NewPassword) and returns
-// it. It is shown once and never stored.
-func NewPassword(ctx context.Context, app *pgxpool.Pool, tenantID, email string) (string, error) {
+// NewPassword gives the login with this email a new random password (auth.NewPassword), making the
+// login if there is none, and returns the password: shown once and never stored. The password
+// changes in every business the login already belongs to. With a tenantID, the login is also linked
+// to that business's person with this email (an error if there is none, or if that person already
+// has another login). Everything happens in one transaction: on an error nothing changes.
+func NewPassword(ctx context.Context, app *pgxpool.Pool, email, tenantID string) (string, error) {
 	var password string
-	err := db.WithTenant(ctx, app, tenantID, func(tx pgx.Tx) error {
-		id, err := people.ByEmail(ctx, tx, email)
+	var err error
+	if tenantID == "" {
+		err = db.WithServer(ctx, app, func(tx pgx.Tx) error {
+			var err error
+			password, _, err = auth.NewPassword(ctx, tx, email, "")
+			return err
+		})
+		return password, err
+	}
+	err = db.WithTenant(ctx, app, tenantID, func(tx pgx.Tx) error {
+		personID, err := people.ByEmail(ctx, tx, email)
 		if err != nil {
 			return err
 		}
-		password, err = auth.NewPassword(ctx, tx, id, ledger.SystemActor)
+		password, _, err = auth.NewPassword(ctx, tx, email, personID)
 		return err
 	})
 	return password, err

@@ -116,9 +116,7 @@ func runServe(out io.Writer) error {
 	}()
 
 	fmt.Fprintf(out, "Seyal is running. Press Ctrl+C to stop.\n")
-	for _, t := range tenants {
-		fmt.Fprintf(out, "  http://%s/t/%s/\n", addr, t.Slug)
-	}
+	fmt.Fprintf(out, "  Log in at http://%s/\n", addr)
 	if err := hs.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

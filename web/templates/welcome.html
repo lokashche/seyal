@@ -8,6 +8,18 @@
     <p class="small">Ask an admin in your business for a new link. If you have already set your password,
       <a href="/t/{{$.Slug}}/login">log in</a>.</p>
   </div>
+  {{else if .Elsewhere}}
+  <div class="card">
+    <h1>Seyal<span class="tamil" lang="ta">செயல்</span></h1>
+    <p class="lede">Welcome to {{$.Business}}, {{.Name}}.</p>
+    {{if .Linked}}
+    <p class="small">Your Seyal login, {{.Email}}, is also used for another business, so a link from
+      {{$.Business}} can't change its password. Ask whoever runs this Seyal server for a new password.</p>
+    {{else}}
+    <p class="small">{{.Email}} already has a Seyal login that is also used for another business, so
+      this link can't set its password. Ask whoever runs this Seyal server to add you to {{$.Business}}.</p>
+    {{end}}
+  </div>
   {{else}}
   <form method="post" class="card">
     <h1>Seyal<span class="tamil" lang="ta">செயல்</span></h1>

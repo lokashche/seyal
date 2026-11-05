@@ -268,6 +268,8 @@ code, .code { font-family: var(--f-mono); font-size: 12.5px; }
 .card .error { background: var(--warn-soft); color: var(--warn); padding: 8px 11px; border-radius: var(--r); margin: 0; font-size: 13.5px; }
 .card .btn { justify-content: center; padding: 9px 14px; }
 .card .small { font-size: 12.5px; }
+.card .business-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.card .business-list .btn { width: 100%; }
 .stack { width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 12px; }
 .card.signed-in { flex-direction: row; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 18px; }
 /* The Me page */

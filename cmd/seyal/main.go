@@ -80,7 +80,7 @@ Commands:
   check          verify the integrity of the playbooks and master data
   import FILE    create or update a business from a set-up file
   seed           load the fictional demo business and print its logins
-  set-password   give a person a new password (--business SLUG --email EMAIL)
+  set-password   give a login a new password (--email EMAIL [--business SLUG])
   help           show this help
 `, appName)
 }

@@ -2,14 +2,10 @@
 
 package auth
 
-// One login for a person in any number of businesses (D64, migration 00015). A login (accounts) is
-// an email and one password for the whole server; in each business it reaches one person
-// (persons.account_id). Passwords are checked only inside the database, by account_check(): Go
-// makes bcrypt hashes for new passwords but never reads one back.
-//
-// This file sits beside the older one-login-per-person code in auth.go, which the web app still
-// uses. When that code is removed (build part 3), CheckIn takes over Check's name and place, and
-// LogOut, LogOutEverywhere, ChangeAccountPassword and NewAccountPassword may drop to the old names.
+// One login for a person in any number of businesses (D64, migrations 00015 and 00016). A login
+// (accounts) is an email and one password for the whole server; in each business it reaches one
+// person (persons.account_id). Passwords are checked only inside the database, by account_check():
+// Go makes bcrypt hashes for new passwords but never reads one back.
 
 import (
 	"context"
@@ -49,7 +45,7 @@ type Business struct {
 
 // LogIn checks an email and password and starts a login session, for every business the login
 // belongs to. It returns the token for the browser's cookie. No ledger event is written: no business
-// has been opened yet (CheckIn records that). tx must come from db.WithServer.
+// has been opened yet (Check records that). tx must come from db.WithServer.
 func LogIn(ctx context.Context, tx pgx.Tx, email, password, userAgent string) (token string, a Account, err error) {
 	a.Email = strings.ToLower(strings.TrimSpace(email))
 	// First wait for any password change of this login still in progress (it holds the row FOR
@@ -90,7 +86,7 @@ func startLogin(ctx context.Context, tx pgx.Tx, accountID, userAgent string) (to
 }
 
 // CheckAccount returns the login for a token from a cookie, or ErrNoSession. It is for pages
-// outside any business (choosing one); inside a business use CheckIn. Any transaction will do.
+// outside any business (choosing one); inside a business use Check. Any transaction will do.
 func CheckAccount(ctx context.Context, tx pgx.Tx, token string) (Account, error) {
 	if token == "" {
 		return Account{}, ErrNoSession
@@ -107,7 +103,7 @@ func CheckAccount(ctx context.Context, tx pgx.Tx, token string) (Account, error)
 	return a, err
 }
 
-// CheckIn returns the session for a login token inside the current business, or ErrNoSession if the
+// Check returns the session for a login token inside the current business, or ErrNoSession if the
 // token doesn't work or the login has no active person here (not a member, disabled, or unlinked:
 // refused in this business at once, still fine in the others).
 //
@@ -116,7 +112,7 @@ func CheckAccount(ctx context.Context, tx pgx.Tx, token string) (Account, error)
 // once give one entry and one event: the second waits on the first's row and then adds nothing.
 // An entry that was ended (the person's sessions were ended here, e.g. on being unlinked) no longer
 // counts: the next request records a new one. tx must come from db.WithTenant.
-func CheckIn(ctx context.Context, tx pgx.Tx, token, userAgent string) (Session, error) {
+func Check(ctx context.Context, tx pgx.Tx, token, userAgent string) (Session, error) {
 	if token == "" {
 		return Session{}, ErrNoSession
 	}
@@ -232,6 +228,10 @@ func linkedElsewhere(ctx context.Context, tx pgx.Tx, accountID string) (bool, er
 
 // LogOut ends a login session, in every business. Each business it was used in records
 // person.logged_out; the others record nothing. Any transaction will do.
+//
+// FOR ONE RELEASE (D64): it also ends the login's people's old per-business sessions, in every
+// business. Otherwise an old cookie for another business address, still in this browser, would be
+// swapped for a new login session on the next visit (Upgrade), and log the device straight back in.
 func LogOut(ctx context.Context, tx pgx.Tx, token string) error {
 	login := fingerprint(token)
 	var accountID string
@@ -250,11 +250,21 @@ func LogOut(ctx context.Context, tx pgx.Tx, token string) error {
 			UPDATE sessions SET ended_at = now()
 			WHERE tenant_id = current_tenant() AND account_session = $1 AND ended_at IS NULL
 			RETURNING person_id::text`, login).Scan(&personID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil // never opened this business with this session
-		}
-		if err != nil {
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) { // no row: never opened this business with this session
 			return err
+		}
+		old, err := tx.Exec(ctx, `
+			UPDATE sessions SET ended_at = now()
+			WHERE tenant_id = current_tenant() AND person_id::text = $1 AND account_session IS NULL AND ended_at IS NULL`,
+			b.PersonID)
+		if err != nil {
+			return fmt.Errorf("auth: end old sessions: %w", err)
+		}
+		if personID == "" && old.RowsAffected() == 0 {
+			return nil // nothing was open here
+		}
+		if personID == "" {
+			personID = b.PersonID
 		}
 		_, err = ledger.Append(ctx, tx, ledger.Event{
 			Kind: "person.logged_out", SubjectType: "person", SubjectID: personID,
@@ -337,12 +347,18 @@ func setPassword(ctx context.Context, tx pgx.Tx, accountID, password string, sys
 		if system {
 			by = ledger.SystemActor
 		}
-		_, err := ledger.Append(ctx, tx, ledger.Event{
-			Kind: "person.login_set", SubjectType: "person", SubjectID: b.PersonID,
-			Payload: map[string]string{"email": email},
-		}.By(by))
-		return err
+		return loginSet(ctx, tx, b.PersonID, email, by)
 	})
+}
+
+// loginSet records in the current business that a person's login got a new password: the email
+// only, never the password or its hash.
+func loginSet(ctx context.Context, tx pgx.Tx, personID, email string, by ledger.Actor) error {
+	_, err := ledger.Append(ctx, tx, ledger.Event{
+		Kind: "person.login_set", SubjectType: "person", SubjectID: personID,
+		Payload: map[string]string{"email": email},
+	}.By(by))
+	return err
 }
 
 // lockAccount locks a login's row until the transaction ends and returns its email. Changes to one
@@ -355,10 +371,10 @@ func lockAccount(ctx context.Context, tx pgx.Tx, accountID string) (email string
 	return email, err
 }
 
-// ChangeAccountPassword lets a login's holder replace its password, after giving the current one.
+// ChangePassword lets a login's holder replace its password, after giving the current one.
 // It ends all the login's sessions in every business; the caller logs them in again on this device.
 // Any transaction will do.
-func ChangeAccountPassword(ctx context.Context, tx pgx.Tx, accountID, current, next string) error {
+func ChangePassword(ctx context.Context, tx pgx.Tx, accountID, current, next string) error {
 	email, err := lockAccount(ctx, tx, accountID)
 	if err != nil {
 		return err
@@ -378,25 +394,41 @@ func ChangeAccountPassword(ctx context.Context, tx pgx.Tx, accountID, current, n
 	return setPassword(ctx, tx, accountID, next, false)
 }
 
-// NewAccountPassword gives the login with this email a new random password, making the login if
+// NewPassword gives the login with this email a new random password, making the login if
 // there is none, and returns the password (shown once, never stored) and the login's id. It is for
 // Seyal itself only (the operator's `seyal set-password`, the demo seed), so the password is never
 // a temporary one and the ledger records Seyal as the actor. Passwords are 16 characters from A-Z and
-// 2-7, so there's no 0/O or 1/l to mix up when reading one out. Any transaction will do.
-func NewAccountPassword(ctx context.Context, tx pgx.Tx, email string) (password, accountID string, err error) {
+// 2-7, so there's no 0/O or 1/l to mix up when reading one out.
+//
+// With a personID (a person of the current business, tx from db.WithTenant), the login is first
+// linked to that person (Link, "operator"), so this business records the new password too.
+// Otherwise any transaction will do.
+func NewPassword(ctx context.Context, tx pgx.Tx, email, personID string) (password, accountID string, err error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	if !strings.Contains(email, "@") {
 		return "", "", errors.New("that doesn't look like an email address")
 	}
 	password = rand.Text()[:16]
-	accountID, err = findAccount(ctx, tx, email)
-	created := false
-	if err == nil && accountID == "" {
-		// A new login reaches nobody yet: no sessions to end, no ledger to write.
-		accountID, created, err = addAccount(ctx, tx, email, password)
+	if accountID, err = findAccount(ctx, tx, email); err != nil {
+		return "", "", err
 	}
-	if err == nil && !created {
+	created := false
+	if accountID == "" {
+		if accountID, created, err = addAccount(ctx, tx, email, password); err != nil {
+			return "", "", err
+		}
+	}
+	if personID != "" {
+		if err := Link(ctx, tx, accountID, personID, "operator", ledger.SystemActor); err != nil {
+			return "", "", err
+		}
+	}
+	switch {
+	case !created:
 		err = setPassword(ctx, tx, accountID, password, true)
+	case personID != "":
+		// A new login reaches only this person: no other sessions to end, no other ledger to write.
+		err = loginSet(ctx, tx, personID, email, ledger.SystemActor)
 	}
 	if err != nil {
 		return "", "", err
@@ -446,7 +478,8 @@ func addAccount(ctx context.Context, tx pgx.Tx, email, password string) (id stri
 // records person.account_linked with how ("link" for a set-your-password link, "operator" for the
 // operator's command). The person must be active and have the login's email; a person already
 // reached by another login is never moved to this one, and a business has at most one person per
-// login. Linking twice changes nothing. tx must come from db.WithTenant.
+// login. The person's open sessions here end. Linking twice changes nothing. tx must come from
+// db.WithTenant.
 func Link(ctx context.Context, tx pgx.Tx, accountID, personID, how string, by ledger.Actor) error {
 	email, err := lockAccount(ctx, tx, accountID)
 	if err != nil {
@@ -484,6 +517,11 @@ func Link(ctx context.Context, tx pgx.Tx, accountID, personID, how string, by le
 		UPDATE persons SET account_id = $1 WHERE tenant_id = current_tenant() AND id::text = $2`,
 		accountID, personID); err != nil {
 		return fmt.Errorf("auth: link: %w", err)
+	}
+	// The person's sessions here from before the link end, so none of them (an old per-business one,
+	// maybe someone else's) can be swapped for a session of the login and reach its other businesses.
+	if _, err := endSessions(ctx, tx, personID); err != nil {
+		return err
 	}
 	_, err = ledger.Append(ctx, tx, ledger.Event{
 		Kind: "person.account_linked", SubjectType: "person", SubjectID: personID,

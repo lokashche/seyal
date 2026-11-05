@@ -199,6 +199,24 @@ func TestAccounts(t *testing.T) {
 		}
 	})
 
+	t.Run("the app changes only a person's name, email, status and login (00016)", func(t *testing.T) {
+		for _, set := range []string{"password_hash = NULL", "password_temporary = true", "tenant_id = tenant_id", "id = id", "created_at = now()"} {
+			err := db.WithTenant(ctx, app, t1, func(tx pgx.Tx) error {
+				_, err := tx.Exec(ctx, "UPDATE persons SET "+set+" WHERE id = $1", unlinked)
+				return err
+			})
+			wantCode(t, err, codeNoPrivilege)
+		}
+		err := db.WithTenant(ctx, app, t1, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE persons SET display_name = display_name, login_email = login_email,
+				status = status, account_id = account_id WHERE id = $1`, unlinked)
+			return err
+		})
+		if err != nil {
+			t.Errorf("changing name, email, status and login = %v", err)
+		}
+	})
+
 	t.Run("a login sees exactly its own people, and only with no business set", func(t *testing.T) {
 		if got := visiblePeople(t, app, db.Scope{Account: a}); !sameSet(got, p1, p2) {
 			t.Errorf("login A sees %v, want its two people %s and %s", got, p1, p2)

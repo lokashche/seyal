@@ -139,7 +139,7 @@ func connect(t *testing.T) (owner, app *pgxpool.Pool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := migrations.Up(ctx, ownerURL); err != nil {
+	if _, err := migrations.Up(ctx, ownerURL, nil); err != nil {
 		t.Fatalf("migrate test database: %v", err)
 	}
 	if owner, err = db.Open(ctx, ownerURL); err != nil {

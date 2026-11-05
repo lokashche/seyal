@@ -33,7 +33,7 @@ func devServe(args []string, out io.Writer) error {
 		}
 		env = append(env, "SEYAL_ADDR=0.0.0.0:"+port, "SEYAL_SECURE_COOKIES=false")
 		for _, ip := range lanAddresses() {
-			fmt.Fprintf(out, "dev serve: on a phone on the same Wi-Fi, open http://%s:%s/t/<business>/\n", ip, port)
+			fmt.Fprintf(out, "dev serve: on a phone on the same Wi-Fi, log in at http://%s:%s/\n", ip, port)
 		}
 		fmt.Fprintln(out, "dev serve: (if Windows asks, allow it on Private networks only)")
 	}

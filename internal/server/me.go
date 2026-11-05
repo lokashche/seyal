@@ -44,10 +44,10 @@ func (s *Server) mePage(w http.ResponseWriter, r *http.Request, c *call) {
 	s.render(w, r, http.StatusOK, "me", c.page(pv))
 }
 
-// logoutEverywhere ends every session of the person, this one included.
+// logoutEverywhere ends every session of the login, this one included, in every business.
 func (s *Server) logoutEverywhere(w http.ResponseWriter, r *http.Request, c *call) {
-	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
-		return auth.LogoutEverywhere(r.Context(), tx, c.session.PersonID)
+	err := db.WithServer(r.Context(), s.app, func(tx pgx.Tx) error {
+		return auth.LogOutEverywhere(r.Context(), tx, c.session.AccountID)
 	})
 	if err != nil {
 		s.fail(w, r, err)

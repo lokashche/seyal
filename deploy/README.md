@@ -168,6 +168,7 @@ docker compose run --rm seyal seed # optional: the fictional demo business, to p
 cd ~/seyal/deploy
 nano .env                                 # SEYAL_IMAGE=ghcr.io/<owner>/seyal:<new version>
 docker compose pull && docker compose up -d   # migrations run first, automatically
+docker compose logs migrate               # what was applied, and any note a migration left for you
 ```
 
 To go back, set the previous version and run the same two commands (a newer database migration may
