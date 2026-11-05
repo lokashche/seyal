@@ -71,8 +71,8 @@ func TestImportDemoBusiness(t *testing.T) {
 			if err := tx.QueryRow(ctx, "SELECT count(*) FROM person_roles").Scan(&roles); err != nil {
 				return err
 			}
-			if people != 6 || roles != 5 {
-				t.Errorf("people = %d, role grants = %d; want 6 and 5", people, roles)
+			if people != 10 || roles != 10 {
+				t.Errorf("people = %d, role grants = %d; want 10 and 10", people, roles)
 			}
 			books, err := master.Get(ctx, tx, "work_type", "monthly-books")
 			if err != nil {

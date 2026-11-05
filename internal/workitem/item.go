@@ -327,8 +327,12 @@ func (s session) field(key string) *playbook.Field {
 	return nil
 }
 
-func (s session) engineItem(it Item) engine.Item {
-	return engine.Item{State: it.State, Version: it.Version, Fields: it.Fields}
+func (s session) engineItem(it Item) engine.Item { return it.Engine() }
+
+// Engine is the part of the item the engine's rules need: its state, fields and who has it.
+func (it Item) Engine() engine.Item {
+	return engine.Item{State: it.State, Version: it.Version, Fields: it.Fields,
+		Assignee: it.AssigneeID, Team: it.Team, Starter: it.CreatedBy}
 }
 
 // actorPerson is the person behind an action: the person themselves, or whom the agent acted for.

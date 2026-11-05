@@ -18,6 +18,9 @@ type Item struct {
 	State   string
 	Version int
 	Fields  Fields
+	// Who has it now: one person (Assignee), or a team (the role in Team) while no person does.
+	// Starter is whoever started it. All are person ids or "", and only the who words use them.
+	Assignee, Team, Starter string
 }
 
 var (
@@ -102,8 +105,19 @@ func Actions(p *playbook.Playbook, it Item) []string {
 // move without a condition (the default) is taken then. lookup finds master data for conditions.
 // bySeyal says Seyal itself takes the action; a move marked "by: seyal" refuses anyone else.
 func Transition(p *playbook.Playbook, it Item, action, reason string, lookup MasterLookup, bySeyal bool) (string, error) {
-	known, found := false, -1
-	for i, t := range p.Transitions {
+	t, err := Pick(p, it, action, lookup)
+	if err != nil {
+		return "", err
+	}
+	return Check(p, it, t, reason, bySeyal)
+}
+
+// Pick returns the line of the process that action takes from the item's state now: the first line
+// whose if-condition is true, or the one without a condition. Callers that need to know who may take
+// it (the line's who words) pick first, then Check.
+func Pick(p *playbook.Playbook, it Item, action string, lookup MasterLookup) (playbook.Transition, error) {
+	known := false
+	for _, t := range p.Transitions {
 		if t.Action != action {
 			continue
 		}
@@ -114,22 +128,24 @@ func Transition(p *playbook.Playbook, it Item, action, reason string, lookup Mas
 		if t.If != nil {
 			r, err := Eval(p, *t.If, it.Fields, lookup)
 			if err != nil {
-				return "", err
+				return playbook.Transition{}, err
 			}
 			if r != True {
 				continue
 			}
 		}
-		found = i
-		break
+		return t, nil
 	}
-	switch {
-	case !known:
-		return "", fmt.Errorf("engine: unknown action %q", action)
-	case found < 0:
-		return "", fmt.Errorf("%s while %s: %w", action, it.State, ErrNotNow)
+	if !known {
+		return playbook.Transition{}, fmt.Errorf("engine: unknown action %q", action)
 	}
-	t := p.Transitions[found]
+	return playbook.Transition{}, fmt.Errorf("%s while %s: %w", action, it.State, ErrNotNow)
+}
+
+// Check checks the rest of a picked line (who takes it, needed fields, a reason) and returns the
+// state it moves to.
+func Check(p *playbook.Playbook, it Item, t playbook.Transition, reason string, bySeyal bool) (string, error) {
+	action := t.Action
 	if t.By == "seyal" && !bySeyal {
 		return "", fmt.Errorf("%s happens by itself: %w", action, ErrNotNow)
 	}
@@ -159,11 +175,21 @@ func IsClosed(p *playbook.Playbook, state string) bool {
 
 // CheckSet checks that a person may set field key to v on the item now. A nil v clears the field.
 func CheckSet(p *playbook.Playbook, it Item, key string, v any) error {
+	return checkSet(p, it, key, v, false)
+}
+
+// CheckFill is CheckSet for Seyal filling a field on its own, for example when linked work reports
+// back. Seyal may fill read-only fields: they are the ones "filled in automatically".
+func CheckFill(p *playbook.Playbook, it Item, key string, v any) error {
+	return checkSet(p, it, key, v, true)
+}
+
+func checkSet(p *playbook.Playbook, it Item, key string, v any, auto bool) error {
 	i := slices.IndexFunc(p.Fields, func(f playbook.Field) bool { return f.Key == key })
 	switch {
 	case i < 0:
 		return fmt.Errorf("engine: unknown field %q", key)
-	case p.Fields[i].Readonly:
+	case p.Fields[i].Readonly && !auto:
 		return fmt.Errorf("%s is filled in automatically and can't be changed", key)
 	case IsClosed(p, it.State):
 		return fmt.Errorf("set %s: %w", key, ErrClosed)

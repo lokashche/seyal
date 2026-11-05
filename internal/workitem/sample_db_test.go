@@ -121,6 +121,23 @@ func TestSampleJobEvaluation(t *testing.T) {
 		t.Errorf("variable price, no fee from Sales: waiting for %v, want ops, sales and owner", got)
 	}
 
+	// The fee Sales proposed is the one Sales last sent (sample 0.5): Ops sends the job back, Sales
+	// agrees a lower fee and sends it again, then Ops raises the fee back up. Sales must confirm it.
+	job4 := act(start("gst", 500000.0).ID, "send_to_ops", f.sales)
+	f.tx(func(tx pgx.Tx) error {
+		job4, err = workitem.Act(f.ctx, tx, job4.ID, "back_to_sales", "the client asked for a lower fee", ledger.PersonActor(f.ops))
+		return err
+	})
+	set(job4.ID, engine.Fields{"fee_agreed": 450000.0}, f.sales)
+	if job4 = act(job4.ID, "send_to_ops", f.sales); job4.Fields["fee_proposed"] != 450000.0 {
+		t.Errorf("sent again at 4500: proposed %v, want the fee Sales last sent", job4.Fields["fee_proposed"])
+	}
+	set(job4.ID, engine.Fields{"fee_agreed": 500000.0}, f.ops)
+	job4 = act(job4.ID, "submit", f.ops)
+	if got := waiting(job4.ID); len(got) != 2 || got[0] != "ops" || got[1] != "sales" {
+		t.Errorf("Ops raised the fee Sales last sent: waiting for %v, want ops and sales", got)
+	}
+
 	f.tx(func(tx pgx.Tx) error {
 		problems, err := audit.CheckTables(f.ctx, tx)
 		if len(problems) > 0 {

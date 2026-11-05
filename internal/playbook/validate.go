@@ -26,7 +26,7 @@ type ValidationError struct {
 }
 
 func (e *ValidationError) Error() string {
-	return fmt.Sprintf("playbook %q has %d problem(s):\n  - %s",
+	return fmt.Sprintf("%s has %d problem(s):\n  - %s", // Name already says what it is
 		e.Name, len(e.Problems), strings.Join(e.Problems, "\n  - "))
 }
 
@@ -171,8 +171,81 @@ func (v *validator) statesAndTransitions() {
 		if t.By != "" && t.By != "seyal" {
 			v.add(`%s: unknown "by" %q (use seyal, or leave it out)`, where, t.By)
 		}
+		if t.By == "seyal" && len(t.Who) > 0 {
+			v.add(`%s: "who" doesn't go with "by: seyal" (only Seyal takes that move)`, where)
+		}
+		v.whoWords(t.Who, where+": who", false)
+		if first := v.firstLine(t.Action); !slices.Equal(first.Who, t.Who) || first.Back != t.Back {
+			v.add(`%s: every line of one move needs the same "who" and "back"`, where)
+		}
+		if t.Back {
+			v.back(t, where)
+		}
 	}
 	v.unique("transitions", actions)
+}
+
+// firstLine returns the first line of a move. One move can have several lines (picked by "if").
+func (v *validator) firstLine(action string) Transition {
+	for _, t := range v.p.Transitions {
+		if t.Action == action {
+			return t
+		}
+	}
+	return Transition{}
+}
+
+// back checks a move that sends work back: it needs a reason, and it may not go into the approvals
+// step, the step after the approvals, or a step with no way out, because going back skips the checks
+// those steps need.
+func (v *validator) back(t Transition, where string) {
+	if t.Needs != "reason" {
+		v.add(`%s: "back: true" needs "needs: reason" (people say why it goes back)`, where)
+	}
+	a := v.p.Approvals
+	switch {
+	case !v.states[t.To]:
+	case a != nil && t.To == a.In:
+		v.add("%s: a move that sends work back can't go into %s, the approvals step", where, t.To)
+	case a != nil && t.To == a.OnComplete:
+		v.add("%s: a move that sends work back can't go into %s, the step after the approvals", where, t.To)
+	case v.p.closed(t.To):
+		v.add("%s: a move that sends work back can't go into %s, which has no way out", where, t.To)
+	}
+}
+
+// closed reports whether state has no way out (no move from it, and it isn't the approvals step).
+// It is the same rule as engine.IsClosed, which this package can't use.
+func (p *Playbook) closed(state string) bool {
+	if p.Approvals != nil && p.Approvals.In == state {
+		return false
+	}
+	return !slices.ContainsFunc(p.Transitions, func(t Transition) bool { return slices.Contains(t.From, state) })
+}
+
+// whoWords checks a list of who words: holder, starter, anyone, role:<role> or field:<person field>.
+// A list that says who may receive the item (passTo) can't name the holder.
+func (v *validator) whoWords(words []string, where string, passTo bool) {
+	for _, w := range words {
+		kind, name, named := strings.Cut(w, ":")
+		switch {
+		case w == "holder" && passTo:
+			v.add("%s: holder can't receive the item, it already has it (use starter, role:<role>, field:<person field> or anyone)", where)
+		case w == "holder" || w == "starter" || w == "anyone":
+		case named && kind == "role":
+			if !v.roles[name] {
+				v.add("%s: unknown role %q (declare it under roles)", where, name)
+			}
+		case named && kind == "field" && strings.Contains(name, "."):
+			v.add("%s: %q must name a person field of this process", where, w)
+		case named && kind == "field":
+			if f := v.fieldRef(name, where); f != nil && f.Type != "person" {
+				v.add("%s: %s needs a person field, %s is %s", where, w, f.Key, f.Type)
+			}
+		default:
+			v.add("%s: unknown word %q (use holder, starter, anyone, role:<role> or field:<person field>)", where, w)
+		}
+	}
 }
 
 func (v *validator) steps() {
@@ -192,6 +265,10 @@ func (v *validator) steps() {
 			}
 		default:
 			v.add(`%s: owner %q: use starter, role:<role> or field:<person field>`, where, st.Owner)
+		}
+		v.whoWords(st.PassTo, where+": pass_to", true)
+		if st.ReturnsTo != "" && st.ReturnsTo != "last" {
+			v.add(`%s: unknown "returns_to" %q (use last, or leave it out)`, where, st.ReturnsTo)
 		}
 		for _, list := range []struct {
 			name string
@@ -214,6 +291,18 @@ func (v *validator) approvals() {
 	v.state(a.In, "approvals: in")
 	v.state(a.OnComplete, "approvals: on_complete")
 	v.state(a.OnReject, "approvals: on_reject")
+	// A refusal that sends work back works like a move marked back, so it may go only where such a
+	// move may go (see back).
+	if a.OnRejectBack && v.states[a.OnReject] {
+		switch {
+		case a.OnReject == a.In:
+			v.add("approvals: on_reject_back: a refusal that sends work back can't go into %s, the approvals step", a.OnReject)
+		case a.OnReject == a.OnComplete:
+			v.add("approvals: on_reject_back: a refusal that sends work back can't go into %s, the step after the approvals", a.OnReject)
+		case v.p.closed(a.OnReject):
+			v.add("approvals: on_reject_back: a refusal that sends work back can't go into %s, which has no way out", a.OnReject)
+		}
+	}
 	if len(a.Slots) == 0 {
 		v.add("approvals: at least one slot is required")
 	}
@@ -239,6 +328,9 @@ func (v *validator) condition(c Condition, where string) {
 			used = append(used, name)
 		}
 	}
+	if c.Filled != nil {
+		used = append(used, "filled")
+	}
 	kinds := 0
 	for _, present := range []bool{len(c.Any) > 0, len(c.All) > 0, c.Field != ""} {
 		if present {
@@ -257,12 +349,19 @@ func (v *validator) condition(c Condition, where string) {
 	}
 	if c.Field == "" {
 		if len(used) > 0 || c.IfMissing != nil {
-			v.add("%s: eq, ne, lt, gt and if_missing need a field", where)
+			v.add("%s: eq, ne, lt, gt, filled and if_missing need a field", where)
 		}
 		return
 	}
 	if len(used) != 1 {
-		v.add("%s: field %q needs exactly one of eq, ne, lt, gt", where, c.Field)
+		v.add("%s: field %q needs exactly one of eq, ne, lt, gt, filled", where, c.Field)
+		return
+	}
+	if used[0] == "filled" {
+		v.fieldRef(c.Field, where)
+		if c.IfMissing != nil {
+			v.add("%s: if_missing doesn't go with filled (filled already says what an empty field means)", where)
+		}
 		return
 	}
 
@@ -296,6 +395,9 @@ func (v *validator) deadlinesAndActions() {
 		where := "on " + state
 		v.state(state, where)
 		for _, a := range v.p.On[state] {
+			if a.IfEmpty && a.Do != "copy" {
+				v.add("%s: if_empty only goes with copy", where)
+			}
 			switch a.Do {
 			case "post":
 				if a.Text == "" || a.To != "" || a.From != "" {
@@ -338,6 +440,51 @@ func (v *validator) deadlinesAndActions() {
 			}
 		}
 	}
+}
+
+// ReservedMoves are Seyal's own chat words for moving work between people (D68). A new process may
+// not name a move after one of them, so a typed "take it" always means the same thing.
+var ReservedMoves = []string{"pass", "pass_on", "take", "give_back", "send_back"}
+
+// CheckNew runs the checks that apply only to a version being registered for the first time. Rule:
+// a check added after versions were stored goes here, never into Validate, because Validate also
+// runs when a stored version is opened, and a business's work must keep opening after an upgrade.
+func (p *Playbook) CheckNew() error {
+	var problems []string
+	// Passing an item on in a step owned by a person field changes that field, so the version goes up;
+	// in the approvals step, or the step after it, that would throw away approvals already given.
+	if a := p.Approvals; a != nil {
+		for _, state := range []string{a.In, a.OnComplete} {
+			if kind, _, _ := strings.Cut(p.Steps[state].Owner, ":"); kind == "field" {
+				problems = append(problems, fmt.Sprintf(
+					"step %s: owner: the approvals step and the step after it can't be owned by a person field (use starter or role:<role>)", state))
+			}
+		}
+	}
+	var seen, seenField []string
+	for _, t := range p.Transitions {
+		if slices.Contains(ReservedMoves, t.Action) && !slices.Contains(seen, t.Action) {
+			seen = append(seen, t.Action)
+			problems = append(problems, fmt.Sprintf(
+				"transition %s: %q is one of Seyal's own words (%s); give the move another name",
+				t.Action, t.Action, strings.Join(ReservedMoves, ", ")))
+		}
+		// "field:<f>" in a move's who lets the person named in f take the move. Until only the holder
+		// or an admin may change such a field (moving-work design, decision 14), whoever may change the
+		// details could name themselves and take the move, so a new version may not use it yet (D69).
+		for _, w := range t.Who {
+			if strings.HasPrefix(w, "field:") && !slices.Contains(seenField, t.Action) {
+				seenField = append(seenField, t.Action)
+				problems = append(problems, fmt.Sprintf(
+					"transition %s: who: %q can't be used yet: the person field isn't protected from being changed by others (use holder, starter, role:<role> or anyone)",
+					t.Action, w))
+			}
+		}
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	return &ValidationError{Name: fmt.Sprintf("playbook %q", p.ID), Problems: problems}
 }
 
 // unique reports keys that are badly formed or repeated, and returns the set of keys.

@@ -97,6 +97,39 @@ func TestRegister(t *testing.T) {
 		}
 	})
 
+	// Seyal's own chat words are refused as move names only for a version seen for the first time
+	// (D68, decision 24). A version a business stored before keeps working.
+	t.Run("a reserved move name: refused when new, kept when already stored", func(t *testing.T) {
+		withTake := load(t, "action: submit,", "action: take,")
+		fresh, _ := testdb.NewTenant(t, owner, "Playbook Test Fresh") // has no version of it yet
+		err := db.WithTenant(ctx, app, fresh, func(tx pgx.Tx) error {
+			_, _, err := playbook.Register(ctx, tx, withTake)
+			return err
+		})
+		if err == nil || !strings.Contains(err.Error(), "one of Seyal's own words") {
+			t.Fatalf("register a new version with a move named take = %v, want refusal", err)
+		}
+		older, _ := testdb.NewTenant(t, owner, "Playbook Test Older")
+		// As if an older Seyal had registered it (the app itself can no longer do that).
+		if err := db.WithTenant(ctx, owner, older, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `INSERT INTO playbook_versions (tenant_id, playbook_id, version, content_sha256, source)
+				VALUES (current_tenant(), $1, $2, $3, $4)`, withTake.ID, withTake.Version, withTake.Hash[:], string(withTake.Source))
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		err = db.WithTenant(ctx, app, older, func(tx pgx.Tx) error {
+			_, isNew, err := playbook.Register(ctx, tx, withTake)
+			if err == nil && isNew {
+				t.Error("the stored version was registered again")
+			}
+			return err
+		})
+		if err != nil {
+			t.Errorf("a stored version with a move named take stopped working: %v", err)
+		}
+	})
+
 	t.Run("another business registers its own copy", func(t *testing.T) {
 		other, _ := testdb.NewTenant(t, owner, "Playbook Test B")
 		err := db.WithTenant(ctx, app, other, func(tx pgx.Tx) error {

@@ -68,6 +68,13 @@ type Transition struct {
 	Needs  string     `yaml:"needs"` // "" or "reason"
 	If     *Condition `yaml:"if"`    // optional: only when this is true
 	By     string     `yaml:"by"`    // "" (anyone) or "seyal": only Seyal takes it, e.g. when linked work is done
+	// Who may take the move, in who words (holder, starter, role:<role>, field:<person field>,
+	// anyone). Empty means the default: whoever has the item and whoever started it, plus admins.
+	// Every line of one move has the same Who.
+	Who []string `yaml:"who"`
+	// Back marks a move that sends work back to an earlier step (it needs a reason). Every line of
+	// one move has the same Back.
+	Back bool `yaml:"back"`
 }
 
 // Step says, for one state, who has the item and what Seyal asks for. States without a step keep
@@ -78,6 +85,13 @@ type Step struct {
 	Owner string   `yaml:"owner"`
 	Asks  []string `yaml:"asks"`  // fields Seyal asks for in this state, in this order
 	Needs []string `yaml:"needs"` // fields a required_filled move out of this state needs
+	// PassTo is who may receive the item in this state, in who words (not holder). Empty means the
+	// default: in a step owned by a role, people with that role or the role's team; elsewhere any
+	// active person.
+	PassTo []string `yaml:"pass_to"`
+	// ReturnsTo "last" gives work that comes into this state again to whoever last had it here,
+	// instead of to the owner. Empty means the owner, always.
+	ReturnsTo string `yaml:"returns_to"`
 }
 
 // Approvals says who must approve, while the item is in state In.
@@ -85,7 +99,10 @@ type Approvals struct {
 	In         string `yaml:"in"`
 	OnComplete string `yaml:"on_complete"`
 	OnReject   string `yaml:"on_reject"`
-	Slots      []Slot `yaml:"slots"`
+	// OnRejectBack makes a refusal send work back (like a move marked back): to whoever last had
+	// the OnReject state, without running its on: actions again.
+	OnRejectBack bool   `yaml:"on_reject_back"`
+	Slots        []Slot `yaml:"slots"`
 }
 
 // Slot is one approval that must be given by someone holding Role.
@@ -109,6 +126,9 @@ type Condition struct {
 	// answer is "unknown", and approvals then take the safe side (they ask). Give it when a missing
 	// value has a clear meaning, e.g. a list entry never marked new isn't new: if_missing: false.
 	IfMissing *bool `yaml:"if_missing"`
+	// Filled asks whether the field has a value (true) or is still empty (false). It is used
+	// instead of eq, ne, lt or gt, and its answer is never "unknown".
+	Filled *bool `yaml:"filled"`
 }
 
 // Value is what a field is compared with: a literal (fail, true, 100) or another field
@@ -137,13 +157,14 @@ type Deadline struct {
 
 // Action is something Seyal does automatically, e.g. post a message or assign someone.
 type Action struct {
-	Do      string            `yaml:"do"`      // post, assign, copy, start, tell_parent
-	Text    string            `yaml:"text"`    // for post
-	To      string            `yaml:"to"`      // person field, for assign; the field to fill, for copy
-	From    string            `yaml:"from"`    // the field to copy from, for copy
-	Process string            `yaml:"process"` // for start: the id of the process to start as linked work
-	Action  string            `yaml:"action"`  // for tell_parent: the parent's action to take
-	Copy    map[string]string `yaml:"copy"`    // for start: child field → this field; for tell_parent: parent field → this field
+	Do      string            `yaml:"do"`       // post, assign, copy, start, tell_parent
+	Text    string            `yaml:"text"`     // for post
+	To      string            `yaml:"to"`       // person field, for assign; the field to fill, for copy
+	From    string            `yaml:"from"`     // the field to copy from, for copy
+	Process string            `yaml:"process"`  // for start: the id of the process to start as linked work
+	Action  string            `yaml:"action"`   // for tell_parent: the parent's action to take
+	Copy    map[string]string `yaml:"copy"`     // for start: child field → this field; for tell_parent: parent field → this field
+	IfEmpty bool              `yaml:"if_empty"` // for copy: only while the field to fill is still empty
 }
 
 // Parse reads one playbook from YAML. Unknown keys are errors, so typos are caught.

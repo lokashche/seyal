@@ -15,6 +15,7 @@ import (
 
 	"seyal/internal/ask"
 	"seyal/internal/db"
+	"seyal/internal/engine"
 	"seyal/internal/ledger"
 	"seyal/internal/playbook"
 )
@@ -179,6 +180,12 @@ func (s *Server) processView(u playbook.InUse, lib *playbook.Library) *processVi
 		if t.Needs == "reason" {
 			line += ", with a reason"
 		}
+		if t.Back {
+			line += " (sends work back)"
+		}
+		if len(t.Who) > 0 {
+			line += "; only " + engine.DescribeWho(t.Who, human, d.label)
+		}
 		pv.Actions = append(pv.Actions, line)
 	}
 	if a := p.Approvals; a != nil {
@@ -288,6 +295,10 @@ func (d describer) cond(c playbook.Condition) string {
 	var op string
 	var v *playbook.Value
 	switch {
+	case c.Filled != nil && *c.Filled:
+		return d.label(c.Field) + " is filled in"
+	case c.Filled != nil:
+		return d.label(c.Field) + " is empty"
 	case c.Eq != nil:
 		op, v = "is", c.Eq
 	case c.Ne != nil:
@@ -413,8 +424,13 @@ func (s *Server) changeProcess(w http.ResponseWriter, r *http.Request, c *call) 
 			if err != nil {
 				return err
 			}
+			if err := playbook.Use(r.Context(), tx, versionID, by); err != nil {
+				return err
+			}
 			notice = "New work now starts on template version " + t.Version + "."
-			return playbook.Use(r.Context(), tx, versionID, by)
+			behind, err := s.startedBehind(r, tx, t)
+			notice += behind
+			return err
 		case "save":
 			p, err := playbook.Parse([]byte(strings.ReplaceAll(r.PostFormValue("source"), "\r\n", "\n")))
 			if err != nil {
@@ -451,6 +467,31 @@ func (s *Server) changeProcess(w http.ResponseWriter, r *http.Request, c *call) 
 		return
 	}
 	s.showProcesses(w, r, c, id, http.StatusOK, notice, "")
+}
+
+// startedBehind says which processes t starts as linked work are on another version than their
+// template. Switching one process to its template doesn't switch the ones it starts, because the
+// business may have changed them on purpose; the notice says so, so the admin can switch them too.
+// It returns "" when there are none.
+func (s *Server) startedBehind(r *http.Request, tx pgx.Tx, t *playbook.Playbook) (string, error) {
+	inUse, err := playbook.ListInUse(r.Context(), tx)
+	if err != nil {
+		return "", err
+	}
+	var notes []string
+	for _, id := range playbook.StartsProcesses(t) {
+		tmpl := s.lib.Playbooks[id]
+		if tmpl == nil {
+			continue
+		}
+		for _, u := range inUse {
+			if u.PlaybookID == id && u.Current.Version != tmpl.Version {
+				notes = append(notes, fmt.Sprintf(" It starts %s, which is still on version %s; its template is version %s. Switch that one to its template too if you want both to work together as the templates do.",
+					sentence(id), u.Current.Version, tmpl.Version))
+			}
+		}
+	}
+	return strings.Join(notes, ""), nil
 }
 
 // checkForBusiness checks a process against the business's own lists.

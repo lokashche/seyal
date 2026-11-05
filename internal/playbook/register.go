@@ -17,8 +17,8 @@ import (
 // Register records this playbook version for the current tenant and returns its id. It is safe
 // to call on every start: a version that is already registered with the same content is simply
 // returned (isNew is false). The same id and version with different content is refused, because
-// work items started under the old content must keep pointing at exactly that content.
-// tx must come from db.WithTenant.
+// work items started under the old content must keep pointing at exactly that content. A version
+// seen for the first time must also pass CheckNew. tx must come from db.WithTenant.
 func Register(ctx context.Context, tx pgx.Tx, p *Playbook) (id string, isNew bool, err error) {
 	var storedHash []byte
 	err = tx.QueryRow(ctx, `
@@ -33,6 +33,10 @@ func Register(ctx context.Context, tx pgx.Tx, p *Playbook) (id string, isNew boo
 		}
 		return id, false, nil
 	case !errors.Is(err, pgx.ErrNoRows):
+		return "", false, err
+	}
+	// Only now: a version already stored keeps working even if a later check would refuse it.
+	if err := p.CheckNew(); err != nil {
 		return "", false, err
 	}
 

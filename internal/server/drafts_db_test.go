@@ -151,6 +151,15 @@ func TestDraftThatStaysWrong(t *testing.T) {
 	if n := s.count("SELECT count(*) FROM ai_calls WHERE purpose = 'draft'"); n != 2 {
 		t.Errorf("%d draft calls, want 2 (checking again doesn't call AI)", n)
 	}
+
+	// The checks for a new version apply to a draft too, so it isn't offered for saving and then
+	// refused on Save (a move may not be named after one of Seyal's own words, D68).
+	reserved := strings.Replace(fixed, "action: submit", "action: take", 1)
+	code, page, _ = s.post(l, proc, url.Values{"action": {"recheck"}, "source": {reserved}, "words": {"x"}}, nil)
+	page = html.UnescapeString(page)
+	if code != http.StatusUnprocessableEntity || !strings.Contains(page, "one of Seyal's own words") || strings.Contains(page, "Save and use") {
+		t.Errorf("recheck with a move named take = %d: %s", code, problem(page))
+	}
 }
 
 // TestDraftANewProcess: a new process with a new list, described in words, is saved together.

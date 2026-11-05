@@ -1,8 +1,10 @@
 # Sample playbook: study how to do work the team hasn't done before, before it is planned.
 # Usually started by another process (Job evaluation starts one for a new work type); when it is done,
 # it reports its findings back to that job. Generic example only.
+# Version 0.2 also reports how the work will be done (study_findings on the job), and says who may
+# press each button.
 id: requirement-study
-version: "0.1"
+version: "0.2"
 description: Work out how to do work that is new for the team, how long it takes and who should do it.
 examples:
   - "Study how we would do payroll processing for Acme Traders"
@@ -23,13 +25,17 @@ states: [studying, done, cancelled]
 initial: studying
 
 steps:
-  studying: { owner: "role:ops", asks: [approach, days_needed, people], needs: [approach, days_needed, people] }
+  studying:
+    owner: "role:ops"
+    pass_to: ["role:ops"] # people in Operations, or the Operations team
+    asks: [approach, days_needed, people]
+    needs: [approach, days_needed, people]
 
 transitions:
-  - { action: done, from: [studying], to: done, when: required_filled }
-  - { action: cancel, from: [studying], to: cancelled, needs: reason }
+  - { action: done, from: [studying], to: done, when: required_filled, who: [holder] }
+  - { action: cancel, from: [studying], to: cancelled, needs: reason, who: [holder, starter] }
 
 on:
   done:
     # Tell the job this study came from: its timeline and people come from the findings.
-    - { do: tell_parent, action: study_done, copy: { timeline_days: days_needed, resources: people } }
+    - { do: tell_parent, action: study_done, copy: { timeline_days: days_needed, resources: people, study_findings: approach } }

@@ -43,7 +43,7 @@ func TestReviewFixes(t *testing.T) {
 		item := h.Get("Location") // Arjun started it and has it
 		p := s.logIn(priya)       // ops: neither holder nor starter nor admin
 		_, page, _ := s.get(p, item)
-		if !strings.Contains(page, "or an admin can change this item") || strings.Contains(page, `name="action" value="cancel"`) ||
+		if !strings.Contains(page, "or an admin can change the details of this item. You can read it and write a note.") || strings.Contains(page, `name="action" value="cancel"`) ||
 			strings.Contains(page, `aria-label="Edit `) {
 			t.Errorf("Priya should see the item read-only, without actions or edit links:\n%s", problem(page))
 		}

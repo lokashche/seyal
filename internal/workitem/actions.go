@@ -71,7 +71,7 @@ func Start(ctx context.Context, tx pgx.Tx, in NewItem) (Item, error) {
 		StartedRef:        in.Ref,
 		CreatedBy:         actorPerson(in.By),
 	}
-	if err := s.apply(&it, in.Fields); err != nil {
+	if err := s.apply(&it, in.Fields, in.By.Kind == ledger.System); err != nil {
 		return Item{}, err
 	}
 	if err := s.refresh(&it); err != nil {
@@ -115,7 +115,7 @@ func SetFields(ctx context.Context, tx pgx.Tx, id string, values engine.Fields, 
 		return Item{}, err
 	}
 	before := it.FieldsHash
-	if err := s.apply(&it, values); err != nil {
+	if err := s.apply(&it, values, by.Kind == ledger.System); err != nil {
 		return Item{}, err
 	}
 	if err := s.refresh(&it); err != nil {
@@ -156,17 +156,19 @@ func SetFields(ctx context.Context, tx pgx.Tx, id string, values engine.Fields, 
 	return it, nil
 }
 
-// Act performs one of the playbook's actions, such as submit or cancel.
-// tx must come from db.WithTenant.
+// Act performs one of the playbook's actions, such as submit or cancel. Who may take it is checked on
+// the line of the process the action really takes (its "who", or the default: whoever has the item,
+// whoever started it, or an admin). tx must come from db.WithTenant.
 func Act(ctx context.Context, tx pgx.Tx, id, action, reason string, by ledger.Actor) (Item, error) {
 	it, err := getForUpdate(ctx, tx, id)
 	if err != nil {
 		return Item{}, err
 	}
-	if err := MayChange(ctx, tx, it, by); err != nil {
+	s, err := open(ctx, tx, it.PlaybookVersionID)
+	if err != nil {
 		return Item{}, err
 	}
-	s, err := open(ctx, tx, it.PlaybookVersionID)
+	a, err := s.actor(by)
 	if err != nil {
 		return Item{}, err
 	}
@@ -174,11 +176,25 @@ func Act(ctx context.Context, tx pgx.Tx, id, action, reason string, by ledger.Ac
 	if err != nil {
 		return Item{}, err
 	}
-	to, err := engine.Transition(s.p, s.engineItem(it), action, reason, lookup, by.Kind == ledger.System)
+	eit := s.engineItem(it)
+	line, err := engine.Pick(s.p, eit, action, lookup)
 	if err != nil {
 		return Item{}, err
 	}
 	change := map[string]any{"action": action}
+	if line.By != "seyal" { // Seyal's own moves aren't limited by who; Check refuses them to anyone else
+		ok, asAdmin := engine.Allowed(s.p, eit, line.Who, a)
+		if !ok {
+			return Item{}, s.notAllowed(action, line.Who)
+		}
+		if asAdmin {
+			change["as"] = "admin"
+		}
+	}
+	to, err := engine.Check(s.p, eit, line, reason, by.Kind == ledger.System)
+	if err != nil {
+		return Item{}, err
+	}
 	if reason != "" {
 		change["reason"] = reason
 	}
@@ -285,8 +301,13 @@ func Link(ctx context.Context, tx pgx.Tx, fromID, toID, kind string, by ledger.A
 }
 
 // apply sets fields on it, checking each value. Master fields go first, so their pre-fill
-// happens before the other values, which then win over pre-filled ones.
-func (s session) apply(it *Item, values engine.Fields) error {
+// happens before the other values, which then win over pre-filled ones. auto means Seyal fills them
+// on its own (linked work reporting back), so read-only fields may be filled too.
+func (s session) apply(it *Item, values engine.Fields, auto bool) error {
+	check := engine.CheckSet
+	if auto {
+		check = engine.CheckFill
+	}
 	keys := slices.SortedFunc(maps.Keys(values), func(a, b string) int {
 		aMaster, bMaster := s.isMaster(a), s.isMaster(b)
 		switch {
@@ -299,7 +320,7 @@ func (s session) apply(it *Item, values engine.Fields) error {
 	})
 	for _, key := range keys {
 		v := values[key]
-		if err := engine.CheckSet(s.p, s.engineItem(*it), key, v); err != nil {
+		if err := check(s.p, s.engineItem(*it), key, v); err != nil {
 			return err
 		}
 		if v == nil {
@@ -377,6 +398,9 @@ func (s session) enter(it *Item) error {
 	for _, a := range s.p.On[it.State] {
 		switch a.Do {
 		case "copy":
+			if a.IfEmpty && !engine.IsEmpty(it.Fields[a.To]) {
+				continue // "only the first time": keep what was copied before
+			}
 			if err := s.copyField(it, a.From, a.To); err != nil {
 				return err
 			}
@@ -613,6 +637,9 @@ func (s session) tellParent(it *Item, a playbook.Action) error {
 	}
 	values := engine.Fields{}
 	for parent, from := range a.Copy {
+		if ps.field(parent) == nil {
+			continue // the parent's (older) version has no such field, so there is nothing to fill
+		}
 		if v, ok := it.Fields[from]; ok {
 			values[parent] = v
 		}

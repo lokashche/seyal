@@ -73,6 +73,9 @@ func (e evaluator) eval(c playbook.Condition) (Result, error) {
 		return answer, nil
 	}
 
+	if c.Filled != nil { // "is it filled in?" always has an answer
+		return toResult(!isEmpty(e.value(c.Field)) == *c.Filled), nil
+	}
 	op, want := operator(c)
 	if want == nil {
 		return False, fmt.Errorf("engine: condition on %q has no comparison", c.Field)
@@ -136,6 +139,9 @@ func operator(c playbook.Condition) (string, *playbook.Value) {
 	}
 	return "", nil
 }
+
+// IsEmpty reports whether a value counts as "not filled in": nothing, "" or an empty list.
+func IsEmpty(v any) bool { return isEmpty(v) }
 
 // isEmpty reports whether a value counts as "not filled in".
 func isEmpty(v any) bool {

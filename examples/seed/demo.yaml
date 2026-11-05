@@ -30,6 +30,12 @@ people:
   - { key: karthik, name: Karthik Subramanian, email: karthik@kaveri-demo.example, roles: [] }
   - { key: fatima, name: Fatima Sheikh, email: fatima@kaveri-demo.example, roles: [] }
   - { key: rahul, name: Rahul Iyer, email: rahul@kaveri-demo.example, roles: [sales] }
+  # The people in the "moving work between people" examples (docs/moving-work-design.md): Asha starts
+  # jobs, Ben and Dev share the Operations work, Chitra runs the firm and may open Settings.
+  - { key: asha, name: Asha, email: asha@kaveri-demo.example, roles: [sales] }
+  - { key: ben, name: Ben, email: ben@kaveri-demo.example, roles: [ops] }
+  - { key: dev, name: Dev, email: dev@kaveri-demo.example, roles: [ops] }
+  - { key: chitra, name: Chitra, email: chitra@kaveri-demo.example, roles: [owner, admin] }
 
 master:
   client:

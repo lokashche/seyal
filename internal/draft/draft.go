@@ -138,6 +138,10 @@ func Check(ctx context.Context, tx pgx.Tx, current *playbook.Playbook, definitio
 	if err := lib.Check(p); err != nil {
 		add("%v", err)
 	}
+	// Saving registers the draft as a new version, so the checks for new versions apply too.
+	if err := p.CheckNew(); err != nil {
+		add("%v", err)
+	}
 	if current != nil && p.ID != current.ID {
 		add("id must stay %q", current.ID)
 	}

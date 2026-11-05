@@ -376,10 +376,7 @@ func (c *conversation) commandBy(text string, by ledger.Actor) error {
 
 // decide records the person's approval or refusal for the first waiting slot they can decide.
 func (c *conversation) decide(decision, reason string) error {
-	rows, _ := c.tx.Query(c.ctx, `
-		SELECT role_key FROM person_roles
-		WHERE tenant_id = current_tenant() AND person_id::text = $1 AND revoked_at IS NULL`, c.person)
-	roles, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	roles, err := c.roles()
 	if err != nil {
 		return err
 	}
@@ -462,12 +459,34 @@ func (c *conversation) askNext(answered bool) error {
 	if !answered || len(engine.Missing(c.p, it.State, it.Fields)) > 0 {
 		return nil
 	}
+	roles, err := c.roles()
+	if err != nil {
+		return err
+	}
+	// Name only a move this person may take (D68): a process can say per move who takes it.
+	mayTake := engine.ActionsFor(c.p, it.Engine(), workitem.Actor(c.person, roles))
+	ready := false
 	for _, t := range c.p.Transitions {
-		if t.When == "required_filled" && slices.Contains(t.From, it.State) {
+		if t.When != "required_filled" || !slices.Contains(t.From, it.State) {
+			continue
+		}
+		if slices.Contains(mayTake, t.Action) {
 			return c.say(fmt.Sprintf("Everything needed is filled in. Say %q when it's ready.", strings.ReplaceAll(t.Action, "_", " ")))
 		}
+		ready = true
+	}
+	if ready {
+		return c.say("Everything needed is filled in. Whoever has it can move it on now.")
 	}
 	return nil
+}
+
+// roles returns the roles the person in the conversation has now.
+func (c *conversation) roles() ([]string, error) {
+	rows, _ := c.tx.Query(c.ctx, `
+		SELECT role_key FROM person_roles
+		WHERE tenant_id = current_tenant() AND person_id::text = $1 AND revoked_at IS NULL`, c.person)
+	return pgx.CollectRows(rows, pgx.RowTo[string])
 }
 
 // try runs a change inside a savepoint. A refusal (wrong value, not allowed now, ...) is undone and

@@ -189,7 +189,7 @@
   <div class="pane-h"><b>Details</b><small>version {{.Item.Version}}</small><a class="dl" href="/t/{{$.Slug}}/items/{{.Item.ID}}/report" hx-boost="false" title="A printable report of this item; save it as PDF">Report</a></div>
   <div class="side">
     <div><span class="pill {{.Pill}}">{{.Status}}</span>{{with .With}} <span class="why">with {{.}}</span>{{end}}</div>
-    {{if .NotMine}}<p class="why">Only {{or .With "whoever has it"}}, whoever started it, or an admin can change this item. You can read it and write a note.</p>{{end}}
+    {{if .NotMine}}<p class="why">Only {{or .With "whoever has it"}}, whoever started it, or an admin can change the details of this item. {{if .Actions}}You can still use the actions below, or write a note.{{else}}You can read it and write a note.{{end}}</p>{{end}}
     {{with .Links}}
     <details class="sec" open><summary>Linked work</summary>
     <ul class="links">

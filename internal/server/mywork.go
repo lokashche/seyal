@@ -261,8 +261,9 @@ func (v *view) next(p *playbook.Playbook, it workitem.Item) (bucket int, hint st
 			}
 		}
 	} else if len(engine.Missing(p, it.State, it.Fields)) == 0 {
+		mayTake := engine.ActionsFor(p, it.Engine(), v.actor()) // name only moves this person may take
 		for _, t := range p.Transitions {
-			if t.When == "required_filled" && t.By == "" && slices.Contains(t.From, it.State) {
+			if t.When == "required_filled" && t.By == "" && slices.Contains(t.From, it.State) && slices.Contains(mayTake, t.Action) {
 				hint = fmt.Sprintf("Ready: say %q", strings.ReplaceAll(t.Action, "_", " "))
 				break
 			}
@@ -275,6 +276,11 @@ func (v *view) next(p *playbook.Playbook, it workitem.Item) (bucket int, hint st
 		return yourTurn, hint, nil
 	}
 	return yourTeam, hint, nil
+}
+
+// actor is the person looking, as the process's who words see them.
+func (v *view) actor() engine.Actor {
+	return workitem.Actor(v.c.session.PersonID, v.c.session.Roles)
 }
 
 // waitsForLinked reports whether the item waits in a state that only Seyal moves on from, e.g. until

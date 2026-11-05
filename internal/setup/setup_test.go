@@ -29,7 +29,7 @@ func TestDemoFileIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.Business.Currency != "INR" || len(f.People) != 6 || len(f.Master["work_type"]) != 4 {
+	if f.Business.Currency != "INR" || len(f.People) != 10 || len(f.Master["work_type"]) != 4 {
 		t.Errorf("demo file = %+v", f.Business)
 	}
 }

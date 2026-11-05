@@ -22,6 +22,18 @@ func TestLoadLibraryExamples(t *testing.T) {
 	if lib.Playbooks["job-evaluation"] == nil || lib.Masters["client"] == nil || lib.Masters["work_type"] == nil {
 		t.Errorf("library = %+v, want job-evaluation, client and work_type", lib)
 	}
+	// Every sample must also pass the checks a new version gets when a business first uses it.
+	for id, p := range lib.Playbooks {
+		if err := p.CheckNew(); err != nil {
+			t.Errorf("sample %s can't be registered: %v", id, err)
+		}
+	}
+	// The samples written for moving work between people (D68) use every new key.
+	job, study := lib.Playbooks["job-evaluation"], lib.Playbooks["requirement-study"]
+	if job.Version != "0.5" || study == nil || study.Version != "0.2" || !job.Approvals.OnRejectBack ||
+		job.Steps["draft"].ReturnsTo != "last" || len(job.Steps["with_ops"].PassTo) == 0 {
+		t.Errorf("samples: job evaluation %s, requirement study %+v", job.Version, study)
+	}
 }
 
 func TestLoadLibraryFindsMistakes(t *testing.T) {

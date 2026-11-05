@@ -377,7 +377,11 @@ func (v *view) item(id string) (*itemView, error) {
 		case f != nil:
 			iv.Quick = v.quick(*f)
 		}
-		for _, name := range engine.Actions(p, engine.Item{State: it.State, Fields: it.Fields}) {
+	}
+	if !iv.Closed {
+		// Only the moves this person may take (D68): a process can say per move who takes it, so
+		// someone who can't change the details may still have a move, and the other way round.
+		for _, name := range engine.ActionsFor(p, it.Engine(), v.actor()) {
 			a := actionView{Name: name, Label: sentence(name)}
 			for _, t := range p.Transitions {
 				if t.Action == name && t.Needs == "reason" {

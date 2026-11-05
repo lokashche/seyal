@@ -1,9 +1,13 @@
 # Sample playbook: evaluate and approve a new job before work starts.
 # Sales agrees the basics with the client; Operations plans the work and confirms the fee; then the
 # job is approved. Work the team hasn't done before is studied first (a linked Requirement study).
+# Version 0.5 says who may press each button ("who"), who may receive the job in each step
+# ("pass_to"), which button sends work back ("back"), and that returned work goes to whoever last had
+# the step ("returns_to: last"). A job for new work is studied only once for each work type, and the
+# fee Sales proposed is the one Sales last sent.
 # Generic example only. Real playbooks live in each business's own set-up.
 id: job-evaluation
-version: "0.4"
+version: "0.5"
 description: Evaluate a new piece of client work. Sales agrees the basics, Operations plans it and confirms the fee, then it is approved before work starts.
 examples:
   - "New monthly bookkeeping job for Acme Traders, fee 12000"
@@ -44,29 +48,57 @@ fields:
   - { key: scope_exclusions, label: Scope exclusions, type: text }
   - { key: integrity_check, label: Integrity check, type: choice, options: [pass, fail], required: true, ask: "Did the integrity check pass?" }
   - { key: payment_terms, label: Payment terms, type: text, ask: "What are the payment terms?" }
+  # Filled when the Requirement study reports back.
+  - { key: study_findings, label: Study findings, type: text, readonly: true }
+  # The work type the job was sent to be studied for, so a job sent again for the same work type
+  # isn't studied a second time (a different new work type is studied again).
+  - { key: studied_work_type, label: Work type studied, type: master, kind: work_type, readonly: true }
 
 states: [draft, studying, with_ops, pending_approval, approved, cancelled]
 initial: draft
 
 # Who has the job in each step, and what Seyal asks there. Sales may give a fee when they know it;
-# Operations must confirm one.
+# Operations must confirm one. Work that comes back to a step goes to whoever last had it there.
 steps:
-  draft: { owner: starter, asks: [client, nature_of_work, reason, integrity_check], needs: [client, nature_of_work, reason, integrity_check] }
-  with_ops: { owner: "role:ops", asks: [required_documents, timeline_days, maker, fee_agreed], needs: [required_documents, timeline_days, maker, fee_agreed] }
+  draft:
+    owner: starter
+    returns_to: last
+    asks: [client, nature_of_work, reason, integrity_check]
+    needs: [client, nature_of_work, reason, integrity_check]
+  with_ops:
+    owner: "role:ops"
+    pass_to: ["role:ops"] # people in Operations, or the Operations team
+    returns_to: last
+    asks: [required_documents, timeline_days, maker, fee_agreed]
+    needs: [required_documents, timeline_days, maker, fee_agreed]
 
 transitions:
-  # New work for the team is studied first; everything else goes straight to Operations.
-  - { action: send_to_ops, from: [draft], to: studying, when: required_filled, if: { field: nature_of_work.is_new, eq: true } }
-  - { action: send_to_ops, from: [draft], to: with_ops, when: required_filled }
+  # New work for the team is studied first, but only once for each work type; everything else goes
+  # straight to Operations.
+  - action: send_to_ops
+    from: [draft]
+    to: studying
+    when: required_filled
+    who: [holder]
+    if:
+      all:
+        - { field: nature_of_work.is_new, eq: true }
+        - { field: nature_of_work, ne: { field: studied_work_type }, if_missing: true } # not studied yet
+  - { action: send_to_ops, from: [draft], to: with_ops, when: required_filled, who: [holder] }
   - { action: study_done, from: [studying], to: with_ops, by: seyal }
-  - { action: submit, from: [with_ops], to: pending_approval, when: required_filled }
-  - { action: back_to_sales, from: [with_ops], to: draft, needs: reason }
-  - { action: cancel, from: [draft, studying, with_ops, pending_approval, approved], to: cancelled, needs: reason }
+  - { action: submit, from: [with_ops], to: pending_approval, when: required_filled, who: [holder] }
+  - { action: back_to_sales, from: [with_ops], to: draft, needs: reason, back: true, who: [holder] }
+  - action: cancel
+    from: [draft, studying, with_ops, pending_approval, approved]
+    to: cancelled
+    needs: reason
+    who: [holder, starter, "role:owner"]
 
 approvals:
   in: pending_approval
   on_complete: approved
   on_reject: draft
+  on_reject_back: true # a refusal sends the job back to whoever had the draft, without the draft's on: actions
   slots:
     - { slot: ops, role: ops }
     # Sales confirms again only when the fee is not the one Sales proposed (or Sales gave none).
@@ -87,7 +119,10 @@ deadlines:
   - { due_from: client_data_due }
 
 on:
+  # The fee Sales proposed is copied each time Sales sends the job out, so it is always the fee Sales
+  # last sent. If anyone changes the fee after that, Sales is asked to approve it.
   studying:
+    - { do: copy, from: nature_of_work, to: studied_work_type }
     - { do: copy, from: fee_agreed, to: fee_proposed }
     - { do: start, process: requirement-study, copy: { client: client, nature_of_work: nature_of_work, reason: reason } }
     - { do: post, text: "This is new work for the team, so Operations will study it first. The job continues when the study is done." }
