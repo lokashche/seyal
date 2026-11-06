@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -97,9 +98,15 @@ func TestImportDemoBusiness(t *testing.T) {
 				return err
 			}
 			kinds, err := playbook.Kinds(ctx, tx)
-			if len(inUse) != 1 || inUse[0].PlaybookID != "job-evaluation" || len(kinds) != 2 ||
+			var ids []string
+			for _, p := range inUse {
+				ids = append(ids, p.PlaybookID)
+			}
+			slices.Sort(ids)
+			// Other work, the catch-all, is in the demo for the "move someone's work" story (D75, M3).
+			if !slices.Equal(ids, []string{"job-evaluation", "other-work"}) || len(kinds) != 2 ||
 				kinds["client"] == nil || kinds["work_type"] == nil {
-				t.Errorf("processes %v, lists %v; want job-evaluation with client and work_type", inUse, kinds)
+				t.Errorf("processes %v, lists %v; want job-evaluation and other-work, with client and work_type", ids, kinds)
 			}
 			return err
 		})

@@ -107,4 +107,14 @@ func TestChasedCards(t *testing.T) {
 		"handed it to the Owner team (escalated): waited 4 working days in With ops (since "+today+"), with Dev since "+today+".") {
 		t.Errorf("Chitra (an admin) should see Submit, and the thread the escalation:\n%s", page)
 	}
+
+	// Chitra does the Operations work herself and then gives the Owner approval: the approval card says
+	// she worked that step after it was escalated (D75, decision 11).
+	s.send(c, job+"/field", url.Values{"key": {"fee_agreed"}, "value": {"12000"}})
+	s.send(c, job+"/act", url.Values{"action": {"submit"}})
+	page := html.UnescapeString(s.send(c, job+"/decide", url.Values{"slot": {"owner"}, "decision": {"approve"}}))
+	if !strings.Contains(page, `<span class="r worked">Chitra worked With ops after it was escalated</span>`) ||
+		!strings.Contains(page, "Chitra: approved as owner. Worked With ops after it was escalated") {
+		t.Errorf("the approval card and the thread should say Chitra worked With ops after it was escalated:\n%s", problem(page))
+	}
 }

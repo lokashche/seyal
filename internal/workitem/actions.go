@@ -317,6 +317,15 @@ func DecideSeen(ctx context.Context, tx pgx.Tx, id string, seen int, personID, s
 	if reason != "" {
 		change["reason"] = reason
 	}
+	// Someone who did an escalated step's work themselves may now check it: the event says so (D75,
+	// decision 11).
+	worked, err := WorkedEscalated(ctx, tx, it.ID, personID)
+	if err != nil {
+		return Item{}, err
+	}
+	if len(worked) > 0 {
+		change["worked_escalated"] = worked
+	}
 	if err := s.record("item.decided", it, change, ledger.PersonActor(personID)); err != nil {
 		return Item{}, err
 	}
@@ -519,6 +528,10 @@ const (
 	// HowEscalate: Seyal handed on work that waited too long in its step (D75, M6). Nobody handed it
 	// over, so the card says "Seyal escalated it" and not "From ..."; from_holder names who had it.
 	HowEscalate = "escalate"
+	// HowReassign: an admin moved someone's open work to another person in one go (D75, M3), recorded as
+	// the admin. from_assignee is the admin (the card's "From ..."), from_holder who had it, and batch is
+	// the same on every move of one press.
+	HowReassign = "reassign"
 )
 
 // handoff says how and why an item changes hands. How and Note are always asked for; the rest are

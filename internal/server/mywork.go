@@ -276,6 +276,12 @@ func (v *view) next(p *playbook.Playbook, it workitem.Item) (bucket int, hint st
 		if v.c.admin() && workitem.NobodyCanTake(p, it, members) {
 			return yourTeam, "Nobody can take this", false, nil // admins pass it on (D68, choice 13)
 		}
+		if v.c.admin() {
+			// Its holder left or lost the step's role: admins pass it on (D75, M3).
+			if h, err := v.stranded(p, it, members); err != nil || h != "" {
+				return yourTeam, h, false, err
+			}
+		}
 		return elsewhere("With " + v.holder(it))
 	}
 	take = (team || free) && workitem.MayTake(p, it, v.actor(), members)

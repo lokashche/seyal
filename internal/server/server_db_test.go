@@ -63,8 +63,22 @@ func newSite(t *testing.T) *site {
 	return newSiteWith(t, "../testdata/playbooks")
 }
 
-// newSiteWith is newSite with the processes from another folder, e.g. the shipped samples.
+// newSiteWith is newSite with the processes from another folder, e.g. the shipped samples. The site
+// starts with Job evaluation only, as the demo did before Other work joined it (D78): the tests were
+// written for one process, and those that need Other work add it in Settings (or use newDemoSite).
 func newSiteWith(t *testing.T, playbooks string) *site {
+	t.Helper()
+	return newSiteFrom(t, playbooks, []string{"job-evaluation"})
+}
+
+// newDemoSite is the whole demo business with the shipped samples, Other work included.
+func newDemoSite(t *testing.T) *site {
+	t.Helper()
+	return newSiteFrom(t, "../../examples/playbooks", nil)
+}
+
+// newSiteFrom is a fresh copy of the demo business; processes, when given, replaces its process list.
+func newSiteFrom(t *testing.T, playbooks string, processes []string) *site {
 	t.Helper()
 	ctx := context.Background()
 	owner, app := testdb.Connect(t)
@@ -75,6 +89,12 @@ func newSiteWith(t *testing.T, playbooks string) *site {
 	f, err := setup.Load("../../examples/seed/demo.yaml", lib)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if processes != nil {
+		f.Processes = processes
+		if err := f.Check(lib); err != nil {
+			t.Fatal(err)
+		}
 	}
 	f.Business.Slug = "test-" + strings.ToLower(rand.Text()[:10])
 	s := &site{t: t, slug: f.Business.Slug, store: media.Disk{Dir: t.TempDir()}, owner: owner, app: app,

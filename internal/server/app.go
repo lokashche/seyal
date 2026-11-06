@@ -60,6 +60,7 @@ type tellView struct {
 	Answer      *ask.Answer   // Seyal's answer to a question about the work (D67)
 	StartAs     []tellProcess // with an answer Seyal couldn't give: the processes to start the message as instead
 	CanAsk      bool          // AI is on, so people may ask about the work here
+	Move        *moveView     // the list for "move Ben's work to Dev" (D75, M3)
 }
 
 // pendingView asks the person to confirm the process Seyal suggests for their message.
@@ -164,6 +165,9 @@ type fieldView struct {
 type slotView struct {
 	Slot, Name, Why, By string
 	Done, CanDecide     bool
+	// Worked says the approver did an escalated step's work themselves: "Chitra worked With ops after
+	// it was escalated" (D75, decision 11).
+	Worked string
 }
 
 type actionView struct {
@@ -182,8 +186,9 @@ type view struct {
 	roles     map[string]string // role key → name
 	masters   map[string]string // "kind/key" → name
 	playbooks map[string]*playbook.Playbook
-	q         url.Values         // the page's query: which folder, process and order My Work shows
-	active    *[]workitem.Member // active people with a login, once read (see members)
+	q         url.Values          // the page's query: which folder, process and order My Work shows
+	active    *[]workitem.Member  // active people with a login, once read (see members)
+	lost      map[string][]string // person id → roles they lost, once read (see stranded)
 }
 
 func (s *Server) newView(r *http.Request, tx pgx.Tx, c *call) (*view, error) {
@@ -472,6 +477,11 @@ func (v *view) item(id string) (*itemView, error) {
 		if it.State == p.Approvals.In {
 			allowed = canDecide(st, v.c.session)
 		}
+		// What each approval's ledger event recorded (D75, decision 11), so the card and the ledger agree.
+		worked, err := workitem.WorkedOnApprovals(v.ctx, v.tx, it.ID)
+		if err != nil {
+			return nil, err
+		}
 		for _, slot := range st.Slots {
 			if !slot.Required {
 				continue
@@ -482,6 +492,7 @@ func (v *view) item(id string) (*itemView, error) {
 			}
 			if slot.ApprovedBy != "" {
 				sv.Done, sv.By = true, v.names[slot.ApprovedBy]
+				sv.Worked = workitem.WorkedEscalatedLine(sv.By, worked[slot.Slot+" "+slot.ApprovedBy])
 			}
 			iv.Slots = append(iv.Slots, sv)
 		}
@@ -570,6 +581,14 @@ func (s *Server) show(w http.ResponseWriter, r *http.Request, c *call, itemID st
 			if sc.Tell != nil {
 				_, sc.Tell.CanAsk = s.ai.For(ai.Understand)
 			}
+			if err == nil {
+				// The list of someone's work shows even with no process switched on for new work
+				// (open work still has to move).
+				t := cmp.Or(sc.Tell, &tellView{})
+				if err = v.moveFromLink(t); t.Move != nil {
+					sc.Tell, sc.TellView = t, true
+				}
+			}
 			for _, m := range more {
 				m(&sc)
 			}
@@ -617,8 +636,17 @@ func (s *Server) tell(w http.ResponseWriter, r *http.Request, c *call) {
 	}
 	var reply ask.Reply
 	var routing *ask.Routing
+	var move *ask.MoveOffer
 	picked := r.FormValue("playbook") // the process the person chose, or "auto"
 	err = db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
+		// "Move Ben's work to Dev" (typed or spoken) gets the list to press, before any routing; it
+		// saves nothing (D75, M3).
+		if len(in.Files) == 0 {
+			var err error
+			if move, err = ask.ReadMove(r.Context(), tx, c.session.PersonID, in.Text); err != nil || move != nil {
+				return err
+			}
+		}
 		// New work may only start on the current version of a process that is switched on.
 		current, err := (&view{ctx: r.Context(), tx: tx}).current()
 		if err != nil {
@@ -653,6 +681,15 @@ func (s *Server) tell(w http.ResponseWriter, r *http.Request, c *call) {
 	})
 	if err != nil {
 		s.problem(w, r, c, "", err)
+		return
+	}
+	if move != nil {
+		s.show(w, r, c, "", http.StatusOK, "", "", func(sc *screen) {
+			if sc.Tell == nil { // no process is switched on for new work, but open work can still move
+				sc.Tell = &tellView{}
+			}
+			sc.Tell.Move = newMoveView(move, false)
+		})
 		return
 	}
 	// A question about the work is answered now that the message is saved, in a transaction of its

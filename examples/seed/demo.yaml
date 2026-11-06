@@ -17,8 +17,8 @@ business:
 
 # The processes this business uses: sample templates by id, or your own files ("my-process.yaml",
 # relative to this file). The lists they need (clients, work types) come with them. Use "lists:" to
-# add more lists, the same way.
-processes: [job-evaluation]
+# add more lists, the same way. Other work is the catch-all, for anything that fits no other process.
+processes: [job-evaluation, other-work]
 
 roles:
   - { key: sales, name: Sales }

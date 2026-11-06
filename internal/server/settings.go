@@ -53,6 +53,7 @@ type peopleView struct {
 	Rows    []personRow
 	Roles   []option // all roles, for the "add a person" form
 	Invites []invite // links just made, to send to each person
+	MoveTo  []option // the people work can be moved to (active, with a login)
 }
 
 type personRow struct {
@@ -61,6 +62,10 @@ type personRow struct {
 	SetUp           bool     // has a login (has used their link)
 	Roles           []option // all roles, Selected = held
 	RoleNames       string
+	// Holds says how many open items the person has (D75, M3): "Holds 3 open items." Warn is set when
+	// they are disabled, or hold items in a step they can no longer work: then it needs moving.
+	Holds string
+	Warn  bool
 }
 
 type roleRow struct{ Key, Name, Holders string }
@@ -200,8 +205,32 @@ func (v *view) people() (*peopleView, error) {
 		return nil, err
 	}
 	pv := &peopleView{Roles: roles}
+	held, err := v.holdings()
+	if err != nil {
+		return nil, err
+	}
+	members, err := v.members()
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range members {
+		pv.MoveTo = append(pv.MoveTo, option{Value: m.ID, Label: m.Name})
+	}
 	for _, p := range list {
 		row := personRow{ID: p.ID, Name: p.Name, Email: p.Email, Active: p.Active, SetUp: p.SetUp, Me: p.ID == v.c.session.PersonID}
+		if h := held[p.ID]; h.open > 0 {
+			row.Holds = "Holds " + items(h.open) + "."
+			switch {
+			case !p.Active:
+				row.Holds, row.Warn = p.Name+" is disabled and still holds "+items(h.open)+".", true
+			case h.stuck > 0:
+				row.Holds, row.Warn = fmt.Sprintf("%s holds %s, %d of them in a step they can no longer work.",
+					p.Name, items(h.open), h.stuck), true
+				if h.open == 1 {
+					row.Holds = p.Name + " holds 1 item in a step they can no longer work."
+				}
+			}
+		}
 		var names []string
 		for _, r := range roles {
 			held := slices.Contains(p.Held, r.Value)

@@ -212,6 +212,8 @@ type PassOn struct {
 	// Seen is the holder the person saw (Item.HolderKey), so a pass based on an old page changes
 	// nothing; "" when not known.
 	Seen string
+	// how and batch are set by Reassign only: an admin moving someone's open work in one go (D75, M3).
+	how, batch string
 }
 
 // Pass gives the item to another person or a team, as whoever has it or an admin, and records it as
@@ -284,9 +286,12 @@ func Pass(ctx context.Context, tx pgx.Tx, id string, to PassOn, by ledger.Actor)
 			notice += fmt.Sprintf(" %s isn't in %s, so they can only pass it on here.", name, cmp.Or(roleNames[role], role))
 		}
 	}
-	h := handoff{How: HowPass, Note: to.Note, Via: to.Via, From: a.ID}
-	if asAdmin {
-		h.As = "admin"
+	h := handoff{How: cmp.Or(to.how, HowPass), Note: to.Note, Via: to.Via, From: a.ID}
+	if asAdmin || to.how == HowReassign {
+		h.As = "admin" // a move of someone's open work is always an admin's (D75, M3)
+	}
+	if to.batch != "" {
+		h.Extra = map[string]any{"batch": to.batch}
 	}
 	if err := s.giveTo(&it, to.Person, to.Team, by, h); err != nil {
 		return Item{}, "", err

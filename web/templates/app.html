@@ -45,7 +45,32 @@
   <div class="pane-h"><b>Tell Seyal</b></div>
   {{template "banners" .}}
   <div class="thread" id="thread">
-    {{with .Data.Tell}}{{with .Answer}}
+    {{with .Data.Tell}}{{with .Move}}
+    {{with .Said}}<div class="msg me"><span class="who">{{$.Session.Name}}</span><p>{{.}}</p></div>{{end}}
+    <div class="msg bot answer move-list"><span class="who">Seyal</span>
+      <p>{{.Line}}</p>
+      {{with .Choose}}<div class="quick">{{range .}}<form method="get" action="/t/{{$.Slug}}/"><input type="hidden" name="view" value="tell"><input type="hidden" name="move_from" value="{{.From}}"><input type="hidden" name="move_to" value="{{.To}}"><button>{{.Label}}</button></form>{{end}}</div>{{end}}
+      {{if .Items}}
+      <form method="post" action="/t/{{$.Slug}}/move">
+        <input type="hidden" name="view" value="tell"><input type="hidden" name="move_from" value="{{.From.ID}}"><input type="hidden" name="move_to" value="{{.To.ID}}">{{if .Pick}}<input type="hidden" name="pick" value="1">{{end}}
+        <ul class="found">
+          {{range .Shown}}<li><label><input type="checkbox"{{if $.Data.Tell.Move.Pick}} name="item" value="{{.ID}}"{{else}} disabled{{end}}{{if .Ticked}} checked{{end}}> <b>{{.Number}}</b> {{.Title}} · {{.Step}}</label>{{with .Why}}<span class="r">{{.}}</span>{{end}}</li>{{end}}
+        </ul>
+        {{range .Ticked}}<input type="hidden" name="item" value="{{.}}">{{end}}
+        {{with .More}}<p class="why">and {{.}} more</p>{{end}}
+        {{with .Also}}<p class="why">{{.}}</p>{{end}}
+        <label class="ctl-label" for="move-note">Note for {{.To.Name}} (optional)</label>
+        <input id="move-note" name="note" maxlength="{{.Max}}"{{with .Note}} value="{{.}}"{{end}}>
+        <p class="why">Everyone who can open these items sees this note.</p>
+        <div class="quick">
+          {{with .Button}}<button class="yes">{{.}}</button>{{end}}
+          {{if not .Pick}}<button class="btn ghost sm" name="show" value="pick">Pick</button>{{end}}
+          <a class="btn ghost sm" href="/t/{{$.Slug}}/?view=tell">No</a>
+        </div>
+      </form>
+      {{end}}
+    </div>
+    {{else}}{{with .Answer}}
     <div class="msg me"><span class="who">{{$.Session.Name}}</span><p>{{.Question}}</p></div>
     <div class="msg bot answer"><span class="who">Seyal</span>
       <p>{{.Line}}</p>
@@ -74,7 +99,7 @@
     </form>
     {{else}}
     <div class="empty">Type the work as you would tell a colleague. Seyal turns it into a work item and asks only for what's missing.{{if .CanAsk}} You can also ask about the work, for example “What is overdue?”{{end}}</div>
-    {{end}}{{end}}{{else}}
+    {{end}}{{end}}{{end}}{{else}}
     <div class="empty">Type the work as you would tell a colleague. Seyal turns it into a work item and asks only for what's missing.</div>
     {{end}}
   </div>
@@ -263,7 +288,7 @@
       {{range .}}
       <div class="ap">
         <div>{{.Name}}<span class="r">{{.Why}}</span></div>
-        {{if .Done}}<span class="s-ok">✓ {{.By}}</span>
+        {{if .Done}}<span class="s-ok">✓ {{.By}}</span>{{with .Worked}}<span class="r worked">{{.}}</span>{{end}}
         {{else if .CanDecide}}
           <form method="post" action="/t/{{$.Slug}}/items/{{$.Data.Item.Item.ID}}/decide">
             <input type="hidden" name="slot" value="{{.Slot}}"><input type="hidden" name="version" value="{{$.Data.Item.Item.Version}}">

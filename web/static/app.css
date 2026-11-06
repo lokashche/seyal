@@ -145,6 +145,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .quick button:hover { background: var(--hover); }
 .quick button.yes { background: var(--ink); border-color: var(--ink); color: var(--panel); font-weight: 500; }
 .quick.confirm { align-items: center; }
+.move-list form { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.move-list .found label { display: flex; gap: 6px; align-items: baseline; }
+.move-list .found .r { margin-left: 22px; }
+.move-list #move-note { font: inherit; font-size: 13px; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; background: var(--panel); color: var(--ink); }
 .empty { margin: auto; text-align: center; color: var(--muted); font-size: 13.5px; max-width: 38ch; }
 
 /* Composer */
@@ -200,6 +204,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .ap .r { color: var(--muted); font-size: 12px; display: block; }
 .ap .s-ok { color: var(--ok); font-weight: 500; }
 .ap .s-wait { color: var(--muted); }
+.ap .worked { width: 100%; color: var(--warn); }
 .ap form { margin: 0; display: flex; gap: 6px; flex-wrap: wrap; }
 .ap details, .acts details { width: 100%; font-size: 13px; }
 .ap summary, .acts summary { cursor: pointer; color: var(--muted); }
@@ -209,6 +214,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .hand { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
 .hand form { margin: 0; }
 .hand .nobody { width: 100%; color: var(--warn); }
+.holds { margin-top: 6px; align-items: center; }
+.holds .nobody { color: var(--warn); }
 .hand details.pass { width: 100%; font-size: 13px; }
 .hand details.pass summary { cursor: pointer; color: var(--muted); }
 .hand .pass form { flex-wrap: wrap; }

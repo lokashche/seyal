@@ -1,0 +1,34 @@
+# Sample playbook: the catch-all. Anything that fits no other process still goes into Seyal, so
+# nothing lives only in someone's head or chat. Seyal suggests it when no other process fits
+# (fallback: true). The message that starts it says what needs doing (from_message), so Seyal asks
+# nothing; who does it and by when are read from the message (with AI) or set in the side panel, and
+# setting "who" hands the item to that person.
+# Generic example only. Real playbooks live in each business's own set-up, not in this folder.
+id: other-work
+version: "0.1"
+description: Anything that fits no other process, such as a task, a follow-up, a reminder or something to look into.
+fallback: true
+examples:
+  - "Call the bank about the new current account"
+  - "Ask Priya to renew the office internet plan by Friday"
+numbering: "W-{yyyy}-{seq:4}"
+title: "{what}"
+
+fields:
+  - { key: what, label: What needs doing, type: text, required: true, from_message: true, ask: "What needs doing?" }
+  - { key: who, label: Who does it, type: person }
+  - { key: due_on, label: Due by, type: date }
+  - { key: done_note, label: What was done, type: text }
+
+states: [open, done, cancelled]
+initial: open
+
+steps:
+  open: { owner: "field:who", asks: [what], needs: [what] }
+
+transitions:
+  - { action: done, from: [open], to: done, when: required_filled }
+  - { action: cancel, from: [open], to: cancelled, needs: reason }
+
+deadlines:
+  - { due_from: due_on }

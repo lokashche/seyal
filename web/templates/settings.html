@@ -66,6 +66,17 @@
       <div><b>{{.Name}}</b>{{if .Me}} <span class="pill p-draft">you</span>{{end}}{{if not .Active}} <span class="pill p-closed">disabled</span>{{else if not .SetUp}} <span class="pill p-wait">not set up yet</span>{{end}}
         <span class="r">{{.Email}}{{with .RoleNames}} · {{.}}{{end}}</span></div>
     </div>
+    {{if .Holds}}{{$id := .ID}}
+    <form method="get" action="/t/{{$.Slug}}/" class="sform inline holds">
+      <span class="why{{if .Warn}} nobody{{end}}">{{.Holds}}</span>
+      <input type="hidden" name="view" value="tell"><input type="hidden" name="move_from" value="{{.ID}}">
+      <select name="move_to" required aria-label="Move them to">
+        <option value="">To…</option>
+        {{range $.Data.People.MoveTo}}{{if ne .Value $id}}<option value="{{.Value}}">{{.Label}}</option>{{end}}{{end}}
+      </select>
+      <button class="btn ghost sm">Move them…</button>
+    </form>
+    {{end}}
     <details>
       <summary>Edit</summary>
       <form method="post" action="/t/{{$.Slug}}/settings/people/{{.ID}}" class="sform">
