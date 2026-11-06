@@ -13,13 +13,15 @@ import (
 
 // The Me page: who you are in this business (name, roles), your login (its email; change password,
 // log out, log out on all devices) and, when the login belongs to several businesses, plain links to
-// switch between them: the login cookie works in all of them, so switching needs no new login. Account
-// plumbing like the password page, not a process screen. Your name and roles are changed by an admin
-// of the business in Settings → People, as a ledger event.
+// switch between them: the login cookie works in all of them, so switching needs no new login. It also
+// has the "Phone notes" block (phonenotes.go). Account plumbing like the password page, not a process
+// screen. Your name and roles are changed by an admin of the business in Settings → People, as a
+// ledger event.
 
 type profileView struct {
 	Roles      []string        // role names, e.g. "Sales"
 	Businesses []auth.Business // the login's active businesses, shown only when there are two or more
+	Push       pushView        // phone notes
 }
 
 func (s *Server) mePage(w http.ResponseWriter, r *http.Request, c *call) {
@@ -35,11 +37,15 @@ func (s *Server) mePage(w http.ResponseWriter, r *http.Request, c *call) {
 			return err
 		}
 		mine, err := auth.Businesses(r.Context(), tx, c.session.AccountID)
+		if err != nil {
+			return err
+		}
 		for _, b := range mine {
 			if b.Active {
 				pv.Businesses = append(pv.Businesses, b)
 			}
 		}
+		pv.Push, err = s.pushViewFor(r, tx, c)
 		return err
 	})
 	if err != nil {

@@ -8,11 +8,12 @@
     <p class="lede">No forms. Just tell Seyal.</p>
     {{with .Error}}<p class="error" role="alert">{{.}}</p>{{end}}
     <label>Email
-      <input type="email" name="email" autocomplete="username" required autofocus value="{{.Data}}">
+      <input type="email" name="email" autocomplete="username" required autofocus value="{{.Data.Email}}">
     </label>
     <label>Password
       <input type="password" name="password" autocomplete="current-password" required>
     </label>
+    {{with .Data.Next}}<input type="hidden" name="next" value="{{.}}">{{end}}
     <button class="btn">Log in</button>
     <p class="lede small">Forgot your password? If you use Seyal in one business, ask an admin there for a new link.
       If you use it in more than one, or in none yet, ask the server's operator (whoever runs this Seyal server).</p>

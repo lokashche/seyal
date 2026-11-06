@@ -154,15 +154,23 @@ func TestThreadTellsTheStory(t *testing.T) {
 }
 
 // TestThreadUsesTheSubjectIndex checks that the thread's ledger query finds one item's events
-// through the ledger_subject index (D70), instead of reading every event of the business. A query
-// with an OR whose other branch has no index of its own can't use it.
+// through the ledger_subject index (tenant_id, subject_id; D70), instead of reading every event of the
+// business. A query with an OR whose other branch has no index of its own can't use it. The plan is
+// checked on a copy of the ledger with the real indexes and always the same rows
+// (testdb.ShadowLedger). On the shared test database's real ledger, Postgres sometimes guessed that the
+// new test business had only one event (the guess depends on what other packages have written), and
+// then walking the business in seq order (no sort needed) looked cheapest: the check passed alone and
+// sometimes failed in the full run.
 func TestThreadUsesTheSubjectIndex(t *testing.T) {
 	ctx := context.Background()
 	owner, app := testdb.Connect(t)
 	tenant, _ := testdb.NewTenant(t, owner, "Thread Index Test")
 	var plan []string
 	err := db.WithTenant(ctx, app, tenant, func(tx pgx.Tx) error {
-		// Tables in the test database are small, so Postgres would often read them whole anyway.
+		if err := testdb.ShadowLedger(ctx, tx); err != nil {
+			return err
+		}
+		// Small tables are often read whole anyway.
 		if _, err := tx.Exec(ctx, "SET LOCAL enable_seqscan = off"); err != nil {
 			return err
 		}
@@ -176,16 +184,16 @@ func TestThreadUsesTheSubjectIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The old query (with the OR) also named ledger_subject, but looked up only its tenant_id part,
-	// so it still read every event of the business. The lookup must include subject_id.
-	text := strings.Join(plan, "\n")
+	// The old query (with the OR) also used ledger_subject, but looked up only its tenant_id part, so
+	// it still read every event of the business. The look-up must include subject_id. (The copy's
+	// indexes have names of their own, so the check reads the look-up, not the index's name.)
 	looksUpItem := false
 	for _, line := range plan {
 		if strings.Contains(line, "Index Cond") && strings.Contains(line, "subject_id =") {
 			looksUpItem = true
 		}
 	}
-	if !strings.Contains(text, "ledger_subject") || !looksUpItem {
-		t.Errorf("the thread query doesn't look the item up in the ledger_subject index; plan:\n%s", text)
+	if !looksUpItem {
+		t.Errorf("the thread query doesn't look the item up in the ledger_subject index; plan:\n%s", strings.Join(plan, "\n"))
 	}
 }

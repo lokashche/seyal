@@ -43,3 +43,49 @@ func TestPushKeys(t *testing.T) {
 		}
 	}
 }
+
+// TestPushSwitch: SEYAL_PUSH is off unless it says "on", and "on" needs right keys and a contact.
+// Errors never show a key.
+func TestPushSwitch(t *testing.T) {
+	keys, err := push.GenerateKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := push.GenerateKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := func(kv ...string) func(string) string {
+		m := map[string]string{}
+		for i := 0; i+1 < len(kv); i += 2 {
+			m[kv[i]] = kv[i+1]
+		}
+		return func(k string) string { return m[k] }
+	}
+	good := []string{"SEYAL_PUSH_PUBLIC_KEY", keys.Public(), "SEYAL_PUSH_PRIVATE_KEY", keys.Private(),
+		"SEYAL_PUSH_CONTACT", "mailto:office@kaveri-demo.example"}
+	for _, off := range []string{"", "off"} {
+		if key, err := pushKey(env(append([]string{"SEYAL_PUSH", off}, good...)...)); key != "" || err != nil {
+			t.Errorf("SEYAL_PUSH=%q = %q, %v; want off", off, key, err)
+		}
+	}
+	if key, err := pushKey(env(append([]string{"SEYAL_PUSH", "on"}, good...)...)); key != keys.Public() || err != nil {
+		t.Errorf("SEYAL_PUSH=on = %q, %v; want the public key", key, err)
+	}
+	for name, kv := range map[string][]string{
+		"a typo":  append([]string{"SEYAL_PUSH", "yes"}, good...),
+		"no keys": {"SEYAL_PUSH", "on", "SEYAL_PUSH_CONTACT", "mailto:office@kaveri-demo.example"},
+		"keys of two pairs": {"SEYAL_PUSH", "on", "SEYAL_PUSH_PUBLIC_KEY", other.Public(), "SEYAL_PUSH_PRIVATE_KEY", keys.Private(),
+			"SEYAL_PUSH_CONTACT", "mailto:office@kaveri-demo.example"},
+		"no contact": {"SEYAL_PUSH", "on", "SEYAL_PUSH_PUBLIC_KEY", keys.Public(), "SEYAL_PUSH_PRIVATE_KEY", keys.Private()},
+	} {
+		_, err := pushKey(env(kv...))
+		if err == nil {
+			t.Errorf("%s: no error", name)
+			continue
+		}
+		if strings.Contains(err.Error(), keys.Private()) || strings.Contains(err.Error(), keys.Public()) {
+			t.Errorf("%s: the error shows a key: %v", name, err)
+		}
+	}
+}

@@ -58,8 +58,9 @@ func TestAccounts(t *testing.T) {
 
 	t.Run("no function gives the app a password hash", func(t *testing.T) {
 		// The query a reviewer found against the old account_password(): list the emails, ask for each
-		// hash. Now the only function the app may run as the owner is account_check, which answers with
-		// a login, a flag and yes or no, never a hash.
+		// hash. Now the functions the app may run as the owner are account_check, which answers with a
+		// login, a flag and yes or no, and the two phone-note ones (migration 00024), which never touch
+		// accounts: none gives a hash.
 		rows, _ := app.Query(ctx, `SELECT p.proname || '(' || pg_get_function_arguments(p.oid) || ') returns ' || pg_get_function_result(p.oid)
 			FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
 			WHERE n.nspname = 'public' AND p.prosecdef AND has_function_privilege('seyal_app', p.oid, 'EXECUTE')`)
@@ -67,8 +68,13 @@ func TestAccounts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := "account_check(e text, pw text) returns TABLE(id uuid, password_temporary boolean, ok boolean)"
-		if !slices.Equal(definers, []string{want}) {
+		want := []string{
+			"account_check(e text, pw text) returns TABLE(id uuid, password_temporary boolean, ok boolean)",
+			"push_device_take(e text) returns integer",
+			"push_devices_here() returns TABLE(person_id uuid, device_id uuid, endpoint text, p256dh text, auth text, origin text)",
+		}
+		slices.Sort(definers)
+		if !slices.Equal(definers, want) {
 			t.Errorf("functions that run as the owner for the app = %q, want only %q", definers, want)
 		}
 		_, err = app.Exec(ctx, "SELECT * FROM account_password($1)", aEmail)
@@ -342,10 +348,13 @@ func TestAccounts(t *testing.T) {
 }
 
 // TestEveryBusinessTableIsLocked: every table has row-level security switched on and forced, except
-// the few that are server-wide by design.
+// the few that are server-wide by design. push_devices is server-wide too, but has its own row rule
+// switched on (each login sees only its own devices), not forced, so the two owner-run functions of
+// migration 00024 may look across logins.
 func TestEveryBusinessTableIsLocked(t *testing.T) {
 	_, app := testdb.Connect(t)
-	serverWide := []string{"tenants", "accounts", "account_sessions", "goose_db_version"}
+	serverWide := []string{"tenants", "accounts", "account_sessions", "push_devices", "goose_db_version"}
+	byLogin := []string{"push_devices"}
 	rows, err := app.Query(context.Background(), `SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
 		FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') ORDER BY c.relname`)
@@ -363,6 +372,9 @@ func TestEveryBusinessTableIsLocked(t *testing.T) {
 		seen++
 		if !slices.Contains(serverWide, name) && (!enabled || !forced) {
 			t.Errorf("table %s: row-level security enabled=%v forced=%v, want both", name, enabled, forced)
+		}
+		if slices.Contains(byLogin, name) && !enabled {
+			t.Errorf("table %s: row-level security is off, want its login rule on", name)
 		}
 	}
 	if err := rows.Err(); err != nil {

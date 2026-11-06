@@ -22,6 +22,53 @@
     </ul>
   </section>
   {{end}}
+  {{/* Phone notes: which state shows is decided by app.js from this browser (its permission and
+       subscription); the server only knows the login's devices. A device push address is never on
+       the page. Without SEYAL_PUSH=on there is no Turn on, so no browser asks its push service for one. */}}
+  {{with .Data.Push}}
+  <section class="card push-notes" id="push-notes" aria-label="Phone notes" data-key="{{.Key}}" data-slug="{{$.Slug}}">
+    <span class="ctl-label">Phone notes</span>
+    {{if not .Key}}
+    <p class="why">Phone notes aren't switched on for this Seyal server yet. My Work still shows everything.</p>
+    {{else}}
+    <p class="why" data-push-state="checking">Checking this phone…</p>
+    <div data-push-state="off" hidden>
+      <p>Seyal can tell this phone when work comes to you. The lock screen shows only the item number and who sent it, never the item's title or a hand-over note.</p>
+      <button type="button" class="btn" data-push="on">Turn on for this phone</button>
+    </div>
+    <div data-push-state="on" hidden>
+      <p>On for this phone (<span data-push-label>this browser</span>), last opened today.</p>
+      <button type="button" class="btn ghost" data-push="off" aria-label="Turn off for this phone">Turn off</button>
+    </div>
+    <div data-push-state="ended" hidden>
+      <p>Phone notes stopped on this phone because Seyal wasn't opened here for 30 days (or the push service said this address is gone).</p>
+      <button type="button" class="btn" data-push="on">Turn on again</button>
+    </div>
+    <div data-push-state="blocked" hidden>
+      <p>Phone notes are blocked for Seyal in this browser. To allow them:</p>
+      <ul class="push-steps">
+        <li data-push-os="android">Android: Chrome menu → Settings → Site settings → Notifications → allow this site. Also check Android Settings → Apps → Chrome → Notifications.</li>
+        <li data-push-os="iphone">iPhone: Settings → Notifications → Seyal → Allow.</li>
+        <li data-push-os="windows">Windows: Settings → System → Notifications → turn on your browser.</li>
+      </ul>
+      <p class="why">Then open this page again.</p>
+    </div>
+    <p data-push-state="iphone-tab" hidden>On iPhone: tap Share, then Add to Home Screen. Open Seyal from the new icon, <b>log in once inside it</b>, then turn this on there.</p>
+    <p data-push-state="iphone-old" hidden>This iPhone is too old for phone notes (needs iOS 16.4). My Work still shows everything.</p>
+    <p data-push-state="unsupported" hidden>This browser can't show phone notes. My Work still shows everything.</p>
+    <p class="error" data-push-msg role="alert" hidden></p>
+    <noscript><p class="why">Phone notes need JavaScript in this browser.</p></noscript>
+    {{end}}
+    {{with .Devices}}
+    <ul class="push-devices">
+      {{range .}}<li data-device="{{.ID}}"><span>Also on: {{.Label}}, since {{.Since}}, last opened {{.Opened}}</span>
+        <form method="post" action="/t/{{$.Slug}}/push/devices/{{.ID}}/off"><button class="btn ghost" aria-label="Turn off {{.Label}}, since {{.Since}}, last opened {{.Opened}}">Turn off</button></form></li>
+      {{end}}
+    </ul>
+    {{end}}
+    {{if .Key}}<p class="why">If a phone note doesn't show, check the phone's settings for Chrome (or Seyal) notifications, and the battery saver.</p>{{end}}
+  </section>
+  {{end}}
   <section class="card login-actions" aria-label="Your login">
     <a class="btn ghost" href="/t/{{.Slug}}/password">{{icon "key"}}Change password</a>
     <form method="post" action="/t/{{.Slug}}/logout"><button class="btn ghost">{{icon "logout"}}Log out</button></form>

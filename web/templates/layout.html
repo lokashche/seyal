@@ -16,7 +16,8 @@
   <script src="/static/htmx.min.js?v={{.Asset}}" defer></script>
   <script src="/static/app.js?v={{.Asset}}" defer></script>
 </head>
-<body hx-boost="true">
+{{/* data-hello: the page tells Seyal it was opened in this browser, for phone notes (app.js). */}}
+<body hx-boost="true"{{if and .Session .Slug}} data-hello="/t/{{.Slug}}/push/hello" data-login="{{.Session.ExpiresAt.Unix}}"{{end}}>
 {{template "content" .}}
 </body>
 </html>

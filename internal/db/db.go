@@ -78,6 +78,8 @@ func WithAccount(ctx context.Context, db Beginner, accountID string, fn func(pgx
 
 // WithServer runs fn in a transaction with no business and no login set. It sees no business's
 // rows, only server-wide tables: tenants, accounts (without password hashes) and account_sessions.
+// push_devices is server-wide too, but its row rule shows each login only its own devices
+// (WithAccount), so here it shows none.
 func WithServer(ctx context.Context, db Beginner, fn func(pgx.Tx) error) error {
 	return within(ctx, db, Scope{}, fn)
 }

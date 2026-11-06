@@ -503,6 +503,213 @@
       navigator.serviceWorker.register("/sw.js").catch(function () { /* the app works without it */ });
     });
   }
+  // --- Phone notes (web push) -----------------------------------------------------------------
+  // Me's "Phone notes" block, and a short hello from every page, so Seyal knows this browser was
+  // opened (a phone not opened for 30 days stops getting phone notes) and who is logged in on it (on a
+  // shared phone, the previous person's phone notes end). The device push address goes only to Seyal's
+  // own server and is never shown. Turning on (subscribe) is the one step that makes the browser ask
+  // its push service for an address, and it happens only when the person taps Turn on.
+
+  var pushOK = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+  var DEVICE = "seyal-push-device"; // this browser's device id, to end it if permission is taken back
+  function keep(key, value) {
+    try { if (value) localStorage.setItem(key, value); else localStorage.removeItem(key); } catch (_) { /* storage blocked */ }
+  }
+  function kept(key) {
+    try { return localStorage.getItem(key); } catch (_) { return null; }
+  }
+  function pushSub() {
+    if (!pushOK) return Promise.resolve(null);
+    return navigator.serviceWorker.getRegistration("/")
+      .then(function (reg) { return reg ? reg.pushManager.getSubscription() : null; })
+      .catch(function () { return null; });
+  }
+  // postJSON sends to Seyal's phone-note routes. Only a JSON answer straight from the route counts:
+  // a reply that was sent on somewhere else (to the password page, or the login page) is a page, not
+  // the route's answer, so the route never saw the request and it is not ok.
+  function postJSON(url, data) {
+    return fetch(url, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+      .then(function (r) {
+        var json = !r.redirected && /^application\/json(;|$)/.test(r.headers.get("Content-Type") || "");
+        return (json ? r.json() : Promise.resolve({})).catch(function () { json = false; return {}; })
+          .then(function (j) { j.ok = r.ok && json; return j; });
+      });
+  }
+  // hello tells Seyal this browser was opened: at most once every 6 hours for one login, unless forced.
+  function hello(force) {
+    var url = document.body.getAttribute("data-hello"), login = document.body.getAttribute("data-login");
+    if (!url) return Promise.resolve(null);
+    return pushSub().then(function (sub) {
+      if (!sub) return null;
+      var mark = login + "|" + Math.floor(Date.now() / 21600000);
+      if (!force && kept("seyal-push-hello") === mark) return null;
+      return postJSON(url, sub.toJSON()).then(function (j) {
+        if (j.ok) keep("seyal-push-hello", mark);
+        return j;
+      });
+    });
+  }
+  function platform() {
+    var ua = navigator.userAgent;
+    if (/iPhone|iPad|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)) return "iphone";
+    if (/Android/.test(ua)) return "android";
+    if (/Windows/.test(ua)) return "windows";
+    return "";
+  }
+  function standalone() {
+    return navigator.standalone === true || (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+  }
+  // ownApp: the page runs as one business's own app, with its own storage and its own push address:
+  // an iPhone or iPad Home Screen icon, or a Mac Safari "Add to Dock" app (Safari's vendor is Apple;
+  // Chrome, Edge and Firefox on a Mac share one address for all the businesses on this server).
+  function ownApp() {
+    return standalone() && (platform() === "iphone" || /^Apple/.test(navigator.vendor || ""));
+  }
+  function showPush(box, state, label) {
+    box.querySelectorAll("[data-push-state]").forEach(function (el) { el.hidden = el.getAttribute("data-push-state") !== state; });
+    if (label) box.querySelector("[data-push-label]").textContent = label;
+    if (state === "blocked") {
+      var os = platform();
+      box.querySelectorAll("[data-push-os]").forEach(function (li) { li.hidden = os !== "" && li.getAttribute("data-push-os") !== os; });
+    }
+  }
+  function pushMessage(box, text) {
+    var m = box.querySelector("[data-push-msg]");
+    m.textContent = text;
+    m.hidden = !text;
+  }
+  // turnOffHere ends this browser's device on the server, and takes it out of the "Also on" list.
+  function turnOffHere(box, why) {
+    var id = box.dataset.device || kept(DEVICE);
+    keep(DEVICE, "");
+    if (!id) return Promise.resolve();
+    box.querySelectorAll("[data-device]").forEach(function (row) {
+      if (row.getAttribute("data-device") === id) row.hidden = true;
+    });
+    return fetch("/t/" + box.getAttribute("data-slug") + "/push/devices/" + encodeURIComponent(id) + "/off", {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "why=" + why,
+    }).catch(function () { /* tried */ });
+  }
+  function pushBlock() {
+    var box = document.getElementById("push-notes");
+    if (!box || !box.getAttribute("data-key") || box.dataset.ready) return;
+    box.dataset.ready = "1";
+    var os = platform();
+    if (os === "iphone" && !standalone()) { showPush(box, "iphone-tab"); return; }
+    if (!pushOK) { showPush(box, os === "iphone" ? "iphone-old" : "unsupported"); return; }
+    // The registration is fetched now, so a tap can subscribe at once (iOS needs it inside the tap).
+    navigator.serviceWorker.ready.then(function (reg) { box.registration = reg; });
+    if (Notification.permission === "denied") {
+      // Permission was taken back (by the person, or by the browser's clean-up): end this device on
+      // the server too, instead of saying "On" for a phone that gets nothing.
+      turnOffHere(box, "blocked");
+      showPush(box, "blocked");
+      return;
+    }
+    pushSub().then(function (sub) {
+      box.sub = sub; // a tap on Turn on drops it first (see turnOn)
+      if (!sub || Notification.permission !== "granted") {
+        // The browser lost its subscription (Chrome's clean-up for unused sites, or "Reset
+        // permission", puts the permission back to "ask" and drops it): if this browser had notes
+        // on, end that device too, so Me doesn't list this same phone under "Also on".
+        if (kept(DEVICE)) turnOffHere(box, "blocked");
+        showPush(box, "off");
+        return;
+      }
+      return hello(true).then(function (j) {
+        if (j && j.state === "on") {
+          box.dataset.device = j.device;
+          keep(DEVICE, j.device);
+          var row = box.querySelector('[data-device="' + j.device + '"]');
+          if (row) row.hidden = true; // it is "this phone" above, not "also on"
+          showPush(box, "on", j.label);
+        } else {
+          if (j && j.ok) keep(DEVICE, ""); // Seyal has no open device for this browser any more
+          showPush(box, j && j.state === "ended" ? "ended" : "off");
+        }
+      });
+    }).catch(function () { showPush(box, "off"); });
+  }
+  function keyBytes(key) {
+    var s = atob(key.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((key.length + 3) % 4));
+    var out = new Uint8Array(s.length);
+    for (var i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+    return out;
+  }
+  // turnOn is only offered when Seyal says notes are not on here (Off, or Ended). A subscription the
+  // browser still holds is then of no use: Seyal ended it, or it was made with an older server key
+  // (after a key change the browser refuses a new key while the old subscription is there). So the
+  // old one is dropped first and a fresh one made, with a new address. With no old one, subscribe
+  // runs at once, still inside the tap (iOS asks for the permission only from a tap); after an
+  // unsubscribe it runs on the same registration in the same chain, which iOS still accepts.
+  function turnOn(box, button) {
+    pushMessage(box, "");
+    if (!box.registration) { pushMessage(box, "One moment, then tap again."); return; }
+    button.disabled = true;
+    var reg = box.registration, old = box.sub;
+    var subscribe = function () {
+      return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(box.getAttribute("data-key")) });
+    };
+    var made = old
+      ? old.unsubscribe().catch(function () { /* try a new one anyway */ }).then(function () { box.sub = null; return subscribe(); })
+      : subscribe();
+    made
+      .then(function (sub) {
+        var body = sub.toJSON();
+        // An iPhone Home Screen icon (or a Mac Dock app) is this business's own app, with its own
+        // address: only this business sends to it, so a person with one per business doesn't get
+        // each note twice.
+        if (ownApp()) body.home = true;
+        return postJSON("/t/" + box.getAttribute("data-slug") + "/push/devices", body);
+      })
+      .then(function (j) {
+        if (!j.ok) { var err = new Error(j.error || ""); err.seyal = true; throw err; }
+        keep(DEVICE, j.device);
+        location.reload();
+      })
+      .catch(function (e) {
+        button.disabled = false;
+        if (Notification.permission === "denied") { showPush(box, "blocked"); return; }
+        // Seyal's own answer is plain words; a browser's error text is not, so it is never shown.
+        pushMessage(box, (e && e.seyal && e.message) || "Phone notes couldn't be turned on. Please try again.");
+      });
+  }
+  function turnOff(box, button) {
+    button.disabled = true;
+    pushSub().then(function (sub) { return sub && sub.unsubscribe(); }).catch(function () { /* still end it on the server */ })
+      .then(function () { return turnOffHere(box, "turned_off"); })
+      .then(function () { location.reload(); });
+  }
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-push]");
+    var box = b && b.closest("#push-notes");
+    if (!box) return;
+    if (b.getAttribute("data-push") === "on") turnOn(box, b);
+    else turnOff(box, b);
+  });
+  document.addEventListener("DOMContentLoaded", function () { hello(false); pushBlock(); });
+  document.addEventListener("htmx:afterSettle", pushBlock);
+  // Logging out also unsubscribes this browser, so a shared phone keeps nothing of this person (the
+  // server ends the device either way). The form is sent after that, or after 2 seconds at most.
+  document.addEventListener("submit", function (e) {
+    var form = e.target;
+    if (!pushOK || form.dataset.unsubscribed || !/\/logout(-everywhere)?$/.test(form.getAttribute("action") || "")) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    form.dataset.unsubscribed = "1";
+    var sent = false;
+    var go = function () {
+      if (sent) return;
+      sent = true;
+      keep(DEVICE, "");
+      keep("seyal-push-hello", "");
+      HTMLFormElement.prototype.submit.call(form);
+    };
+    setTimeout(go, 2000);
+    pushSub().then(function (sub) { return sub && sub.unsubscribe(); }).catch(function () { /* logged out anyway */ }).then(go);
+  }, true);
+
   // --- Sending a set-your-password link -------------------------------------------------------
   // "Copy message" puts the message (with the link) on the clipboard; "Share…" opens the phone's
   // share sheet (WhatsApp and others) where the browser has one. Tapping the link box selects it.

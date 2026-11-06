@@ -98,10 +98,15 @@ func runServe(out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	pushPublic, err := pushKey(os.Getenv)
+	if err != nil {
+		return err
+	}
 	srv, err := server.New(server.Config{
 		App: app, Store: media.Disk{Dir: mediaDir}, Library: lib, AI: aiSetup,
 		SecureCookies: secureCookies(os.Getenv("SEYAL_SECURE_COOKIES"), os.Getenv("SEYAL_ADDR")),
 		BehindProxy:   os.Getenv("SEYAL_BEHIND_PROXY") == "true",
+		PushKey:       pushPublic,
 	})
 	if err != nil {
 		return err
@@ -137,6 +142,11 @@ func runServe(out io.Writer) error {
 	fmt.Fprintf(out, "Seyal is running. Press Ctrl+C to stop.\n")
 	fmt.Fprintf(out, "  Log in at http://%s/\n", addr)
 	fmt.Fprintf(out, "  %s\n", chase.Says(every))
+	if pushPublic == "" {
+		fmt.Fprintln(out, "  Phone notes are off (SEYAL_PUSH).")
+	} else {
+		fmt.Fprintln(out, "  Phone notes can be turned on, on Me (SEYAL_PUSH=on). None are sent yet.")
+	}
 	if err := hs.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		stop() // the chaser stops too, before the database is closed
 		chasing.Wait()

@@ -72,6 +72,10 @@ type Server struct {
 	askRate *limiter
 	// limit is how long the web server gives one request (RequestLimit unless a test sets another).
 	limit time.Duration
+	// pushKey is the server's public push key for phone notes (Config.PushKey); "" means they are off.
+	pushKey string
+	// turnOnRate and helloRate limit the phone-note routes each login may call (phonenotes.go).
+	turnOnRate, helloRate *limiter
 }
 
 // RequestLimit is how long the web server gives one request to be read and answered: cmd/seyal sets
@@ -92,6 +96,10 @@ type Config struct {
 	// RequestLimit is the web server's time limit for one request; zero means RequestLimit. Only
 	// tests set another, to show what happens when little time is left.
 	RequestLimit time.Duration
+	// PushKey is the server's public push key (SEYAL_PUSH_PUBLIC_KEY) when phone notes are switched
+	// on (SEYAL_PUSH=on). Empty means they are off: Me offers no Turn on, so no browser asks its
+	// push service for an address.
+	PushKey string
 }
 
 // New prepares the web app.
@@ -100,7 +108,8 @@ func New(cfg Config) (*Server, error) {
 		pages: map[string]*template.Template{}, limiter: newLimiter(10, 15*time.Minute),
 		speaking: newSpeechSlots(speechAtOnce, speechPerBusiness), voiceRate: newLimiter(speechPerMinute, time.Minute),
 		audioUsed: newAudioUse(), voiceKey: seal.NewKey(),
-		askRate: newLimiter(questionsPerMinute, time.Minute), limit: cmp.Or(cfg.RequestLimit, RequestLimit)}
+		askRate: newLimiter(questionsPerMinute, time.Minute), limit: cmp.Or(cfg.RequestLimit, RequestLimit),
+		pushKey: cfg.PushKey, turnOnRate: newLimiter(turnOnsPerHour, time.Hour), helloRate: newLimiter(hellosPerMinute, time.Minute)}
 	if s.ai == nil {
 		s.ai = &ai.Setup{USDtoINR: 88}
 	}
@@ -195,6 +204,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /t/{slug}/logout", s.authed(s.logout))
 	mux.HandleFunc("POST /t/{slug}/logout-everywhere", s.authed(s.logoutEverywhere))
 	mux.HandleFunc("GET /t/{slug}/me", s.authed(s.mePage))
+	mux.HandleFunc("POST /t/{slug}/push/devices", s.authed(s.turnOnDevice))
+	mux.HandleFunc("POST /t/{slug}/push/devices/{id}/off", s.authed(s.turnOffDevice))
+	mux.HandleFunc("POST /t/{slug}/push/hello", s.authed(s.helloDevice))
 	mux.HandleFunc("GET /t/{slug}/password", s.authed(s.passwordPage))
 	mux.HandleFunc("POST /t/{slug}/password", s.authed(s.changePassword))
 	mux.HandleFunc("GET /t/{slug}/{$}", s.authed(s.tellPage))
@@ -306,6 +318,10 @@ func (s *Server) authed(h func(http.ResponseWriter, *http.Request, *call)) http.
 	return func(w http.ResponseWriter, r *http.Request) {
 		toLogin := func() {
 			login := "/t/" + r.PathValue("slug") + "/login"
+			// A page opened without a login (e.g. from a phone note) comes back after it.
+			if r.Method == http.MethodGet && r.Header.Get("HX-Request") != "true" && safeNext(r.PathValue("slug"), r.URL.Path) {
+				login += "?next=" + url.QueryEscape(r.URL.Path)
+			}
 			if r.Header.Get("HX-Request") == "true" {
 				w.Header().Set("HX-Redirect", login)
 				w.WriteHeader(http.StatusUnauthorized)
@@ -354,8 +370,12 @@ func (s *Server) authed(h func(http.ResponseWriter, *http.Request, *call)) http.
 		if cookieValue(r, lastCookie) != t.Slug {
 			s.setLast(w, t.Slug)
 		}
-		// With a temporary password, the person chooses their own before anything else.
+		// With a temporary password, the person chooses their own before anything else, and then goes
+		// on to the page they opened.
 		if pw := "/t/" + t.Slug + "/password"; c.session.MustChange && r.URL.Path != pw && !strings.HasSuffix(r.URL.Path, "/logout") {
+			if r.Method == http.MethodGet && r.Header.Get("HX-Request") != "true" && safeNext(t.Slug, r.URL.Path) {
+				pw += "?next=" + url.QueryEscape(r.URL.Path)
+			}
 			if r.Header.Get("HX-Request") == "true" {
 				w.Header().Set("HX-Redirect", pw)
 				w.WriteHeader(http.StatusNoContent)
@@ -400,7 +420,7 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		return err
 	})
 	if errors.Is(err, auth.ErrNoSession) {
-		s.render(w, r, http.StatusOK, "login", page{Data: ""})
+		s.render(w, r, http.StatusOK, "login", page{Data: loginView{}})
 		return
 	}
 	if err != nil {
@@ -466,6 +486,10 @@ func (s *Server) manifest(w http.ResponseWriter, r *http.Request) {
 // (where they choose), whether the address is real or not.
 func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
+	next := r.URL.Query().Get("next")
+	if !safeNext(slug, next) {
+		next = ""
+	}
 	if token := cookieValue(r, accountCookie); token != "" {
 		var member bool
 		err := db.WithServer(r.Context(), s.app, func(tx pgx.Tx) error {
@@ -478,7 +502,7 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 		})
 		switch {
 		case err == nil && member:
-			http.Redirect(w, r, "/t/"+slug+"/", http.StatusSeeOther)
+			http.Redirect(w, r, cmp.Or(next, "/t/"+slug+"/"), http.StatusSeeOther)
 			return
 		case err == nil:
 			http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -488,7 +512,13 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.render(w, r, http.StatusOK, "login", page{Slug: slug, Data: ""})
+	s.render(w, r, http.StatusOK, "login", page{Slug: slug, Data: loginView{Next: next}})
+}
+
+// loginView is the login form: the email typed (shown again after a wrong password), and the safe
+// "go back to" path (safeNext), if any.
+type loginView struct {
+	Email, Next string
 }
 
 // activeIn reports whether the login reaches an active person in the business at slug.
@@ -504,7 +534,11 @@ func activeIn(r *http.Request, tx pgx.Tx, accountID, slug string) (bool, error) 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug") // "" on "/"
 	email, password := strings.TrimSpace(r.PostFormValue("email")), r.PostFormValue("password")
-	p := page{Slug: slug, Data: email}
+	next := r.PostFormValue("next")
+	if !safeNext(slug, next) {
+		next = "" // an outside address, or another business's, is never followed
+	}
+	p := page{Slug: slug, Data: loginView{Email: email, Next: next}}
 	// Failed logins are counted per visitor's address and per email, over every page with the form:
 	// guessing at one person's login from many addresses, or on many business addresses, is slowed
 	// down too.
@@ -537,7 +571,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setSession(w, token, a.ExpiresAt)
 	if member {
-		http.Redirect(w, r, "/t/"+slug+"/", http.StatusSeeOther)
+		http.Redirect(w, r, cmp.Or(next, "/t/"+slug+"/"), http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)

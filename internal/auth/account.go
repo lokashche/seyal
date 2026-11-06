@@ -244,6 +244,10 @@ func LogOut(ctx context.Context, tx pgx.Tx, token string) error {
 	if err != nil {
 		return err
 	}
+	// Phone notes on this browser end with its login session (the page also unsubscribes it).
+	if err := endSessionDevices(ctx, tx, accountID, login); err != nil {
+		return err
+	}
 	return eachBusiness(ctx, tx, accountID, func(b Business) error {
 		var personID string
 		err := tx.QueryRow(ctx, `
@@ -277,7 +281,7 @@ func LogOut(ctx context.Context, tx pgx.Tx, token string) error {
 // phone was lost). Every business it belongs to records person.logged_out_everywhere with the number
 // of that business's sessions it ended. Any transaction will do.
 func LogOutEverywhere(ctx context.Context, tx pgx.Tx, accountID string) error {
-	if err := endLogins(ctx, tx, accountID); err != nil {
+	if err := endLogins(ctx, tx, accountID, "logged_out_everywhere"); err != nil {
 		return err
 	}
 	return eachBusiness(ctx, tx, accountID, func(b Business) error {
@@ -293,13 +297,14 @@ func LogOutEverywhere(ctx context.Context, tx pgx.Tx, accountID string) error {
 	})
 }
 
-// endLogins ends every open session of a login.
-func endLogins(ctx context.Context, tx pgx.Tx, accountID string) error {
+// endLogins ends every open session of a login, and its phone notes on every device (why says why:
+// "logged_out_everywhere" or "password"), so a lost phone stops showing its work too.
+func endLogins(ctx context.Context, tx pgx.Tx, accountID, why string) error {
 	if _, err := tx.Exec(ctx, `
 		UPDATE account_sessions SET ended_at = now() WHERE account_id = $1 AND ended_at IS NULL`, accountID); err != nil {
 		return fmt.Errorf("auth: end logins: %w", err)
 	}
-	return nil
+	return endDevices(ctx, tx, accountID, why)
 }
 
 // endSessions ends a person's open sessions in the current business (entries and old-style ones)
@@ -336,7 +341,7 @@ func setPassword(ctx context.Context, tx pgx.Tx, accountID, password string, sys
 		accountID, string(hash)); err != nil {
 		return fmt.Errorf("auth: set password: %w", err)
 	}
-	if err := endLogins(ctx, tx, accountID); err != nil {
+	if err := endLogins(ctx, tx, accountID, "password"); err != nil {
 		return err
 	}
 	return eachBusiness(ctx, tx, accountID, func(b Business) error {

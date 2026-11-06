@@ -63,7 +63,7 @@ func TestEventsCannotBeChanged(t *testing.T) {
 
 	for _, sql := range []string{"UPDATE ledger SET kind = 'changed'", "DELETE FROM ledger", "TRUNCATE ledger"} {
 		wantCode(t, db.WithTenant(ctx, app, tenant, execSQL(sql)), codeNoPrivilege, "app: "+sql)
-		wantCode(t, db.WithTenant(ctx, owner, tenant, execSQL(sql)), codeRaised, "owner: "+sql)
+		wantCode(t, withShortLocks(ctx, owner, tenant, execSQL(sql)), codeRaised, "owner: "+sql)
 	}
 }
 
@@ -90,7 +90,7 @@ func TestVerifyFindsTampering(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tenant, person := testdb.NewTenant(t, owner, "Ledger Test")
 			appendN(t, app, tenant, person, 3)
-			err := db.WithTenant(ctx, owner, tenant, func(tx pgx.Tx) error {
+			err := withShortLocks(ctx, owner, tenant, func(tx pgx.Tx) error {
 				for _, sql := range []string{
 					"ALTER TABLE ledger DISABLE TRIGGER ledger_no_update_delete",
 					tt.tamper,
@@ -225,6 +225,30 @@ func verify(t *testing.T, pool *pgxpool.Pool, tenant string, from ledger.Checkpo
 		t.Fatalf("verify: %v", err)
 	}
 	return rep
+}
+
+// withShortLocks runs fn in a transaction of the business, like db.WithTenant, for statements that lock
+// the whole ledger table (TRUNCATE, ALTER TABLE). Every test package shares the one test database at
+// the same time, and while such a statement waits for its lock, every later read or write of the ledger
+// in every package waits behind it. If the transaction it waits for is itself waiting (in Go) for one of
+// those, nothing ever moves again, and Postgres can't see it to break it (the likely reason another
+// package's test once hung until go test's 10-minute limit). So the lock is waited for at most half a second, and the whole transaction is tried
+// again (up to 40 times) when the lock wasn't free.
+func withShortLocks(ctx context.Context, owner *pgxpool.Pool, tenant string, fn func(pgx.Tx) error) error {
+	const lockNotAvailable = "55P03"
+	for try := 1; ; try++ {
+		err := db.WithTenant(ctx, owner, tenant, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, "SET LOCAL lock_timeout = '500ms'"); err != nil {
+				return err
+			}
+			return fn(tx)
+		})
+		var pgErr *pgconn.PgError
+		if try < 40 && errors.As(err, &pgErr) && pgErr.Code == lockNotAvailable {
+			continue
+		}
+		return err
+	}
 }
 
 func execSQL(sql string) func(pgx.Tx) error {

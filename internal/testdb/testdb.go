@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,15 +44,33 @@ func Connect(t testing.TB) (owner, app *pgxpool.Pool) {
 	if _, err := migrations.Up(ctx, ownerURL, nil); err != nil {
 		t.Fatalf("migrate test database: %v", err)
 	}
-	if owner, err = db.Open(ctx, ownerURL); err != nil {
+	if owner, err = db.Open(ctx, lockLimit(ownerURL)); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(owner.Close)
-	if app, err = db.Open(ctx, appURL); err != nil {
+	if app, err = db.Open(ctx, lockLimit(appURL)); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(app.Close)
 	return owner, app
+}
+
+// lockLimit adds a time limit for waiting on a lock (lock_timeout) to a test database address. All
+// test packages share one database at the same time, so a test that waits on a lock held by another
+// package's stuck transaction would otherwise wait until go test gives up after 10 minutes, with no
+// word on why. With the limit, the statement fails after a minute and Postgres's error names the wait.
+// An address that isn't a postgres:// URL is left as it is.
+func lockLimit(address string) string {
+	u, err := url.Parse(address)
+	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
+		return address
+	}
+	q := u.Query()
+	if q.Get("lock_timeout") == "" {
+		q.Set("lock_timeout", "60s") // pgx passes settings it doesn't know on to Postgres
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 // NewTenant creates a business with a unique slug and one person, and returns both ids. The person
@@ -119,6 +138,37 @@ func GiveLogins(t testing.TB, owner *pgxpool.Pool, tenantID string, personIDs ..
 		account, _ := NewAccount(t, owner)
 		LinkPerson(t, owner, tenantID, id, account)
 	}
+}
+
+// ShadowLedger gives tx, until it ends, its own copy of the ledger table: the same columns and
+// indexes, filled with the same made-up rows every time (50 businesses, tx's own among them, with 400
+// events each, 40 kinds and 50 subjects per business), with its statistics read. A temporary table
+// comes first when Postgres looks up a table name, so every query in tx that names "ledger" then reads
+// the copy. tx must come from db.WithTenant.
+//
+// It is for checking a query plan (EXPLAIN) only. Postgres picks a plan from how many rows it expects,
+// and it reads the business id from app.tenant_id while planning: a brand-new test business has
+// almost no events, and how many Postgres guesses for it depends on the whole shared test database,
+// which other packages fill while the tests run. With a guess of one or two rows, walking the whole
+// business by its primary key looks as cheap as any index, so a plan check could pass alone and fail
+// in the full run. In the copy, the business always has 400 events among 50 businesses, so the plan is
+// the same in every run.
+func ShadowLedger(ctx context.Context, tx pgx.Tx) error {
+	for _, sql := range []string{
+		`CREATE TEMPORARY TABLE ledger (LIKE public.ledger INCLUDING DEFAULTS INCLUDING INDEXES) ON COMMIT DROP`,
+		`INSERT INTO pg_temp.ledger (tenant_id, seq, occurred_at, kind, subject_type, subject_id, actor_kind, body, prev_hash, hash)
+		SELECT CASE WHEN b = 1 THEN current_tenant() ELSE md5('business ' || b)::uuid END, s, now(),
+			coalesce((ARRAY['person.created', 'person.renamed', 'person.updated'])[s % 40 + 1], 'test.kind' || s % 40),
+			'work_item', md5('subject ' || b || ' ' || s % 50)::uuid, 'system', '{}',
+			decode(repeat('00', 32), 'hex'), decode(repeat('00', 32), 'hex')
+		FROM generate_series(1, 50) b, generate_series(1, 400) s`,
+		`ANALYZE pg_temp.ledger`,
+	} {
+		if _, err := tx.Exec(ctx, sql); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // repoRoot finds the folder that holds go.mod, starting from the current folder.

@@ -3,6 +3,7 @@
 package server
 
 import (
+	"cmp"
 	"errors"
 	"net/http"
 	"strings"
@@ -21,14 +22,32 @@ import (
 // an admin there makes a new set-your-password link (welcome.go); otherwise only the server's
 // operator can reset it (`seyal set-password`, D64).
 
+// passwordView is the password form: whether it is the first choice after a temporary password, and
+// the safe "go back to" path (safeNext) to go on to afterwards, if any. Push says phone notes are
+// switched on for this server: a new password stops them on every device, this one too, and the page
+// says so.
+type passwordView struct {
+	First bool
+	Next  string
+	Push  bool
+}
+
 func (s *Server) passwordPage(w http.ResponseWriter, r *http.Request, c *call) {
-	s.render(w, r, http.StatusOK, "password", c.page(c.session.MustChange))
+	s.render(w, r, http.StatusOK, "password", c.page(s.passwordView(c, r.URL.Query().Get("next"))))
+}
+
+func (s *Server) passwordView(c *call, next string) passwordView {
+	if !safeNext(c.tenant.Slug, next) {
+		next = ""
+	}
+	return passwordView{First: c.session.MustChange, Next: next, Push: s.pushKey != ""}
 }
 
 func (s *Server) changePassword(w http.ResponseWriter, r *http.Request, c *call) {
 	current, next := r.PostFormValue("current"), r.PostFormValue("next")
+	view := s.passwordView(c, r.PostFormValue("then"))
 	problem := func(msg string) {
-		p := c.page(c.session.MustChange)
+		p := c.page(view)
 		p.Error = msg
 		s.render(w, r, http.StatusUnprocessableEntity, "password", p)
 	}
@@ -45,7 +64,7 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request, c *call)
 	// can't be used to guess the password faster than the login form allows.
 	ip, who := "ip|"+s.clientIP(r), "email|"+strings.ToLower(c.session.Email)
 	if !s.limiter.take(ip, who) {
-		p := c.page(c.session.MustChange)
+		p := c.page(view)
 		p.Error = "Too many failed attempts. Please wait 15 minutes and try again."
 		s.render(w, r, http.StatusTooManyRequests, "password", p)
 		return
@@ -74,5 +93,5 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request, c *call)
 		return
 	}
 	s.setSession(w, token, a.ExpiresAt)
-	http.Redirect(w, r, "/t/"+c.tenant.Slug+"/", http.StatusSeeOther)
+	http.Redirect(w, r, cmp.Or(view.Next, "/t/"+c.tenant.Slug+"/"), http.StatusSeeOther)
 }

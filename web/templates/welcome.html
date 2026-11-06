@@ -1,6 +1,8 @@
 {{define "title"}}Welcome · Seyal{{end}}
 {{define "content"}}
 <div class="center">
+  {{/* The forms that log in are not boosted: the page after them must load in full, so its <body>
+       carries the new login's phone-notes hello (app.js) and its <head> the business's manifest. */}}
   {{with .Data}}{{if .Bad}}
   <div class="card">
     <h1>Seyal<span class="tamil" lang="ta">செயல்</span></h1>
@@ -27,7 +29,7 @@
     <button class="btn ghost">{{icon "logout"}}Log out</button>
   </form>
   {{else if and (eq .Mode "join") .Same}}
-  <form method="post" class="card">
+  <form method="post" class="card" hx-boost="false">
     <h1>Seyal<span class="tamil" lang="ta">செயல்</span></h1>
     <p class="lede">Welcome to {{$.Business}}, {{.Name}}.</p>
     {{with $.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
@@ -36,7 +38,7 @@
     <button class="btn">Add {{$.Business}}</button>
   </form>
   {{else if eq .Mode "join"}}
-  <form method="post" class="card">
+  <form method="post" class="card" hx-boost="false">
     <h1>Seyal<span class="tamil" lang="ta">செயல்</span></h1>
     <p class="lede">Welcome to {{$.Business}}, {{.Name}}.</p>
     {{with $.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
@@ -52,7 +54,7 @@
       server) can set a new one: ask them. Then open this link again.</p>
   </form>
   {{else}}
-  <form method="post" class="card">
+  <form method="post" class="card" hx-boost="false">
     <h1>Seyal<span class="tamil" lang="ta">செயல்</span></h1>
     <p class="lede">Welcome to {{$.Business}}, {{.Name}}. Choose your password to start.</p>
     {{with $.Error}}<p class="error" role="alert">{{.}}</p>{{end}}
