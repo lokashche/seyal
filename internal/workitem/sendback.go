@@ -146,33 +146,74 @@ func (s session) postStays(it *Item, why string, moved bool) error {
 
 // lastHolder finds who had the item when it last left state: the holder in the snapshot of the
 // latest item.state_changed event whose "from" is state. Both are "" when it never left that step (or
-// nobody had it then).
+// nobody had it then). Work that left the step while it was still with whoever Seyal escalated it to
+// (D75, M6) counts as the holder's Seyal took it from (from_holder), so returned work goes back to
+// them, not to the Owner team.
 func (s session) lastHolder(id, state string) (person, team string, err error) {
 	rows, _ := s.tx.Query(s.ctx, `
 		SELECT body FROM ledger
-		WHERE tenant_id = current_tenant() AND subject_id = $1::uuid AND kind = 'item.state_changed'
+		WHERE tenant_id = current_tenant() AND subject_id = $1::uuid AND kind IN ('item.state_changed', 'item.assigned')
 		ORDER BY seq DESC`, id)
 	bodies, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
 		return "", "", fmt.Errorf("workitem: last holder: %w", err)
 	}
-	for _, body := range bodies {
-		var e struct {
-			Payload struct {
-				Change struct {
-					From string `json:"from"`
-				} `json:"change"`
-				Item Item `json:"item"`
-			} `json:"payload"`
-		}
-		if err := json.Unmarshal([]byte(body), &e); err != nil {
+	type event struct {
+		Kind    string `json:"kind"`
+		Payload struct {
+			Change struct {
+				From       string `json:"from"`
+				How        string `json:"how"`
+				FromHolder string `json:"from_holder"`
+				FromTeam   string `json:"from_team"`
+			} `json:"change"`
+			Item Item `json:"item"`
+		} `json:"payload"`
+	}
+	events := make([]event, len(bodies))
+	for i, body := range bodies {
+		if err := json.Unmarshal([]byte(body), &events[i]); err != nil {
 			return "", "", fmt.Errorf("workitem: last holder: %w", err)
 		}
-		if e.Payload.Change.From == state {
-			return e.Payload.Item.AssigneeID, e.Payload.Item.Team, nil
+	}
+	for i, e := range events {
+		if e.Kind != "item.state_changed" || e.Payload.Change.From != state {
+			continue
 		}
+		left := e.Payload.Item // the item as it left: still with whoever had it there
+		// Look back through that stay (until the move that brought it in) for Seyal's escalation.
+		for _, x := range events[i+1:] {
+			if x.Kind == "item.state_changed" {
+				break
+			}
+			if x.Payload.Change.How != HowEscalate {
+				continue
+			}
+			with, err := s.stillWith(left, x.Payload.Item, x.Payload.Change.FromHolder)
+			if err != nil || !with {
+				return left.AssigneeID, left.Team, err
+			}
+			return x.Payload.Change.FromHolder, x.Payload.Change.FromTeam, nil
+		}
+		return left.AssigneeID, left.Team, nil
 	}
 	return "", "", nil
+}
+
+// stillWith reports whether the item, as it left a step (left), was still with whoever Seyal escalated
+// it to (esc, the item just after the escalation): the same team or person, or someone of that team who
+// took it (not the person Seyal took it from).
+func (s session) stillWith(left, esc Item, fromHolder string) (bool, error) {
+	switch {
+	case left.AssigneeID == "" && left.Team == "":
+		return false, nil
+	case left.AssigneeID == esc.AssigneeID && left.Team == esc.Team:
+		return true, nil
+	case esc.Team == "" || left.AssigneeID == "" || left.AssigneeID == fromHolder:
+		return false, nil
+	}
+	not, err := s.mayHold(left.AssigneeID, esc.Team)
+	return err == nil && not == "", err
 }
 
 // mayHold says whether a person may still get work from a step's rule (a step's owner, an assign

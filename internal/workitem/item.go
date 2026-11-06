@@ -392,7 +392,13 @@ func (s session) engineItem(it Item) engine.Item { return it.Engine() }
 // Engine is the part of the item the engine's rules need: its state, fields and who has it.
 func (it Item) Engine() engine.Item {
 	return engine.Item{State: it.State, Version: it.Version, Fields: it.Fields,
-		Assignee: it.AssigneeID, Team: it.Team, Starter: it.CreatedBy}
+		Assignee: it.AssigneeID, Team: it.Team, Starter: it.CreatedBy, Escalated: it.EscalatedTo()}
+}
+
+// EscalatedTo reports whether Seyal's escalation was the item's latest hand-over (D75, M6): it was
+// escalated in this step stay, and hasn't changed hands since. Escalate stamps both moments the same.
+func (it Item) EscalatedTo() bool {
+	return it.EscalatedAt != "" && it.HeldSince == it.EscalatedAt
 }
 
 // actorPerson is the person behind an action: the person themselves, or whom the agent acted for.

@@ -11,6 +11,9 @@ business:
   currency: INR
   timezone: Asia/Kolkata
   fiscal_year_start_month: 4
+  # Days the office is closed. Seyal counts working days without them, before it reminds or hands work
+  # on (D75). Left out: every day is a working day. "holidays: [2026-11-09]" lists dates it is closed.
+  days_off: [sunday]
 
 # The processes this business uses: sample templates by id, or your own files ("my-process.yaml",
 # relative to this file). The lists they need (clients, work types) come with them. Use "lists:" to
@@ -36,6 +39,9 @@ people:
   - { key: ben, name: Ben, email: ben@kaveri-demo.example, roles: [ops] }
   - { key: dev, name: Dev, email: dev@kaveri-demo.example, roles: [ops] }
   - { key: chitra, name: Chitra, email: chitra@kaveri-demo.example, roles: [owner, admin] }
+  # Elan is a third Owner without admin rights: work Seyal hands to the Owner team after it waited too
+  # long, he may only pass on (docs/phase2-design.md, decision 9).
+  - { key: elan, name: Elan, email: elan@kaveri-demo.example, roles: [owner] }
 
 master:
   client:

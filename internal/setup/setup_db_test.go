@@ -7,8 +7,11 @@ package setup_test
 import (
 	"context"
 	"crypto/rand"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -58,12 +61,14 @@ func TestImportDemoBusiness(t *testing.T) {
 		in(func(tx pgx.Tx) error {
 			var currency, zone string
 			var month, people, roles int
-			if err := tx.QueryRow(ctx, "SELECT currency, timezone, fiscal_year_start_month FROM tenants WHERE id = current_tenant()").
-				Scan(&currency, &zone, &month); err != nil {
+			var daysOff []int16
+			var paused bool
+			if err := tx.QueryRow(ctx, `SELECT currency, timezone, fiscal_year_start_month, days_off, chase_paused
+				FROM tenants WHERE id = current_tenant()`).Scan(&currency, &zone, &month, &daysOff, &paused); err != nil {
 				return err
 			}
-			if currency != "INR" || zone != "Asia/Kolkata" || month != 4 {
-				t.Errorf("settings = %s %s %d", currency, zone, month)
+			if currency != "INR" || zone != "Asia/Kolkata" || month != 4 || len(daysOff) != 1 || daysOff[0] != 0 || paused {
+				t.Errorf("settings = %s %s %d, days off %v, paused %v; want Sunday off and chasing on", currency, zone, month, daysOff, paused)
 			}
 			if err := tx.QueryRow(ctx, "SELECT count(*) FROM persons").Scan(&people); err != nil {
 				return err
@@ -71,8 +76,8 @@ func TestImportDemoBusiness(t *testing.T) {
 			if err := tx.QueryRow(ctx, "SELECT count(*) FROM person_roles").Scan(&roles); err != nil {
 				return err
 			}
-			if people != 10 || roles != 10 {
-				t.Errorf("people = %d, role grants = %d; want 10 and 10", people, roles)
+			if people != 11 || roles != 11 {
+				t.Errorf("people = %d, role grants = %d; want 11 and 11", people, roles)
 			}
 			books, err := master.Get(ctx, tx, "work_type", "monthly-books")
 			if err != nil {
@@ -167,6 +172,92 @@ func TestImportDemoBusiness(t *testing.T) {
 			return tx.QueryRow(ctx, "SELECT count(*) FROM accounts WHERE email = $1", email("nobody")).Scan(&n)
 		}); err != nil || n != 0 {
 			t.Errorf("logins for the email = %d, %v; want none", n, err)
+		}
+	})
+
+	t.Run("changed working days and the pause are recorded", func(t *testing.T) {
+		f.Business.DaysOff = []string{"saturday", "Sunday"}
+		f.Business.Holidays = []string{"2026-11-09"}
+		f.Business.Chase = "paused"
+		again, err := setup.Import(ctx, owner, app, f)
+		if err != nil || again.Changes != 1 {
+			t.Fatalf("import after new working days = %+v, %v; want exactly 1 change", again, err)
+		}
+		in(func(tx pgx.Tx) error {
+			var daysOff []int16
+			var holidays []string
+			var paused bool
+			if err := tx.QueryRow(ctx, `SELECT days_off, holidays::text[], chase_paused FROM tenants WHERE id = current_tenant()`).
+				Scan(&daysOff, &holidays, &paused); err != nil {
+				return err
+			}
+			if len(daysOff) != 2 || daysOff[0] != 0 || daysOff[1] != 6 || len(holidays) != 1 || holidays[0] != "2026-11-09" || !paused {
+				t.Errorf("stored days off %v, holidays %v, paused %v", daysOff, holidays, paused)
+			}
+			var n int
+			var change string
+			if err := tx.QueryRow(ctx, `SELECT count(*), coalesce(max(body::jsonb #>> '{payload,changes}'), '') FROM ledger
+				WHERE kind = 'business.updated' AND actor_kind = 'system' AND subject_id::text = current_tenant()::text`).Scan(&n, &change); err != nil {
+				return err
+			}
+			for _, want := range []string{`"days_off": {"new": ["sunday", "saturday"], "old": ["sunday"]}`,
+				`"holidays": {"new": ["2026-11-09"], "old": []}`, `"chase_paused": {"new": true, "old": false}`} {
+				if !strings.Contains(change, want) {
+					t.Errorf("business.updated changes = %s; want %s", change, want)
+				}
+			}
+			if n != 1 || strings.Contains(change, "timezone") {
+				t.Errorf("%d business.updated events, changes %s; want one, with only what changed", n, change)
+			}
+			return nil
+		})
+		if again, err := setup.Import(ctx, owner, app, f); err != nil || again.Changes != 0 {
+			t.Errorf("the same file again = %+v, %v; want no changes", again, err)
+		}
+	})
+
+	// A writer holds the ledger head and is about to add its event, whose tenant check locks the
+	// business's row (as a foreign key check does). An import at that moment waits for the writer,
+	// instead of locking that row first and waiting in a circle (a deadlock).
+	t.Run("an import waits for a writer, without a deadlock", func(t *testing.T) {
+		f.Business.Holidays = []string{"2026-11-09", "2026-11-10"}
+		done := make(chan error, 1)
+		err := db.WithTenant(ctx, owner, first.TenantID, func(tx pgx.Tx) error {
+			if err := ledger.Lock(ctx, tx); err != nil {
+				return err
+			}
+			var pid int
+			if err := tx.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&pid); err != nil {
+				return err
+			}
+			go func() {
+				again, err := setup.Import(ctx, owner, app, f)
+				if err == nil && again.Changes != 1 {
+					err = fmt.Errorf("import = %+v; want exactly 1 change", again)
+				}
+				done <- err
+			}()
+			for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+				var waiting int
+				if err := owner.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))", pid).
+					Scan(&waiting); err != nil {
+					return err
+				}
+				if waiting > 0 {
+					break
+				}
+				if time.Now().After(deadline) {
+					return errors.New("the import never waited for the writer")
+				}
+			}
+			_, err := tx.Exec(ctx, "SELECT 1 FROM tenants WHERE id = current_tenant() FOR KEY SHARE")
+			return err
+		})
+		if err != nil {
+			t.Errorf("the writer: %v", err)
+		}
+		if err := <-done; err != nil {
+			t.Errorf("the import: %v", err)
 		}
 	})
 

@@ -54,7 +54,8 @@ var DefaultLimits = Limits{LockWait: 5 * time.Second, QueryLimit: 10 * time.Seco
 // Business is what a finder knows about the business it looks at.
 type Business struct {
 	db.Tenant
-	Zone *time.Location // the business's time zone: days are counted in it
+	Zone     *time.Location // the business's time zone: days are counted in it
+	Calendar Calendar       // its working days (days off and holidays), in Zone
 	// Today is the business's day (midnight in Zone) for working out what is due. With `dev chase
 	// --as-if` it is the pretend day; everything stored stays real (Now).
 	Today time.Time
@@ -77,9 +78,9 @@ type Task struct {
 // A Finder lists what may be due in one business. It only reads: its transaction is read-only.
 type Finder func(ctx context.Context, tx pgx.Tx, b Business) ([]Task, error)
 
-// Finders is what a round looks for. Part 1 of Phase 2 builds the chaser alone, so there is nothing
-// yet; reminders and escalations (M6) and recurring work (R) add theirs.
-var Finders []Finder
+// Finders is what a round looks for: reminders and escalations (M6, deadlines.go). Recurring work
+// (R) adds its own later.
+var Finders = []Finder{findDeadlines}
 
 // Chaser runs rounds. Make one with New; the fields left empty get their defaults.
 type Chaser struct {
@@ -90,8 +91,9 @@ type Chaser struct {
 	Now     func() time.Time                               // the app's clock; nil: time.Now (tests use another)
 	Limits  Limits
 
-	mu   sync.Mutex        // one round at a time
-	skip map[string]string // business id + task key → the day it failed, so it waits until tomorrow
+	mu     sync.Mutex        // one round at a time
+	skip   map[string]string // business id + task key → the day it failed, so it waits until tomorrow
+	paused map[string]bool   // businesses whose set-up file says "chase: paused", logged once
 }
 
 // New returns a chaser for the app pool that writes its log lines to l.
@@ -235,6 +237,7 @@ func (c *Chaser) business(ctx context.Context, t db.Tenant, asIf string) (int, e
 	now := c.now()
 	b := Business{Tenant: t, Now: now, AsIf: asIf}
 	var tasks []Task
+	paused := false
 	err := db.WithTenant(ctx, c.DB, t.ID, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, "SET TRANSACTION READ ONLY"); err != nil {
 			return err
@@ -242,14 +245,23 @@ func (c *Chaser) business(ctx context.Context, t db.Tenant, asIf string) (int, e
 		var zone string
 		var last *time.Time
 		var dbNow time.Time
+		var daysOff []int16
 		if err := tx.QueryRow(ctx, `
-			SELECT timezone, (SELECT occurred_at FROM ledger WHERE tenant_id = current_tenant() ORDER BY seq DESC LIMIT 1), now()
-			FROM tenants WHERE id = current_tenant()`).Scan(&zone, &last, &dbNow); err != nil {
+			SELECT timezone, (SELECT occurred_at FROM ledger WHERE tenant_id = current_tenant() ORDER BY seq DESC LIMIT 1), now(),
+				days_off, ARRAY(SELECT to_char(d, 'YYYY-MM-DD') FROM unnest(holidays) d ORDER BY d), chase_paused
+			FROM tenants WHERE id = current_tenant()`).Scan(&zone, &last, &dbNow, &daysOff, &b.Calendar.Holidays, &paused); err != nil {
 			return fmt.Errorf("business settings: %w", err)
+		}
+		if paused {
+			return nil // its set-up file stops chasing for this business only (decision 20)
 		}
 		loc, err := time.LoadLocation(zone)
 		if err != nil {
 			return fmt.Errorf("time zone %q: %w", zone, err)
+		}
+		b.Calendar.Zone = loc
+		for _, d := range daysOff {
+			b.Calendar.DaysOff = append(b.Calendar.DaysOff, time.Weekday(d))
 		}
 		if last != nil {
 			if err := notBefore(now, *last); err != nil {
@@ -276,6 +288,9 @@ func (c *Chaser) business(ctx context.Context, t db.Tenant, asIf string) (int, e
 	})
 	if err != nil {
 		return 0, err
+	}
+	if c.notePaused(t, paused) {
+		return 0, nil
 	}
 
 	slices.SortStableFunc(tasks, func(x, y Task) int { return x.Due.Compare(y.Due) })
@@ -408,6 +423,19 @@ func pretendDay(ctx context.Context, tx pgx.Tx, day string, loc *time.Location, 
 func busy(err error) bool {
 	var pg *pgconn.PgError
 	return errors.As(err, &pg) && pg.Code == "55P03" // lock_not_available
+}
+
+// notePaused logs once that a business is paused (its set-up file says "chase: paused"), and again
+// only after it was chased in between. It returns paused.
+func (c *Chaser) notePaused(t db.Tenant, paused bool) bool {
+	if c.paused == nil {
+		c.paused = map[string]bool{}
+	}
+	if paused && !c.paused[t.ID] {
+		c.Log.Printf("%s %s: paused in its set-up file (chase: paused); nothing is chased there", logPrefix, t.Slug)
+	}
+	c.paused[t.ID] = paused
+	return paused
 }
 
 // remember keeps key as failed today; forget drops what one business failed on earlier days.

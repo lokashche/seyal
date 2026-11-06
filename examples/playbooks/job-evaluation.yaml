@@ -4,10 +4,12 @@
 # Version 0.5 says who may press each button ("who"), who may receive the job in each step
 # ("pass_to"), which button sends work back ("back"), and that returned work goes to whoever last had
 # the step ("returns_to: last"). A job for new work is studied only once for each work type, and the
-# fee Sales proposed is the one Sales last sent.
+# fee Sales proposed is the one Sales last sent. Version 0.6 adds timing (D75, M6): after 2 working
+# days in Operations Seyal reminds whoever has the job, after 4 it hands the job to the Owner team, and
+# approvers still missing are reminded after 1 working day.
 # Generic example only. Real playbooks live in each business's own set-up.
 id: job-evaluation
-version: "0.5"
+version: "0.6"
 description: Evaluate a new piece of client work. Sales agrees the basics, Operations plans it and confirms the fee, then it is approved before work starts.
 examples:
   - "New monthly bookkeeping job for Acme Traders, fee 12000"
@@ -69,8 +71,13 @@ steps:
     owner: "role:ops"
     pass_to: ["role:ops"] # people in Operations, or the Operations team
     returns_to: last
+    remind_after: 2 days # working days in this step before Seyal reminds whoever has the job
+    escalate_after: 4 days # working days before Seyal hands it on...
+    escalate_to: "role:owner" # ...to the Owner team
     asks: [required_documents, timeline_days, maker, fee_agreed]
     needs: [required_documents, timeline_days, maker, fee_agreed]
+  pending_approval:
+    remind_after: 1 day # remind the approvers still missing; no escalation here
 
 transitions:
   # New work for the team is studied first, but only once for each work type; everything else goes

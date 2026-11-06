@@ -178,6 +178,10 @@ func (s session) setFields(it Item, values engine.Fields, by ledger.Actor, h *ha
 	if next := engine.StateAfterEdit(s.p, it.State); next != from {
 		enterStep(&it, next)
 		change["state_from"] = from
+	} else if a := s.p.Approvals; a != nil && it.State == a.In {
+		// A change while it waits for approvals resets them (a new version), so the clock starts again:
+		// whoever must approve again is reminded after the step's wait, not at once (D75, M6).
+		enterStep(&it, it.State)
 	}
 	if err := s.update(it); err != nil {
 		return Item{}, err
@@ -512,6 +516,9 @@ const (
 	HowTake   = "take"   // a person took it from the team (recorded as that person)
 	HowReturn = "return" // work sent back went to whoever had that step (recorded as Seyal)
 	HowRule   = "rule"   // an "assign" action of the process (recorded as Seyal)
+	// HowEscalate: Seyal handed on work that waited too long in its step (D75, M6). Nobody handed it
+	// over, so the card says "Seyal escalated it" and not "From ..."; from_holder names who had it.
+	HowEscalate = "escalate"
 )
 
 // handoff says how and why an item changes hands. How and Note are always asked for; the rest are
@@ -523,6 +530,9 @@ type handoff struct {
 	As    string // "admin" when only being an admin allowed it
 	After string // the move that sent the work back (HowReturn)
 	From  string // who it comes from, when that isn't simply the person who had it (a send-back)
+	At    string // the moment of the hand-over (HeldSinceLayout), when it must match another one; "" is now
+	// Extra adds keys to the event's change, e.g. why Seyal escalated it and what it counted from.
+	Extra map[string]any
 }
 
 // assign gives the item to one person, or to a team (a role) when person is "", and records who did
@@ -534,14 +544,19 @@ func (s session) assign(it *Item, person, team string, by ledger.Actor, h handof
 	}
 	fromAssignee, fromTeam := it.AssigneeID, it.Team
 	from := cmp.Or(h.From, fromAssignee)
+	if h.How == HowEscalate {
+		from = "" // nobody handed it over: Seyal took it from whoever had it (from_holder)
+	}
 	it.AssigneeID, it.Team = person, team
-	it.HeldSince, it.HandoffFrom, it.HandoffNote = heldSinceNow(), from, h.Note
+	it.HeldSince, it.HandoffFrom, it.HandoffNote = cmp.Or(h.At, heldSinceNow()), from, h.Note
 	if err := s.update(*it); err != nil {
 		return err
 	}
 	change := map[string]any{"how": cmp.Or(h.How, HowStep), "assignee_id": person}
+	maps.Copy(change, h.Extra)
+	// from_assignee is who handed it over (the card's "From ..."); from_holder is who had it (D75).
 	for key, v := range map[string]string{"team": team, "from_assignee": from, "from_team": fromTeam,
-		"note": h.Note, "via": h.Via, "as": h.As, "after": h.After} {
+		"from_holder": fromAssignee, "note": h.Note, "via": h.Via, "as": h.As, "after": h.After} {
 		if v != "" {
 			change[key] = v
 		}

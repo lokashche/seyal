@@ -30,6 +30,7 @@ import (
 
 	"seyal/internal/ai"
 	"seyal/internal/auth"
+	"seyal/internal/chase"
 	"seyal/internal/db"
 	"seyal/internal/media"
 	"seyal/internal/playbook"
@@ -267,6 +268,7 @@ func (c *call) admin() bool { return slices.Contains(c.session.Roles, adminRole)
 type tenant struct {
 	ID, Slug, Name, Currency string
 	Zone                     *time.Location
+	Calendar                 chase.Calendar // its working days, for the days on Seyal's card hints (D77)
 }
 
 var errNoTenant = errors.New("no such business")
@@ -274,8 +276,11 @@ var errNoTenant = errors.New("no such business")
 func (s *Server) tenant(r *http.Request) (tenant, error) {
 	t := tenant{Slug: r.PathValue("slug")}
 	var zone string
-	err := s.app.QueryRow(r.Context(), "SELECT id::text, name, currency, timezone FROM tenants WHERE slug = $1", t.Slug).
-		Scan(&t.ID, &t.Name, &t.Currency, &zone)
+	var daysOff []int16
+	err := s.app.QueryRow(r.Context(), `
+		SELECT id::text, name, currency, timezone, days_off, ARRAY(SELECT to_char(d, 'YYYY-MM-DD') FROM unnest(holidays) d ORDER BY d)
+		FROM tenants WHERE slug = $1`, t.Slug).
+		Scan(&t.ID, &t.Name, &t.Currency, &zone, &daysOff, &t.Calendar.Holidays)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return t, errNoTenant
 	}
@@ -284,6 +289,10 @@ func (s *Server) tenant(r *http.Request) (tenant, error) {
 	}
 	if t.Zone, err = time.LoadLocation(zone); err != nil {
 		t.Zone = time.UTC
+	}
+	t.Calendar.Zone = t.Zone
+	for _, d := range daysOff {
+		t.Calendar.DaysOff = append(t.Calendar.DaysOff, time.Weekday(d))
 	}
 	return t, nil
 }

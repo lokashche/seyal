@@ -55,6 +55,62 @@ type Business struct {
 	Currency             string `yaml:"currency"`
 	Timezone             string `yaml:"timezone"`
 	FiscalYearStartMonth int    `yaml:"fiscal_year_start_month"`
+	// Working days (D75, D77): weekly days off ("sunday"), and dates the office is closed
+	// ("2026-11-09"). Left out: every day is a working day. Seyal counts its waits without them.
+	DaysOff  []string `yaml:"days_off"`
+	Holidays []string `yaml:"holidays"`
+	// Chase "paused" stops Seyal's reminders and escalations for this business only (decision 20).
+	// Left out: Seyal chases as normal.
+	Chase string `yaml:"chase"`
+}
+
+// MaxHolidays is the most holiday dates a set-up file may list.
+const MaxHolidays = 100
+
+// weekdays are the day names a set-up file may use, in time.Weekday's order (0 = Sunday).
+var weekdays = []string{"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"}
+
+// days reads the weekly days off as numbers (0 = Sunday), sorted, with every problem found.
+func (b Business) days() ([]int16, []string) {
+	out := []int16{} // never nil: Postgres would read nil as NULL
+	var problems []string
+	for _, name := range b.DaysOff {
+		i := slices.Index(weekdays, strings.ToLower(strings.TrimSpace(name)))
+		switch {
+		case i < 0:
+			problems = append(problems, fmt.Sprintf("days_off: %q is not a day of the week (sunday ... saturday)", name))
+		case slices.Contains(out, int16(i)):
+			problems = append(problems, fmt.Sprintf("days_off: %s is listed twice", weekdays[i]))
+		default:
+			out = append(out, int16(i))
+		}
+	}
+	if len(out) == len(weekdays) {
+		problems = append(problems, "days_off: at least one day a week must be a working day")
+	}
+	slices.Sort(out)
+	return out, problems
+}
+
+// holidays reads the holiday dates, sorted, with every problem found.
+func (b Business) holidays() ([]string, []string) {
+	out, problems := []string{}, []string(nil) // out never nil: Postgres would read nil as NULL
+	for _, day := range b.Holidays {
+		d, err := time.Parse(time.DateOnly, strings.TrimSpace(day))
+		switch {
+		case err != nil:
+			problems = append(problems, fmt.Sprintf("holidays: %q is not a date; write it as 2026-11-09", day))
+		case slices.Contains(out, d.Format(time.DateOnly)):
+			problems = append(problems, fmt.Sprintf("holidays: %s is listed twice", day))
+		default:
+			out = append(out, d.Format(time.DateOnly))
+		}
+	}
+	if len(b.Holidays) > MaxHolidays {
+		problems = append(problems, fmt.Sprintf("holidays: at most %d dates", MaxHolidays))
+	}
+	slices.Sort(out)
+	return out, problems
 }
 
 type Role struct {
@@ -125,6 +181,12 @@ func (f *File) Check(lib *playbook.Library) error {
 	}
 	if b.FiscalYearStartMonth < 1 || b.FiscalYearStartMonth > 12 {
 		add("fiscal_year_start_month must be 1 to 12")
+	}
+	_, dayProblems := b.days()
+	_, holidayProblems := b.holidays()
+	problems = append(append(problems, dayProblems...), holidayProblems...)
+	if b.Chase != "" && b.Chase != "paused" {
+		add("chase %q: write \"chase: paused\" to stop Seyal chasing this business's work, or leave it out", b.Chase)
 	}
 
 	roles := map[string]bool{}
@@ -261,24 +323,23 @@ func Import(ctx context.Context, owner, app *pgxpool.Pool, f *File) (Summary, er
 	by := ledger.SystemActor
 	b := f.Business
 
+	days, _ := b.days() // Check has refused bad ones
+	holidays, _ := b.holidays()
+	paused := b.Chase == "paused"
 	err := owner.QueryRow(ctx, `SELECT id::text FROM tenants WHERE slug = $1`, b.Slug).Scan(&sum.TenantID)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		sum.Created = true
 		err = owner.QueryRow(ctx, `
-			INSERT INTO tenants (slug, name, currency, timezone, fiscal_year_start_month)
-			VALUES ($1, $2, $3, $4, $5) RETURNING id::text`,
-			b.Slug, b.Name, b.Currency, b.Timezone, b.FiscalYearStartMonth).Scan(&sum.TenantID)
+			INSERT INTO tenants (slug, name, currency, timezone, fiscal_year_start_month, days_off, holidays, chase_paused)
+			VALUES ($1, $2, $3, $4, $5, $6, $7::date[], $8) RETURNING id::text`,
+			b.Slug, b.Name, b.Currency, b.Timezone, b.FiscalYearStartMonth, days, holidays, paused).Scan(&sum.TenantID)
 	case err == nil:
-		tag, updateErr := owner.Exec(ctx, `
-			UPDATE tenants SET name = $2, currency = $3, timezone = $4, fiscal_year_start_month = $5
-			WHERE id::text = $1
-				AND (name, currency, timezone, fiscal_year_start_month) IS DISTINCT FROM ($2, $3, $4, $5)`,
-			sum.TenantID, b.Name, b.Currency, b.Timezone, b.FiscalYearStartMonth)
-		if updateErr == nil && tag.RowsAffected() > 0 {
+		var changed bool
+		changed, err = updateBusiness(ctx, owner, sum.TenantID, b, days, holidays, paused)
+		if changed {
 			sum.Changes++
 		}
-		err = updateErr
 	}
 	if err != nil {
 		return sum, fmt.Errorf("setup: business: %w", err)
@@ -352,6 +413,78 @@ func Import(ctx context.Context, owner, app *pgxpool.Pool, f *File) (Summary, er
 		return nil
 	})
 	return sum, err
+}
+
+// updateBusiness writes the file's business settings to an existing business, and a business.updated
+// ledger event with each setting that changed, old and new, in the same transaction. The owner pool
+// does it, because the app role may only read the tenants table. Nothing is written when nothing
+// changed.
+func updateBusiness(ctx context.Context, owner *pgxpool.Pool, tenantID string, b Business, days []int16,
+	holidays []string, paused bool) (bool, error) {
+	changed := false
+	err := db.WithTenant(ctx, owner, tenantID, func(tx pgx.Tx) error {
+		// The ledger head first, as every writer does (see ledger.Lock). Locked the other way round,
+		// this would wait in a circle with a writer that holds the head and is about to add its event:
+		// that event's tenant check needs the tenants row this locks.
+		if err := ledger.Lock(ctx, tx); err != nil {
+			return err
+		}
+		var was Business
+		var wasDays []int16
+		var wasPaused bool
+		if err := tx.QueryRow(ctx, `
+			SELECT name, currency, timezone, fiscal_year_start_month, days_off,
+				ARRAY(SELECT to_char(d, 'YYYY-MM-DD') FROM unnest(holidays) d ORDER BY d), chase_paused
+			FROM tenants WHERE id::text = $1 FOR NO KEY UPDATE`, tenantID).
+			Scan(&was.Name, &was.Currency, &was.Timezone, &was.FiscalYearStartMonth, &wasDays, &was.Holidays, &wasPaused); err != nil {
+			return err
+		}
+		changes := map[string]any{}
+		note := func(key string, old, new any, same bool) {
+			if !same {
+				changes[key] = map[string]any{"old": old, "new": new}
+			}
+		}
+		note("name", was.Name, b.Name, was.Name == b.Name)
+		note("currency", was.Currency, b.Currency, was.Currency == b.Currency)
+		note("timezone", was.Timezone, b.Timezone, was.Timezone == b.Timezone)
+		note("fiscal_year_start_month", was.FiscalYearStartMonth, b.FiscalYearStartMonth,
+			was.FiscalYearStartMonth == b.FiscalYearStartMonth)
+		note("days_off", dayNames(wasDays), dayNames(days), slices.Equal(wasDays, days))
+		note("holidays", nonNil(was.Holidays), nonNil(holidays), slices.Equal(was.Holidays, holidays))
+		note("chase_paused", wasPaused, paused, wasPaused == paused)
+		if len(changes) == 0 {
+			return nil
+		}
+		changed = true
+		if _, err := tx.Exec(ctx, `
+			UPDATE tenants SET name = $2, currency = $3, timezone = $4, fiscal_year_start_month = $5,
+				days_off = $6, holidays = $7::date[], chase_paused = $8
+			WHERE id::text = $1`,
+			tenantID, b.Name, b.Currency, b.Timezone, b.FiscalYearStartMonth, days, holidays, paused); err != nil {
+			return err
+		}
+		_, err := ledger.Append(ctx, tx, ledger.Event{Kind: "business.updated", SubjectType: "business",
+			SubjectID: tenantID, Payload: map[string]any{"changes": changes}}.By(ledger.SystemActor))
+		return err
+	})
+	return changed, err
+}
+
+// dayNames writes days off as their names, for the ledger: [sunday].
+func dayNames(days []int16) []string {
+	out := []string{}
+	for _, d := range days {
+		out = append(out, weekdays[d])
+	}
+	return out
+}
+
+func nonNil(list []string) []string {
+	if list == nil {
+		return []string{}
+	}
+	return list
 }
 
 // fields converts an item's values from the file's friendly form into stored values: money from

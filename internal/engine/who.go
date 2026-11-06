@@ -85,17 +85,23 @@ func is(p *playbook.Playbook, it Item, person Person, word string) bool {
 
 // IsHolder reports whether person has the item now: it is with them, or with a team whose role they
 // have. In a step owned by a role, a person who has the item but lost that role no longer counts
-// (D68, choice 22): they may only pass it on (build part 3).
+// (D68, choice 22): they may only pass it on (build part 3). Work Seyal escalated to a team counts as
+// the team's only in a step that belongs to that team's role (D75, decisions 9 and 10): an Owner who
+// isn't an admin may pass escalated Operations work on, but not do the Operations work. An Owner who is
+// also in Operations still may.
 func IsHolder(p *playbook.Playbook, it Item, person Person) bool {
 	if person.ID == "" {
 		return false
 	}
+	kind, role := Owner(p, it.State)
 	if it.Assignee != "" {
 		if it.Assignee != person.ID {
 			return false
 		}
-		kind, role := Owner(p, it.State)
 		return kind != "role" || slices.Contains(person.Roles, role)
+	}
+	if it.Escalated && !(kind == "role" && (role == it.Team || slices.Contains(person.Roles, role))) {
+		return false
 	}
 	return it.Team != "" && slices.Contains(person.Roles, it.Team)
 }
@@ -150,8 +156,9 @@ func ActionsFor(p *playbook.Playbook, it Item, a Actor) []string {
 }
 
 // PowerFields returns the person fields that carry power (D68, choice 14): a field that says who gets
-// the item (a step's owner "field:<f>", or an "assign" action), or who may take a move or receive the
-// item ("field:<f>" in who or pass_to). Only whoever has the item or an admin may change them.
+// the item (a step's owner "field:<f>", its escalate_to "field:<f>", or an "assign" action), or who
+// may take a move or receive the item ("field:<f>" in who or pass_to). Only whoever has the item or an
+// admin may change them.
 func PowerFields(p *playbook.Playbook) map[string]bool {
 	power := map[string]bool{}
 	add := func(words ...string) {
@@ -162,7 +169,7 @@ func PowerFields(p *playbook.Playbook) map[string]bool {
 		}
 	}
 	for _, st := range p.Steps {
-		add(st.Owner)
+		add(st.Owner, st.EscalateTo)
 		add(st.PassTo...)
 	}
 	for _, t := range p.Transitions {

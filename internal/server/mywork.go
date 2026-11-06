@@ -236,6 +236,9 @@ func (v *view) next(p *playbook.Playbook, it workitem.Item) (bucket int, hint st
 			return 0, "", false, err
 		}
 		if canDecide(st, s) != nil {
+			if it.Reminders > 0 {
+				return needsApproval, "Your approval is needed · Seyal reminded you", false, nil
+			}
 			return needsApproval, "Your approval is needed", false, nil
 		}
 		names := make([]string, len(st.Waiting))
@@ -263,6 +266,12 @@ func (v *view) next(p *playbook.Playbook, it workitem.Item) (bucket int, hint st
 	mine := it.AssigneeID == s.PersonID || (nobody && it.CreatedBy == s.PersonID)
 	team := it.AssigneeID == "" && it.Team != "" && slices.Contains(s.Roles, it.Team)
 	free := nobody && !mine && workitem.MayTake(p, it, v.actor(), members)
+	if v.c.admin() && !mine && workitem.CouldNotEscalate(p, it, members) {
+		// Seyal wanted to hand it on but nobody could receive it: admins pass it on (D75, M6), or take
+		// it themselves if they may.
+		take = (team || free) && workitem.MayTake(p, it, v.actor(), members)
+		return yourTeam, v.couldNotEscalate(p, it), take, nil
+	}
 	if !mine && !team && !free {
 		if v.c.admin() && workitem.NobodyCanTake(p, it, members) {
 			return yourTeam, "Nobody can take this", false, nil // admins pass it on (D68, choice 13)
@@ -270,11 +279,14 @@ func (v *view) next(p *playbook.Playbook, it workitem.Item) (bucket int, hint st
 		return elsewhere("With " + v.holder(it))
 	}
 	take = (team || free) && workitem.MayTake(p, it, v.actor(), members)
-	if team := v.passOnly(p, it); team != "" {
+	if role := v.passOnly(p, it); role != "" {
 		// They have it but can't work this step (not in its team): all they may do is pass it on.
-		h := "Only people in " + team + " do this step: pass it on"
-		if it.DueOn != "" && it.DueOn < v.today {
+		h := "Only people in " + role + " do this step: pass it on"
+		switch {
+		case it.DueOn != "" && it.DueOn < v.today:
 			return overdue, h, false, nil
+		case team:
+			return yourTeam, h, false, nil // escalated to their team (D75, decision 9)
 		}
 		return yourTurn, h, false, nil
 	}
@@ -301,6 +313,9 @@ func (v *view) next(p *playbook.Playbook, it workitem.Item) (bucket int, hint st
 			hint = "From " + from + ": " + it.HandoffNote
 		}
 	}
+	if h := v.chased(p, it); h != "" {
+		hint = h
+	}
 	switch {
 	case it.DueOn != "" && it.DueOn < v.today:
 		return overdue, hint, take, nil
@@ -312,16 +327,70 @@ func (v *view) next(p *playbook.Playbook, it workitem.Item) (bucket int, hint st
 
 // passOnly names the step's team when the person looking has the item but may not work its step: it
 // is owned by a role they don't have (an admin passed it to them, or they lost the role), so all they
-// can do is pass it on (D68, choice 22). Otherwise "". Admins may do everything, so it is "" for them.
+// can do is pass it on (D68, choice 22). The same goes for work Seyal escalated to their team in
+// another team's step (D75, decision 9). Otherwise "". Admins may do everything, so it is "" for them.
 func (v *view) passOnly(p *playbook.Playbook, it workitem.Item) string {
 	a := v.actor()
-	if a.Admin || it.AssigneeID != a.ID || engine.IsHolder(p, it.Engine(), a.Person) {
+	if a.Admin || !engine.Has(it.Engine(), a.Person) || engine.IsHolder(p, it.Engine(), a.Person) {
 		return ""
 	}
 	if kind, role := engine.Owner(p, it.State); kind == "role" {
 		return cmp.Or(v.roles[role], role)
 	}
 	return ""
+}
+
+// chased is the card's word about Seyal's chasing in this step stay (D75, M6), or "": that Seyal
+// escalated it (while that is still the latest hand-over), or that Seyal reminded whoever has it since
+// they got it. The days count to the real today, and are never fewer than the step's wait (only a
+// pretend day in `dev chase --as-if` could make them fewer).
+func (v *view) chased(p *playbook.Playbook, it workitem.Item) string {
+	remind, escalate := p.Steps[it.State].Timing()
+	step := sentence(it.State)
+	switch {
+	case it.EscalatedTo():
+		return fmt.Sprintf("Seyal escalated it: waited %s in %s", workingDays(escalate), step)
+	case it.EscalatedAt != "" || it.Reminders == 0 || it.RemindedAt < it.HeldSince:
+		return ""
+	}
+	least := remind
+	if it.Reminders > 1 {
+		least = escalate // the second reminder comes for a new holder, once the escalation is due
+	}
+	since, err := time.Parse(workitem.HeldSinceLayout, it.StepSince)
+	if err != nil {
+		return ""
+	}
+	who := "you" // with the person looking (or with them as its starter, while nobody else has it)
+	if it.Team != "" || (it.AssigneeID == "" && it.CreatedBy != v.c.session.PersonID) {
+		who = "the team" // a team's work, or work nobody has: everyone who may take it was reminded
+	}
+	return fmt.Sprintf("Seyal reminded %s · %s in this step", who,
+		workingDays(max(v.c.tenant.Calendar.WorkingDays(since, time.Now()), least)))
+}
+
+// couldNotEscalate is the admins' hint on work Seyal couldn't hand on: "Couldn't escalate: Owner has
+// nobody who can take work".
+func (v *view) couldNotEscalate(p *playbook.Playbook, it workitem.Item) string {
+	kind, name, _ := strings.Cut(p.Steps[it.State].EscalateTo, ":")
+	if kind == "field" {
+		label := name
+		for _, f := range p.Fields {
+			if f.Key == name && f.Label != "" {
+				label = f.Label
+			}
+		}
+		return "Couldn't escalate: the " + label + " can't take work"
+	}
+	return "Couldn't escalate: " + cmp.Or(v.roles[name], name) + " has nobody who can take work"
+}
+
+// workingDays says a number of working days: "1 working day", "2 working days".
+func workingDays(n int) string {
+	if n == 1 {
+		return "1 working day"
+	}
+	return fmt.Sprintf("%d working days", n)
 }
 
 // members are the business's active people with a login, read once per page.

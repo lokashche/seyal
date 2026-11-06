@@ -134,12 +134,17 @@ func MayPass(it Item, a engine.Actor) (ok, asAdmin bool) {
 }
 
 // MayTake reports whether a may take the item: it is with a team whose role they have, or it is free
-// (see Free) and the step's pass_to allows them.
+// (see Free) and the step's pass_to allows them. Work Seyal escalated to a team, in a step another
+// role owns, may be taken only by an admin or someone with that role too: the others may only pass it
+// on (D75, decision 9), so taking it would leave it with someone who can't do the step.
 func MayTake(p *playbook.Playbook, it Item, a engine.Actor, members []Member) bool {
 	switch {
 	case a.ID == "" || it.AssigneeID != "":
 		return false
 	case it.Team != "":
+		if kind, role := engine.Owner(p, it.State); it.EscalatedTo() && !a.Admin && kind == "role" && role != it.Team {
+			return slices.Contains(a.Roles, it.Team) && slices.Contains(a.Roles, role)
+		}
 		return slices.Contains(a.Roles, it.Team)
 	case !Free(it, members):
 		return false // its starter has it, so only they act on it (or pass it on)
@@ -342,6 +347,10 @@ func Take(ctx context.Context, tx pgx.Tx, id, seen, via string, by ledger.Actor)
 				return Item{}, err
 			}
 			return Item{}, refusal(fmt.Sprintf("%s started it and has it. Ask %s to pass it to you", name, name))
+		}
+		if kind, step := engine.Owner(s.p, it.State); it.Team != "" && kind == "role" && slices.Contains(a.Roles, it.Team) {
+			// Escalated to their team in another team's step (D75, decision 9).
+			return Item{}, refusal(fmt.Sprintf("only people in %s do this step: pass it on", cmp.Or(roleNames[step], step)))
 		}
 		if it.Team != "" {
 			role := cmp.Or(roleNames[it.Team], it.Team)

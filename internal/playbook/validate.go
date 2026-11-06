@@ -470,13 +470,79 @@ func (p *Playbook) CheckNew() error {
 				t.Action, t.Action, strings.Join(ReservedMoves, ", ")))
 		}
 	}
-	// "field:<f>" in a move's who or a step's pass_to is allowed again (D74). Such a field carries power
+	// "field:<f>" in a move's who or a step's pass_to is allowed again (D74). Such a field, and one a
+	// step's escalate_to names, carries power
 	// (engine.PowerFields): only whoever has the item or an admin may change it (D72), and a value the AI
 	// model or a voice note gives it needs the person's Yes first (D74).
+	problems = append(problems, p.timingProblems()...)
 	if len(problems) == 0 {
 		return nil
 	}
 	return &ValidationError{Name: fmt.Sprintf("playbook %q", p.ID), Problems: problems}
+}
+
+// timingProblems checks the steps' timing (D75, M6): remind_after, escalate_after and escalate_to. It
+// is new in Phase 2, so it runs only for a version being added (see CheckNew).
+func (p *Playbook) timingProblems() []string {
+	var problems []string
+	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+	fields := map[string]Field{}
+	for _, f := range p.Fields {
+		fields[f.Key] = f
+	}
+	for _, state := range slices.Sorted(maps.Keys(p.Steps)) {
+		st, where := p.Steps[state], "step "+state
+		if st.RemindAfter == "" && st.EscalateAfter == "" && st.EscalateTo == "" {
+			continue
+		}
+		owner, ownerName, _ := strings.Cut(st.Owner, ":")
+		switch {
+		case p.closed(state):
+			add("%s: has no way out, so nothing waits there to be chased (remove remind_after, escalate_after and escalate_to)", where)
+			continue
+		case st.RemindAfter == "":
+			add("%s: escalate_after and escalate_to need remind_after: Seyal always reminds before it escalates", where)
+			continue
+		}
+		remind, err := Days(st.RemindAfter)
+		if err != nil {
+			add("%s: remind_after: %v", where, err)
+		}
+		if st.EscalateAfter == "" {
+			if st.EscalateTo != "" {
+				add("%s: escalate_to needs escalate_after (how many working days before Seyal hands it on)", where)
+			}
+			continue
+		}
+		switch {
+		case p.Approvals != nil && state == p.Approvals.In:
+			add("%s: no escalation in the approvals step: approvals belong to roles, so handing the item on changes nothing (keep only remind_after)", where)
+			continue
+		case owner == "field":
+			add("%s: no escalation in a step owned by a person field (%s): it would change that field to someone else (keep only remind_after)", where, ownerName)
+			continue
+		}
+		escalate, err := Days(st.EscalateAfter)
+		if err != nil {
+			add("%s: escalate_after: %v", where, err)
+		} else if remind > 0 && escalate <= remind {
+			add("%s: escalate_after (%s) must be longer than remind_after (%s)", where, st.EscalateAfter, st.RemindAfter)
+		}
+		kind, name, _ := strings.Cut(st.EscalateTo, ":")
+		switch {
+		case st.EscalateTo == "":
+			add("%s: escalate_after needs escalate_to: role:<role> or field:<person field>", where)
+		case kind == "role" && !slices.Contains(p.Roles, name):
+			add("%s: escalate_to: unknown role %q (declare it under roles)", where, name)
+		case kind == "role" && owner == "role" && name == ownerName:
+			add("%s: escalate_to can't be the step's own team (%s): that would take the work from its holder and give it to the same team", where, st.EscalateTo)
+		case kind == "field" && fields[name].Type != "person":
+			add("%s: escalate_to: %q must name a person field of this process", where, st.EscalateTo)
+		case kind != "role" && kind != "field":
+			add("%s: escalate_to %q: use role:<role> or field:<person field>", where, st.EscalateTo)
+		}
+	}
+	return problems
 }
 
 // unique reports keys that are badly formed or repeated, and returns the set of keys.

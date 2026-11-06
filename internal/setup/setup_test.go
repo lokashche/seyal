@@ -3,6 +3,7 @@
 package setup
 
 import (
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -29,8 +30,35 @@ func TestDemoFileIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.Business.Currency != "INR" || len(f.People) != 10 || len(f.Master["work_type"]) != 4 {
-		t.Errorf("demo file = %+v", f.Business)
+	if f.Business.Currency != "INR" || len(f.People) != 11 || len(f.Master["work_type"]) != 4 ||
+		!slices.Equal(f.Business.DaysOff, []string{"sunday"}) {
+		t.Errorf("demo file = %+v, %d people", f.Business, len(f.People))
+	}
+	days, problems := f.Business.days()
+	if !slices.Equal(days, []int16{0}) || problems != nil {
+		t.Errorf("demo days off = %v, %v; want [0] (Sunday)", days, problems)
+	}
+}
+
+// TestWorkingDaysInTheFile: days off and holidays are read in any case and stored sorted (D75,
+// decision 1).
+func TestWorkingDaysInTheFile(t *testing.T) {
+	b := Business{DaysOff: []string{"Saturday", " sunday"}, Holidays: []string{"2026-12-25", "2026-11-09"}}
+	if days, problems := b.days(); !slices.Equal(days, []int16{0, 6}) || problems != nil {
+		t.Errorf("days = %v, %v; want [0 6]", days, problems)
+	}
+	if dates, problems := b.holidays(); !slices.Equal(dates, []string{"2026-11-09", "2026-12-25"}) || problems != nil {
+		t.Errorf("holidays = %v, %v; want them sorted", dates, problems)
+	}
+	if days, _ := (Business{}).days(); days == nil {
+		t.Error("no days off must be an empty list, not nil (Postgres would read nil as NULL)")
+	}
+	many := Business{}
+	for i := range MaxHolidays + 1 {
+		many.Holidays = append(many.Holidays, fmt.Sprintf("2027-%02d-%02d", 1+i/28, 1+i%28))
+	}
+	if _, problems := many.holidays(); len(problems) != 1 || !strings.Contains(problems[0], "at most 100 dates") {
+		t.Errorf("101 holidays: %v; want them refused", problems)
 	}
 }
 
@@ -56,6 +84,13 @@ func TestCheckFindsMistakes(t *testing.T) {
 		{"unknown field", "standard_fee: 12000", "std_fee: 12000", `no field "std_fee"`},
 		{"wrong type", "standard_fee: 5000", "standard_fee: five thousand", "standard_fee must be"},
 		{"typo in a key", "fiscal_year_start_month: 4", "fiscal_year_start_month: 4\n  colour: blue", "colour"},
+		{"bad day name", "days_off: [sunday]", "days_off: [sundy]", `days_off: "sundy" is not a day of the week`},
+		{"a day twice", "days_off: [sunday]", "days_off: [sunday, Sunday]", "days_off: sunday is listed twice"},
+		{"all days off", "days_off: [sunday]",
+			"days_off: [sunday, monday, tuesday, wednesday, thursday, friday, saturday]", "at least one day a week must be a working day"},
+		{"bad holiday", "days_off: [sunday]", "days_off: [sunday]\n  holidays: [2026-02-30]", `holidays: "2026-02-30" is not a date`},
+		{"a holiday twice", "days_off: [sunday]", "days_off: [sunday]\n  holidays: [2026-11-09, 2026-11-09]", "holidays: 2026-11-09 is listed twice"},
+		{"bad chase line", "days_off: [sunday]", "days_off: [sunday]\n  chase: stop", `chase "stop": write "chase: paused"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -92,6 +94,43 @@ type Step struct {
 	// ReturnsTo "last" gives work that comes into this state again to whoever last had it here,
 	// instead of to the owner. Empty means the owner, always.
 	ReturnsTo string `yaml:"returns_to"`
+	// Timing (D75, M6): after RemindAfter working days in this step ("2 days"), Seyal reminds whoever
+	// has the item; after EscalateAfter working days it gives the item to EscalateTo ("role:<role>" or
+	// "field:<person field>"). Empty: Seyal doesn't chase work in this step.
+	RemindAfter   string `yaml:"remind_after"`
+	EscalateAfter string `yaml:"escalate_after"`
+	EscalateTo    string `yaml:"escalate_to"`
+}
+
+// MaxDays is the longest wait a step's timing may give, in working days.
+const MaxDays = 60
+
+// Days reads a step's wait: "1 day" or "<n> days", from 1 to MaxDays working days. Hours are not
+// allowed (D75, decision 1).
+func Days(s string) (int, error) {
+	num, unit, ok := strings.Cut(strings.TrimSpace(s), " ")
+	n, err := strconv.Atoi(num)
+	switch {
+	case !ok || err != nil || strings.TrimSpace(unit) != unit:
+		return 0, fmt.Errorf("%q: write it as \"1 day\" or \"<n> days\", for example \"2 days\"", s)
+	case n < 1 || n > MaxDays:
+		return 0, fmt.Errorf("%q: from 1 to %d days", s, MaxDays)
+	case (n == 1) != (unit == "day") || (unit != "day" && unit != "days"):
+		return 0, fmt.Errorf("%q: write it as \"1 day\" or \"<n> days\", for example \"2 days\"", s)
+	}
+	return n, nil
+}
+
+// Timing returns the step's waits in working days: when Seyal reminds (0: never) and when it
+// escalates (0: never). A version is checked when it is added (CheckNew), so a stored one reads
+// cleanly; a value that doesn't read counts as 0.
+func (st Step) Timing() (remind, escalate int) {
+	remind, _ = Days(st.RemindAfter)
+	escalate, _ = Days(st.EscalateAfter)
+	if remind == 0 {
+		escalate = 0 // escalation always comes after a reminder
+	}
+	return remind, escalate
 }
 
 // Approvals says who must approve, while the item is in state In.

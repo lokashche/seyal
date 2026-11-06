@@ -243,6 +243,8 @@ func (b *builder) handOver(str func(string) string) string {
 		}
 	case workitem.HowReturn:
 		text = "gave it back to " + to // the reason is already in the move's own line
+	case workitem.HowEscalate:
+		text = "handed it to " + to + " (escalated)" // the note says how long it waited, and with whom
 	default: // a step's owner, or an "assign" action of the process
 		if str("team") != "" {
 			text = "handed it to " + to

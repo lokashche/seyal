@@ -21,6 +21,9 @@ type Item struct {
 	// Who has it now: one person (Assignee), or a team (the role in Team) while no person does.
 	// Starter is whoever started it. All are person ids or "", and only the who words use them.
 	Assignee, Team, Starter string
+	// Escalated means Seyal's escalation was the latest hand-over (D75, M6): the item waited too long in
+	// its step and was handed on, for example to the Owner team. See IsHolder.
+	Escalated bool
 }
 
 var (

@@ -131,6 +131,41 @@ func TestHolderWhoLostTheRole(t *testing.T) {
 	}
 }
 
+// TestHolderOfEscalatedWork: work Seyal escalated to a team counts as that team's only in a step that
+// belongs to the team's role (D75, decisions 9 and 10): a manager who isn't an admin may pass it on but
+// not take the team's moves; an admin still may. Work merely passed to another team keeps D68's rule.
+func TestHolderOfEscalatedWork(t *testing.T) {
+	p := whoPlaybook(t)
+	manager := Person{ID: "mona", Roles: []string{"manager"}}
+	escalated := Item{State: "with_team", Team: "manager", Starter: "asha", Escalated: true}
+	if IsHolder(p, escalated, manager) || !Has(escalated, manager) {
+		t.Error("a manager should have escalated team work (to pass it on) but not hold it")
+	}
+	if ok, _ := Allowed(p, escalated, []string{WhoHolder}, Actor{Person: manager}); ok {
+		t.Error("a manager who isn't an admin may take the team's move on escalated work")
+	}
+	if ok, asAdmin := Allowed(p, escalated, []string{WhoHolder}, Actor{Person: manager, Admin: true}); !ok || !asAdmin {
+		t.Error("an admin should still be allowed, as an admin")
+	}
+	passed := escalated
+	passed.Escalated = false
+	if !IsHolder(p, passed, manager) {
+		t.Error("work passed to the manager team (not escalated) should be theirs, as before (D68)")
+	}
+	own := Item{State: "with_team", Team: "team", Escalated: true}
+	if !IsHolder(p, own, ben.Person) {
+		t.Error("escalated work with the step's own team is still that team's")
+	}
+	// A manager who is also in the step's team may do the team's work, escalated or not.
+	both := Person{ID: "mira", Roles: []string{"manager", "team"}}
+	if !IsHolder(p, escalated, both) {
+		t.Error("a manager who is also in the team should hold escalated team work")
+	}
+	if ok, asAdmin := Allowed(p, escalated, []string{WhoHolder}, Actor{Person: both}); !ok || asAdmin {
+		t.Error("a manager who is also in the team should be allowed the team's move, not as an admin")
+	}
+}
+
 func TestActionsFor(t *testing.T) {
 	p := whoPlaybook(t)
 	withBen := Item{State: "with_team", Assignee: "ben", Starter: "asha"}
@@ -277,5 +312,12 @@ func TestPowerFields(t *testing.T) {
 	}
 	if got["notes"] || got["topic"] || len(got) != 3 {
 		t.Errorf("power fields = %v; want reviewer, closer and archivist only", got)
+	}
+	// A field that says who gets escalated work decides who gets the item too.
+	st := p.Steps["with_team"]
+	st.EscalateTo = "field:senior"
+	p.Steps["with_team"] = st
+	if got := PowerFields(p); !got["senior"] || len(got) != 4 {
+		t.Errorf("power fields with escalate_to field:senior = %v; want senior too", got)
 	}
 }

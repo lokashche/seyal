@@ -136,6 +136,21 @@ func TestWhoMayPassAndTake(t *testing.T) {
 	if !MayTake(p, Item{State: "waiting"}, asha, handMembers) {
 		t.Error("anyone the step allows may take an item nobody has")
 	}
+	// Work Seyal escalated to the desk team in the team's step (D75, decision 9): someone only at the
+	// desk may pass it on, not take it; someone also in the team, or a desk admin, may take it.
+	at := "2026-11-06T09:00:00.000000Z"
+	escalated := Item{State: "with_team", Team: "desk", CreatedBy: "asha", HeldSince: at, EscalatedAt: at}
+	if MayTake(p, escalated, asha, handMembers) {
+		t.Error("someone at the desk but not in the team may take escalated team-step work")
+	}
+	if !MayTake(p, escalated, actor("mira", "desk", "team"), handMembers) || !MayTake(p, escalated, actor("lee", "desk", AdminRole), handMembers) {
+		t.Error("someone at the desk who is also in the team, or a desk admin, should be able to take escalated work")
+	}
+	passed := escalated
+	passed.HeldSince = "2026-11-06T10:00:00.000000Z" // passed on after the escalation
+	if !MayTake(p, passed, asha, handMembers) {
+		t.Error("work passed to the desk team after the escalation may be taken from it as usual")
+	}
 	// An item with no person and no team is its starter's while they are still a member: nobody else
 	// may take it (they ask the starter to pass it on). Once the starter has left, it is free.
 	withAsha := Item{State: "waiting", CreatedBy: "asha"}
