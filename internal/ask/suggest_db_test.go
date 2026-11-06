@@ -457,8 +457,8 @@ func TestLongModelWordsAreCut(t *testing.T) {
 }
 
 // TestYesOnlyInClearWords: while a suggestion waits, someone else's "no" to Seyal's open question is
-// read as usual; a typed "1" answers Seyal's number question and doesn't confirm it; a "yes" in a voice
-// note doesn't confirm: Seyal asks again, for a tap or typed words (D74).
+// read as usual; a typed "1" answers Seyal's number question and doesn't confirm it; a typed "ok" doesn't
+// confirm either; a "yes" in a voice note doesn't confirm: Seyal asks again, for a tap or typed words (D74).
 func TestYesOnlyInClearWords(t *testing.T) {
 	tm := newTeam(t)
 	job := tm.withOps()
@@ -480,6 +480,13 @@ func TestYesOnlyInClearWords(t *testing.T) {
 	if r.Item.AssigneeID != tm.ben || r.Item.Fields["timeline_days"] != 1.0 || strings.Contains(said(r), "Passed to") {
 		t.Errorf("Ben's 1: with %q, days %v, Seyal said %q; want the days answered, nothing moved",
 			r.Item.AssigneeID, r.Item.Fields["timeline_days"], said(r))
+	}
+
+	// Ben's typed "ok" is not a Yes: only "yes" or "no" answer a suggestion. Nothing moves.
+	tm.speak(job.ID, tm.ben, "pass to Dev, he knows them")
+	r = tm.write(job.ID, tm.ben, "ok")
+	if r.Item.AssigneeID != tm.ben || strings.Contains(said(r), "Passed to") {
+		t.Errorf("Ben's ok: with %q, Seyal said %q; want nothing moved", r.Item.AssigneeID, said(r))
 	}
 
 	// A spoken yes: Seyal asks again; nothing moves before a tap or typed yes.

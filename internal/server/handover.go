@@ -40,7 +40,8 @@ func (v *view) hand(p *playbook.Playbook, it workitem.Item) (*handView, error) {
 	for _, r := range list {
 		h.To = append(h.To, receiverOption{Key: r.Key(), Name: r.Name, Empty: r.Empty})
 	}
-	// Give back to the team: the person took it from the team that owns this step.
+	// Give back to the team: offered to whoever holds the item in a step a team owns (whether they took
+	// it from the team or someone passed it to them).
 	if kind, role := engine.Owner(p, it.State); kind == "role" && it.AssigneeID == a.ID {
 		if i := slices.IndexFunc(list, func(r workitem.Receiver) bool { return r.Team == role }); i >= 0 {
 			h.GiveBack = &receiverOption{Key: list[i].Key(), Name: list[i].Name, Empty: list[i].Empty}

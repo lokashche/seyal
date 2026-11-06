@@ -413,13 +413,17 @@ func (c *conversation) confirm(text string, busy bool) (handled bool, err error)
 	return true, err
 }
 
-// confirmWord reads a clear "yes" or "no". ok is false for anything else, also for words a field may
-// take as an answer ("1", "0", "ok", "true").
+// confirmWord reads a typed Yes or No to a suggestion: exactly "yes" or "no", in any case, with spaces
+// around it and one full stop at the end allowed ("Yes.", " no "). ok is false for anything else, also
+// for "ok", "y", "yeah", "1" and "0": they may be meant for a field question, and a suggestion moves
+// work (D74). Other yes/no questions keep their wider list (parseYesNo).
 func confirmWord(text string) (yes, ok bool) {
-	switch strings.ToLower(strings.Trim(text, " .!")) {
-	case "yes", "yeah", "yep":
+	word := strings.TrimSpace(text)
+	word = strings.TrimSpace(strings.TrimSuffix(word, "."))
+	switch strings.ToLower(word) {
+	case "yes":
 		return true, true
-	case "no", "nope":
+	case "no":
 		return false, true
 	}
 	return false, false
