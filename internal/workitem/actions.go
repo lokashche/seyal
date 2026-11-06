@@ -487,9 +487,9 @@ func (s session) enter(it *Item, in arrival) error {
 			if id == "" {
 				continue
 			}
-			if ok, err := s.mayHold(id, ""); err != nil || !ok {
+			if not, err := s.mayHold(id, ""); err != nil || not != "" {
 				if err == nil {
-					err = s.postStays(it, s.goneWhy(id, "is the "+s.fieldLabel(a.To)), false)
+					err = s.postStays(it, s.goneWhy(id, not, "is the "+s.fieldLabel(a.To)), false)
 				}
 				if err != nil {
 					return err

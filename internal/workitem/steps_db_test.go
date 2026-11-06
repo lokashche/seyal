@@ -46,6 +46,7 @@ on:
 // move with a condition is taken only when it is true, and copy keeps a value to compare with later.
 func TestStepsHandOver(t *testing.T) {
 	f := newFirm(t)
+	f.login(f.maker)
 	p, err := playbook.Parse([]byte(handOff))
 	if err != nil {
 		t.Fatal(err)

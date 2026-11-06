@@ -237,6 +237,7 @@ func TestAskSeesOnlyItsBusiness(t *testing.T) {
 // finished: open means exactly what My Work shows as open.
 func TestAskAboutApprovals(t *testing.T) {
 	o := newOffice(t)
+	o.login(o.mia) // she gets the work once it is approved
 	o.withQuestions(map[string]string{
 		"approve as Olga":  query("open", "Olga", "approves", "", "", false),
 		"my approval":      query("open", "me", "approves", "", "", false),

@@ -54,7 +54,8 @@ func Connect(t testing.TB) (owner, app *pgxpool.Pool) {
 	return owner, app
 }
 
-// NewTenant creates a business with a unique slug and one person, and returns both ids.
+// NewTenant creates a business with a unique slug and one person, and returns both ids. The person
+// has no login; GiveLogins gives them one.
 func NewTenant(t testing.TB, owner *pgxpool.Pool, name string) (tenantID, personID string) {
 	t.Helper()
 	ctx := context.Background()
@@ -107,6 +108,16 @@ func LinkPerson(t testing.TB, owner *pgxpool.Pool, tenantID, personID, accountID
 	})
 	if err != nil {
 		t.Fatalf("link person: %v", err)
+	}
+}
+
+// GiveLogins gives each person a made-up login (see NewAccount), so work can go to them: Seyal gives
+// work only to people with a login in the business (D68, choice 12; D73).
+func GiveLogins(t testing.TB, owner *pgxpool.Pool, tenantID string, personIDs ...string) {
+	t.Helper()
+	for _, id := range personIDs {
+		account, _ := NewAccount(t, owner)
+		LinkPerson(t, owner, tenantID, id, account)
 	}
 }
 

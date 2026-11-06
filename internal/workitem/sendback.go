@@ -64,8 +64,8 @@ func (s session) destination(it Item, state string, in arrival) (dest, error) {
 			if kind == "role" {
 				role = name
 			}
-			ok, err := s.mayHold(person, role)
-			if err != nil || ok {
+			not, err := s.mayHold(person, role)
+			if err != nil || not == "" {
 				return dest{person: person, how: HowReturn, moves: true}, err
 			}
 		}
@@ -90,11 +90,11 @@ func (s session) destination(it Item, state string, in arrival) (dest, error) {
 	if person == "" {
 		return dest{}, nil // no owner here: it stays with whoever had it
 	}
-	ok, err := s.mayHold(person, "")
-	if err != nil || ok {
+	not, err := s.mayHold(person, "")
+	if err != nil || not == "" {
 		return dest{person: person, how: how, moves: true}, err
 	}
-	d := dest{gone: s.goneWhy(person, why)}
+	d := dest{gone: s.goneWhy(person, not, why)}
 	if in.back && in.from != "" {
 		d.person, d.how, d.moves = in.from, HowReturn, true
 	}
@@ -175,21 +175,29 @@ func (s session) lastHolder(id, state string) (person, team string, err error) {
 	return "", "", nil
 }
 
-// mayHold reports whether a person may still get work from a step's rule: they are active, and they
-// have role (if role isn't "").
-func (s session) mayHold(person, role string) (bool, error) {
-	var ok bool
-	err := s.tx.QueryRow(s.ctx, `
-		SELECT p.status = 'active' AND ($2 = '' OR EXISTS (SELECT 1 FROM person_roles r
+// mayHold says whether a person may still get work from a step's rule (a step's owner, an assign
+// action, or returns_to: last): they are active, they have a login in this business, as for Pass on
+// (D68, choice 12; D73), and they have role (if role isn't ""). why is "" when they may, otherwise
+// why not in plain words ("is no longer active", "has no login yet", "is no longer in the team").
+func (s session) mayHold(person, role string) (why string, err error) {
+	var active, login, inRole bool
+	err = s.tx.QueryRow(s.ctx, `
+		SELECT p.status = 'active', p.account_id IS NOT NULL, ($2 = '' OR EXISTS (SELECT 1 FROM person_roles r
 			WHERE r.tenant_id = p.tenant_id AND r.person_id = p.id AND r.role_key = $2 AND r.revoked_at IS NULL))
-		FROM persons p WHERE p.tenant_id = current_tenant() AND p.id::text = $1`, person, role).Scan(&ok)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
+		FROM persons p WHERE p.tenant_id = current_tenant() AND p.id::text = $1`, person, role).Scan(&active, &login, &inRole)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return "is not in this business", nil
+	case err != nil:
+		return "", fmt.Errorf("workitem: person: %w", err)
+	case !active:
+		return "is no longer active", nil
+	case !login:
+		return "has no login yet", nil
+	case !inRole:
+		return "is no longer in the team", nil
 	}
-	if err != nil {
-		return false, fmt.Errorf("workitem: person: %w", err)
-	}
-	return ok, nil
+	return "", nil
 }
 
 // rejection returns who refused the item's current version, and why.
@@ -204,13 +212,14 @@ func (s session) rejection(it Item, r *engine.Approval) (person, reason string, 
 	return r.PersonID, reason, nil
 }
 
-// goneWhy says why a person can't get work: "Asha is no longer active and started this item".
-func (s session) goneWhy(person, why string) string {
+// goneWhy says why a person can't get work: "Asha is no longer active and started this item", or
+// "Mia has no login yet and is the Maker". state is what mayHold said.
+func (s session) goneWhy(person, state, why string) string {
 	name, err := s.personName(person)
 	if err != nil {
 		name = "the person"
 	}
-	return name + " is no longer active and " + why
+	return name + " " + state + " and " + why
 }
 
 // fieldLabel is the label people know a field by, or its key.
@@ -219,6 +228,54 @@ func (s session) fieldLabel(key string) string {
 		return f.Label
 	}
 	return key
+}
+
+// BackMove is a move that can send the item back from its step now (a move marked back: true), with
+// where it would go.
+type BackMove struct {
+	Action string // the move, e.g. back_to_sales
+	To     string // the step it goes back to
+	Last   string // the person who last had that step, or "" (a team, nobody, or never there)
+	// Person or Team gets the item if a sends it back now (see destination); both "" when it stays where
+	// it is.
+	Person, Team string
+}
+
+// BackMoves lists the moves that can send the item back from its step, each on the line of the process
+// it would really take now (its "if"), so chat can find one by a person's name or a step (D68, M4). It
+// doesn't check who may take them: Act does that. tx must come from db.WithTenant.
+func BackMoves(ctx context.Context, tx pgx.Tx, it Item, a engine.Actor) ([]BackMove, error) {
+	s, err := open(ctx, tx, it.PlaybookVersionID)
+	if err != nil {
+		return nil, err
+	}
+	lookup, err := master.LookupFor(ctx, tx, s.p, it.Fields)
+	if err != nil {
+		return nil, err
+	}
+	var out []BackMove
+	for _, t := range s.p.Transitions {
+		if !t.Back || !slices.Contains(t.From, it.State) || slices.ContainsFunc(out, func(b BackMove) bool { return b.Action == t.Action }) {
+			continue
+		}
+		line, err := engine.Pick(s.p, it.Engine(), t.Action, lookup)
+		if err != nil || !line.Back {
+			continue // not possible now
+		}
+		b := BackMove{Action: t.Action, To: line.To, Person: it.AssigneeID, Team: it.Team}
+		if b.Last, _, err = s.lastHolder(it.ID, line.To); err != nil {
+			return nil, err
+		}
+		d, err := s.destination(it, line.To, arrival{action: t.Action, back: true, from: a.ID})
+		if err != nil {
+			return nil, err
+		}
+		if d.moves {
+			b.Person, b.Team = d.person, d.team
+		}
+		out = append(out, b)
+	}
+	return out, nil
 }
 
 // Landing says, before a moves the item with action, where it would go, when that is worth saying

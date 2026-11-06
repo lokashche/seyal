@@ -51,10 +51,7 @@ func newHandFirm(t *testing.T) *handFirm {
 		return err
 	})
 	owner, _ := testdb.Connect(t)
-	for _, p := range []string{f.sales, f.ops, f.owner, f.dev, f.admin} {
-		account, _ := testdb.NewAccount(t, owner)
-		testdb.LinkPerson(t, owner, f.tenant, p, account)
-	}
+	testdb.GiveLogins(t, owner, f.tenant, f.dev, f.admin) // newFirm gave Sales, Ops and the owner theirs
 	return f
 }
 

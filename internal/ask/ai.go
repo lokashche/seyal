@@ -140,6 +140,16 @@ func typeWords(f playbook.Field) string {
 	return f.Type
 }
 
+// peopleNamesSQL lists the names the business's people have now and have had before. The old names come
+// from the ledger's person events; the ledger_kind index (migration 00019) finds those few events
+// without reading every event of the business.
+const peopleNamesSQL = `
+	SELECT display_name FROM persons WHERE tenant_id = current_tenant()
+	UNION
+	SELECT body::jsonb->'payload'->>'name' FROM ledger
+	WHERE tenant_id = current_tenant() AND kind IN ('person.created', 'person.renamed', 'person.updated')
+		AND body::jsonb->'payload'->>'name' IS NOT NULL`
+
 // input is the changing part: the item's state, which fields are filled, Seyal's last question,
 // the recent messages and the new one.
 func (c *conversation) input(text, pendingKey string) (string, error) {
@@ -165,6 +175,24 @@ func (c *conversation) input(text, pendingKey string) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		// Seyal's own replies that name a person ("Passed to Dev.") are left out, so no staff name from the
+		// business's lists goes to the model (D41; D68, decision 18). The names are people's names now and
+		// the ones they had before (from the ledger), so a reply from before a rename is left out too.
+		// A "which one?" button's words ("pass to Ben Sample, …") came from Seyal's list, not from the
+		// person, so they are left out as well. People's own words are sent as before.
+		rows, _ = c.tx.Query(c.ctx, peopleNamesSQL)
+		names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return "", err
+		}
+		buttons, err := choiceTexts(c.ctx, c.tx, it.ID)
+		if err != nil {
+			return "", err
+		}
+		recent = slices.DeleteFunc(recent, func(m struct{ Kind, Text string }) bool {
+			return m.Kind == "seyal" && namesSomeone(m.Text, names) ||
+				m.Kind == "person" && slices.Contains(buttons, strings.TrimSpace(m.Text))
+		})
 		if len(recent) > 0 {
 			b.WriteString("Recent messages (oldest first):\n")
 			for i := len(recent) - 1; i >= 0; i-- {

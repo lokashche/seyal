@@ -57,6 +57,7 @@ func TestThreadTellsTheStory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	testdb.GiveLogins(t, owner, tenant, sales, ops, maker) // work goes only to people with a login (D73)
 
 	lib, err := playbook.LoadLibrary("../testdata/playbooks", "../../examples/masters")
 	if err != nil {

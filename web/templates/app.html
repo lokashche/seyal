@@ -176,7 +176,7 @@
     {{end}}
     {{with .Quick}}
     <div class="quick">
-      {{range .}}<form method="post" action="/t/{{$.Slug}}/items/{{$.Data.Item.Item.ID}}/say"><input type="hidden" name="text" value="{{.}}"><button>{{.}}</button></form>{{end}}
+      {{range .}}<form method="post" action="/t/{{$.Slug}}/items/{{$.Data.Item.Item.ID}}/say"><input type="hidden" name="text" value="{{.Text}}"><button>{{.Label}}</button></form>{{end}}
     </div>
     {{end}}
   </div>

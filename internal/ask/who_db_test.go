@@ -15,7 +15,6 @@ import (
 	"seyal/internal/engine"
 	"seyal/internal/ledger"
 	"seyal/internal/playbook"
-	"seyal/internal/testdb"
 	"seyal/internal/workitem"
 )
 
@@ -171,11 +170,7 @@ on:
 // the starter, who no longer had it, could then not set Closer (D72 review fix).
 func TestOwnerFieldSavedLast(t *testing.T) {
 	o := newOffice(t)
-	owner, _ := testdb.Connect(t)
-	for _, person := range []string{o.sam, o.olga, o.mia} {
-		account, _ := testdb.NewAccount(t, owner)
-		testdb.LinkPerson(t, owner, o.tenant, person, account)
-	}
+	o.login(o.mia) // newOffice gave Sam and Olga theirs
 	p, err := playbook.Parse([]byte(chatPair))
 	if err != nil {
 		t.Fatal(err)

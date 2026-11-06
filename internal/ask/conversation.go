@@ -127,16 +127,42 @@ func Converse(ctx context.Context, tx pgx.Tx, env Env, itemID string, in channel
 		if err != nil {
 			return Reply{}, err
 		}
+		// While Seyal's "which one do you mean?" is open for this person, their reply is about that, not
+		// the answer to the question asked before it ("Ben Sample" is not a list of documents).
+		which, err := openChoice(ctx, tx, it, c.person, msg.ID)
+		if err != nil {
+			return Reply{}, err
+		}
+		if which != nil {
+			f, offer = nil, nil
+		}
 		pendingKey := ""
 		if f != nil {
 			pendingKey = f.Key
 		}
 		var pr *proposal
-		command := c.isCommand(text)
-		if offer == nil && !command {
+		command := c.isCommand(text) // a process's own move word wins over Seyal's hand-over words
+		handed := false
+		if !command {
+			// Hand-over words ("pass to Dev, …") also win over a pending question or offer (D73). A reply
+			// that picks one of the "which one?" buttons does what that button keeps.
+			if which != nil {
+				if q, ok := picked(which.Choose, text); ok {
+					handed, err = c.chosen(q)
+				}
+			}
+			if !handed && err == nil {
+				handed, err = c.handOver(text)
+			}
+			if err != nil {
+				return Reply{}, err
+			}
+		}
+		if offer == nil && !command && !handed {
 			pr = c.understand(text, pendingKey)
 		}
 		switch {
+		case handed:
 		case command: // a command wins over a pending question or offer ("submit" isn't an amount)
 			err = c.command(text)
 		case offer != nil: // offer is only set when f is
@@ -271,38 +297,35 @@ func (c *conversation) pending() (*playbook.Field, *offer, error) {
 	return nil, nil, nil
 }
 
-// lastAsked returns the field of Seyal's last question, and the offer if it was one.
+// lastAsked returns the field of Seyal's last question, and the offer if it was one. A "which one do
+// you mean?" after a typed hand-over is skipped (D73), so the field question asked before it stays
+// open.
 func (c *conversation) lastAsked() (field string, of *offer, err error) {
 	if c.reply.Item.ID == "" {
 		return "", nil, nil
 	}
-	var body string
-	err = c.tx.QueryRow(c.ctx, `
-		SELECT body FROM ledger
-		WHERE tenant_id = current_tenant() AND subject_type = 'work_item' AND subject_id = $1::uuid
-			AND kind = 'item.asked'
-		ORDER BY seq DESC LIMIT 1`, c.reply.Item.ID).Scan(&body)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil, nil
-	}
+	changes, err := askedChanges(c.ctx, c.tx, c.reply.Item.ID)
 	if err != nil {
 		return "", nil, err
 	}
-	var e struct {
-		Payload struct {
-			Change struct {
-				Field string `json:"field"`
-				offer
-			} `json:"change"`
-		} `json:"payload"`
+	for _, raw := range changes {
+		var ch struct {
+			Field  string  `json:"field"`
+			Choose []Quick `json:"choose"`
+			offer
+		}
+		if err := json.Unmarshal(raw, &ch); err != nil {
+			return "", nil, err
+		}
+		switch {
+		case len(ch.Choose) > 0:
+			continue
+		case ch.Name == "":
+			return ch.Field, nil, nil
+		}
+		return ch.Field, &ch.offer, nil
 	}
-	if err := json.Unmarshal([]byte(body), &e); err != nil {
-		return "", nil, err
-	}
-	if e.Payload.Change.Name == "" {
-		return e.Payload.Change.Field, nil, nil
-	}
-	return e.Payload.Change.Field, &e.Payload.Change.offer, nil
+	return "", nil, nil
 }
 
 // answer fills field f from the person's answer, or says what was wrong with it. A name that isn't

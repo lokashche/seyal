@@ -94,7 +94,7 @@ type itemView struct {
 	PassOnly string
 	Hand     *handView // nil when the item is closed
 	Thread   []entryView
-	Quick    []string
+	Quick    []ask.Quick // buttons that send a reply: an answer to Seyal's question, or a "which one?" choice
 	Fields   []fieldView
 	Slots    []slotView
 	Actions  []actionView
@@ -422,9 +422,20 @@ func (v *view) item(id string) (*itemView, error) {
 		case err != nil:
 			return nil, err
 		case offer != "":
-			iv.Quick = []string{"yes", "no"} // "add it as a new entry?"
+			iv.Quick = ask.Replies("yes", "no") // "add it as a new entry?"
 		case f != nil:
-			iv.Quick = v.quick(*f)
+			iv.Quick = ask.Replies(v.quick(*f)...)
+		}
+	}
+	if !iv.Closed {
+		// Seyal's "which one do you mean?" after a typed hand-over wins: only its asker sees the buttons,
+		// and each button sends the whole command again, so every check runs again (D73).
+		choose, err := ask.Choosing(v.ctx, v.tx, it, v.c.session.PersonID)
+		if err != nil {
+			return nil, err
+		}
+		if choose != nil {
+			iv.Quick = choose
 		}
 	}
 	if !iv.Closed {

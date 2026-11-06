@@ -29,6 +29,7 @@ type office struct {
 	t              *testing.T
 	ctx            context.Context
 	app            *pgxpool.Pool
+	ownerDB        *pgxpool.Pool // the database owner, for setting up tests only
 	tenant         string
 	pv             string
 	store          media.Disk
@@ -43,7 +44,7 @@ func newOffice(t *testing.T) *office {
 	ctx := context.Background()
 	owner, app := testdb.Connect(t)
 	tenant, sam := testdb.NewTenant(t, owner, "Chat Test")
-	o := &office{t: t, ctx: ctx, app: app, tenant: tenant, sam: sam, store: media.Disk{Dir: t.TempDir()}, ai: &ai.Setup{}}
+	o := &office{t: t, ctx: ctx, app: app, ownerDB: owner, tenant: tenant, sam: sam, store: media.Disk{Dir: t.TempDir()}, ai: &ai.Setup{}}
 
 	err := db.WithTenant(ctx, owner, tenant, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, "INSERT INTO roles (tenant_id, key, name) VALUES ($1, 'sales', 'Sales'), ($1, 'ops', 'Ops')", tenant); err != nil {
@@ -70,6 +71,8 @@ func newOffice(t *testing.T) *office {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Work goes only to people with a login (D73). Mia has none, unless a test gives her one.
+	testdb.GiveLogins(t, owner, tenant, o.sam, o.olga)
 
 	lib, err := playbook.LoadLibrary("../testdata/playbooks", "../../examples/masters")
 	if err != nil {
@@ -93,6 +96,12 @@ func newOffice(t *testing.T) *office {
 		return err
 	})
 	return o
+}
+
+// login gives the people a made-up login, so work can go to them (D73).
+func (o *office) login(people ...string) {
+	o.t.Helper()
+	testdb.GiveLogins(o.t, o.ownerDB, o.tenant, people...)
 }
 
 func (o *office) in(fn func(tx pgx.Tx) error) {
@@ -134,6 +143,7 @@ func (o *office) write(item, person, text string) ask.Reply {
 // mistakes get a second chance, and short commands submit and approve the job.
 func TestFillAJobByChat(t *testing.T) {
 	o := newOffice(t)
+	o.login(o.mia)
 
 	var r ask.Reply
 	o.in(func(tx pgx.Tx) error {

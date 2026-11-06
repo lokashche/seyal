@@ -31,6 +31,7 @@ type firm struct {
 	t                        *testing.T
 	ctx                      context.Context
 	app                      *pgxpool.Pool
+	ownerDB                  *pgxpool.Pool // the database owner, for setting up tests only
 	tenant                   string
 	pv                       string // playbook version id
 	sales, ops, owner, maker string // person ids
@@ -41,7 +42,7 @@ func newFirm(t *testing.T) *firm {
 	ctx := context.Background()
 	ownerPool, app := testdb.Connect(t)
 	tenant, sales := testdb.NewTenant(t, ownerPool, "Work Item Test")
-	f := &firm{t: t, ctx: ctx, app: app, tenant: tenant, sales: sales}
+	f := &firm{t: t, ctx: ctx, app: app, ownerDB: ownerPool, tenant: tenant, sales: sales}
 
 	// Fiscal year from April, so numbering follows it.
 	if _, err := ownerPool.Exec(ctx, "UPDATE tenants SET fiscal_year_start_month = 4 WHERE id = $1", tenant); err != nil {
@@ -81,6 +82,8 @@ func newFirm(t *testing.T) *firm {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Work goes only to people with a login (D73). Mia has none, unless a test gives her one.
+	testdb.GiveLogins(t, ownerPool, tenant, f.sales, f.ops, f.owner)
 
 	lib, err := playbook.LoadLibrary("../testdata/playbooks", "../../examples/masters")
 	if err != nil {
@@ -107,6 +110,12 @@ func newFirm(t *testing.T) *firm {
 		return err
 	})
 	return f
+}
+
+// login gives the people a made-up login, so work can go to them (D73).
+func (f *firm) login(people ...string) {
+	f.t.Helper()
+	testdb.GiveLogins(f.t, f.ownerDB, f.tenant, people...)
 }
 
 func (f *firm) tx(fn func(tx pgx.Tx) error) {
@@ -236,6 +245,7 @@ func TestStartNumbersAndPrefills(t *testing.T) {
 
 func TestHappyPath(t *testing.T) {
 	f := newFirm(t)
+	f.login(f.maker)
 	it := f.start(ready())
 	it = f.act(it.ID, "submit", "")
 	if it.State != "pending_approval" {
