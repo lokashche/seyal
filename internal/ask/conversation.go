@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -120,6 +121,9 @@ func Converse(ctx context.Context, tx pgx.Tx, env Env, itemID string, in channel
 	if err != nil {
 		return Reply{}, err
 	}
+	if n, ok := strings.CutPrefix(in.Button, "suggestion:"); ok {
+		c.button, _ = strconv.ParseInt(n, 10, 64)
+	}
 
 	answered, offered := false, false
 	if text := strings.TrimSpace(msg.Text); text != "" {
@@ -136,19 +140,29 @@ func Converse(ctx context.Context, tx pgx.Tx, env Env, itemID string, in channel
 		if which != nil {
 			f, offer = nil, nil
 		}
+		// A Yes or No to Seyal's suggestion (D74) is about that, and nothing else. While Seyal also waits for
+		// another answer (a field question of any kind, an offer, "which one?"), a typed "yes" or "no" may be
+		// meant for that instead (see confirm).
+		confirmed, err := c.confirm(text, which != nil || f != nil)
+		if err != nil {
+			return Reply{}, err
+		}
+		if confirmed {
+			text = ""
+		}
 		pendingKey := ""
 		if f != nil {
 			pendingKey = f.Key
 		}
 		var pr *proposal
-		command := c.isCommand(text) // a process's own move word wins over Seyal's hand-over words
-		handed := false
-		if !command {
+		command := text != "" && c.isCommand(text) // a process's own move word wins over Seyal's hand-over words
+		handed := confirmed
+		if !command && !handed {
 			// Hand-over words ("pass to Dev, …") also win over a pending question or offer (D73). A reply
 			// that picks one of the "which one?" buttons does what that button keeps.
 			if which != nil {
 				if q, ok := picked(which.Choose, text); ok {
-					handed, err = c.chosen(q)
+					handed, err = c.chosen(q, *which)
 				}
 			}
 			if !handed && err == nil {
@@ -180,7 +194,11 @@ func Converse(ctx context.Context, tx pgx.Tx, env Env, itemID string, in channel
 			return Reply{}, err
 		}
 	}
-	if !offered {
+	if err := c.flush(); err != nil {
+		return Reply{}, err
+	}
+	// After a suggestion, Seyal waits for the Yes or No; its open question stays open (D74).
+	if !offered && !c.suggested {
 		if err := c.askNext(answered); err != nil {
 			return Reply{}, err
 		}
@@ -255,15 +273,24 @@ type conversation struct {
 	today     time.Time
 	reply     Reply
 	// spoken: the message's words came from a voice note (it has a transcript, which the server
-	// checked). Such words never run a command (see voiceGuard).
+	// checked). Such words never run a command at once: a move or hand-over becomes a suggestion with
+	// Yes and No (suggest.go), and approving or refusing gets voiceGuard.
 	spoken bool
+	// button is the suggestion a pressed Yes or No answers (its ledger number), or 0 for typed words.
+	button int64
+	// later is a suggestion to make once everything else from the message is saved (see flush).
+	later *propose
+	// suggested: Seyal made a suggestion in reply to this message, so it asks nothing else now.
+	suggested bool
+	// askFirst: the AI model read the hand-over, so it becomes a suggestion, like spoken words (see act).
+	askFirst bool
 }
 
-// voiceGuard is Seyal's reply when words from a voice note read as a command (move, cancel,
-// approve, ...). Speech services mishear, names most of all, so a spoken command never runs at once;
-// the person types it or taps the button (moving-work design, decision 15). A spoken answer to
-// Seyal's question is still used.
-const voiceGuard = "To do that, type it or tap the button."
+// voiceGuard is Seyal's reply when words from a voice note read as approving or refusing. Speech
+// services mishear, and approvals are only ever given in the person's own typed words or with the
+// buttons (D41; moving-work design, decision 15). Other spoken moves become a suggestion (D74). A
+// spoken answer to Seyal's question is still used.
+const voiceGuard = "To approve or refuse, type it or tap the button."
 
 func newConversation(ctx context.Context, tx pgx.Tx, env Env, versionID string, it workitem.Item, msg channel.Message) (*conversation, error) {
 	p, err := workitem.PlaybookFor(ctx, tx, workitem.Item{PlaybookVersionID: versionID})
@@ -298,8 +325,8 @@ func (c *conversation) pending() (*playbook.Field, *offer, error) {
 }
 
 // lastAsked returns the field of Seyal's last question, and the offer if it was one. A "which one do
-// you mean?" after a typed hand-over is skipped (D73), so the field question asked before it stays
-// open.
+// you mean?" after a typed hand-over (D73) and a suggestion with Yes and No (D74) are skipped, so the
+// field question asked before them stays open.
 func (c *conversation) lastAsked() (field string, of *offer, err error) {
 	if c.reply.Item.ID == "" {
 		return "", nil, nil
@@ -310,15 +337,16 @@ func (c *conversation) lastAsked() (field string, of *offer, err error) {
 	}
 	for _, raw := range changes {
 		var ch struct {
-			Field  string  `json:"field"`
-			Choose []Quick `json:"choose"`
+			Field   string          `json:"field"`
+			Choose  []Quick         `json:"choose"`
+			Propose json.RawMessage `json:"propose"`
 			offer
 		}
 		if err := json.Unmarshal(raw, &ch); err != nil {
 			return "", nil, err
 		}
 		switch {
-		case len(ch.Choose) > 0:
+		case len(ch.Choose) > 0 || ch.Propose != nil: // a "which one?" or a suggestion
 			continue
 		case ch.Name == "":
 			return ch.Field, nil, nil
@@ -338,6 +366,10 @@ func (c *conversation) answer(f playbook.Field, text string) (offered bool, err 
 		return true, c.offerNew(f, tidyName(notIn.Name), nil)
 	case err != nil:
 		return false, c.say(fmt.Sprintf("Sorry, I didn't get that: %s.", strings.TrimSuffix(err.Error(), ".")))
+	case c.spoken && engine.PowerFields(c.p)[f.Key]:
+		// A person heard in a voice note, for a field that says who gets the work or who may take a move:
+		// Seyal asks first (D68, choice 14; D74).
+		return false, c.suggest(propose{Do: doFill, Fields: engine.Fields{f.Key: v}})
 	}
 	problem, err := c.try(func(sp pgx.Tx) (workitem.Item, error) {
 		return workitem.SetFields(c.ctx, sp, c.reply.Item.ID, engine.Fields{f.Key: v}, ledger.PersonActor(c.person))
@@ -381,8 +413,10 @@ func (c *conversation) commandBy(text string, by ledger.Actor) error {
 	switch {
 	case !ok:
 		return nil
-	case c.spoken:
+	case c.spoken && (word == engine.Approve || word == engine.Reject):
 		return c.say(voiceGuard)
+	case c.spoken: // a move heard in a voice note: Seyal asks first (D74)
+		return c.suggest(propose{Do: doMove, To: word, Note: reason})
 	case waiting && (word == engine.Approve || word == engine.Reject):
 		return c.decide(word, reason)
 	}

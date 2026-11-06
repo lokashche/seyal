@@ -226,6 +226,12 @@ func (s session) update(it Item) error {
 
 // record writes an event about the item to the ledger: what changed, plus a full snapshot.
 func (s session) record(kind string, it Item, change map[string]any, by ledger.Actor) error {
+	if seq := confirmed(s.ctx); seq != 0 && by.Kind == ledger.Human {
+		if change == nil {
+			change = map[string]any{}
+		}
+		change["suggestion"] = seq // the person did this by tapping Yes on that suggestion (see Confirming)
+	}
 	_, err := ledger.Append(s.ctx, s.tx, ledger.Event{
 		Kind:        kind,
 		SubjectType: "work_item",

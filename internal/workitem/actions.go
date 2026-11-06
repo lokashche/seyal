@@ -517,13 +517,12 @@ const (
 // handoff says how and why an item changes hands. How and Note are always asked for; the rest are
 // added to the event only when set.
 type handoff struct {
-	How        string // one of the How… words
-	Note       string // why, in the person's words (or the reason work was sent back)
-	Via        string // button, panel, chat or voice; "" when a rule did it
-	As         string // "admin" when only being an admin allowed it
-	After      string // the move that sent the work back (HowReturn)
-	From       string // who it comes from, when that isn't simply the person who had it (a send-back)
-	Suggestion int64  // the ledger number of the suggestion confirmed with Yes, or 0
+	How   string // one of the How… words
+	Note  string // why, in the person's words (or the reason work was sent back)
+	Via   string // button, panel, chat or voice; "" when a rule did it
+	As    string // "admin" when only being an admin allowed it
+	After string // the move that sent the work back (HowReturn)
+	From  string // who it comes from, when that isn't simply the person who had it (a send-back)
 }
 
 // assign gives the item to one person, or to a team (a role) when person is "", and records who did
@@ -546,9 +545,6 @@ func (s session) assign(it *Item, person, team string, by ledger.Actor, h handof
 		if v != "" {
 			change[key] = v
 		}
-	}
-	if h.Suggestion != 0 {
-		change["suggestion"] = h.Suggestion
 	}
 	return s.record("item.assigned", *it, change, by)
 }

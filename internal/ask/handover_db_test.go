@@ -270,7 +270,8 @@ func TestTypedSendBack(t *testing.T) {
 }
 
 // TestHandOverWinsOverAnswer: Seyal's question stays open, but hand-over words win over an answer to it
-// (decision 20). The new holder then answers the question. A voice note never hands over (decision 15).
+// (decision 20). The new holder then answers the question. A voice note never hands over at once: it is
+// only suggested (decision 15; D74).
 func TestHandOverWinsOverAnswer(t *testing.T) {
 	tm := newTeam(t)
 	job := tm.withOps()
@@ -288,8 +289,8 @@ func TestHandOverWinsOverAnswer(t *testing.T) {
 		t.Fatalf("Seyal's open question = %v; want the documents", asked)
 	}
 
-	if r := tm.speak(job.ID, tm.dev, "pass to Ben Sample"); r.Item.AssigneeID != tm.dev || !strings.Contains(said(r), "type it or tap the button") {
-		t.Errorf("a spoken pass: with %q, Seyal said %q; want nothing moved", r.Item.AssigneeID, said(r))
+	if r := tm.speak(job.ID, tm.dev, "pass to Ben Sample"); r.Item.AssigneeID != tm.dev || !strings.Contains(said(r), "Pass J-2026-0001 to Ben Sample?") {
+		t.Errorf("a spoken pass: with %q, Seyal said %q; want nothing moved, only a suggestion (D74)", r.Item.AssigneeID, said(r))
 	}
 	r := tm.write(job.ID, tm.dev, "give to Ben Sample")
 	if r.Item.AssigneeID != tm.benS || r.Item.Fields["required_documents"] != nil {
@@ -374,18 +375,18 @@ func TestTypedReplyToWhichOne(t *testing.T) {
 }
 
 // TestSpokenSentenceIsReadAsUsual: a voice note that only starts like a hand-over ("give it to them by
-// Friday, …") is no hand-over, so it gets no voice guard and still answers Seyal's question (decision
-// 15). A spoken real hand-over still moves nothing.
+// Friday, …") is no hand-over, so it gets no suggestion and still answers Seyal's question (decision
+// 15). A spoken real hand-over still moves nothing: it becomes a suggestion (D74).
 func TestSpokenSentenceIsReadAsUsual(t *testing.T) {
 	tm := newTeam(t)
 	job := tm.withOps()
 	tm.write(job.ID, tm.dev, "take it")
 	r := tm.speak(job.ID, tm.dev, "give it to them by Friday, bank statements")
-	if strings.Contains(said(r), "type it or tap the button") || r.Item.Fields["required_documents"] == nil {
+	if strings.Contains(said(r), "Pass J-") || r.Item.Fields["required_documents"] == nil {
 		t.Errorf("a spoken sentence: Seyal said %q, documents %v; want it read as an answer", said(r), r.Item.Fields["required_documents"])
 	}
-	if r = tm.speak(job.ID, tm.dev, "pass to Ben Sample"); r.Item.AssigneeID != tm.dev || !strings.Contains(said(r), "type it or tap the button") {
-		t.Errorf("a spoken pass: with %q, Seyal said %q; want nothing moved", r.Item.AssigneeID, said(r))
+	if r = tm.speak(job.ID, tm.dev, "pass to Ben Sample"); r.Item.AssigneeID != tm.dev || !strings.Contains(said(r), "Pass J-2026-0001 to Ben Sample?") {
+		t.Errorf("a spoken pass: with %q, Seyal said %q; want nothing moved, only a suggestion", r.Item.AssigneeID, said(r))
 	}
 }
 

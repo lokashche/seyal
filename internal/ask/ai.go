@@ -21,9 +21,11 @@ import (
 
 // AI reading of chat messages. The model only proposes; Seyal decides. Every value it proposes is
 // checked with Understand, exactly as if the person had typed it as an answer, and saved as "Seyal
-// on behalf of <person>". Approving, refusing and actions that need a reason are never taken from
-// the model's reading: only when the person types the command itself. If AI is off, fails, or
-// answers something unusable, the rule-based conversation carries on as before.
+// on behalf of <person>". A value for a person field that says who gets the work or who may take a
+// move, and every move the model reads, only becomes a suggestion that the person confirms with Yes
+// (D68, choices 14 and 15; D74, which updates D41). Approving and refusing are never taken from the
+// model's reading: only when the person types the command itself. If AI is off, fails, or answers
+// something unusable, the rule-based conversation carries on as before.
 //
 // What is sent to the model: the process's field names, labels, types, options and questions; the
 // names of master items people can choose; which fields are already filled (not their values); and
@@ -35,6 +37,7 @@ type proposal struct {
 	Fields   map[string]string `json:"fields"`
 	NewItems []newItem         `json:"new_items"`
 	Command  string            `json:"command"`
+	To       string            `json:"to"` // for Seyal's own pass and send_back: the words naming who or where
 	Reason   string            `json:"reason"`
 	Reply    string            `json:"reply"`
 }
@@ -48,7 +51,7 @@ var kinds = []string{"new_work", "answer", "command", "note", "greeting", "quest
 
 var proposalSchema = map[string]any{
 	"type": "object", "additionalProperties": false,
-	"required": []string{"kind", "fields", "new_items", "command", "reason", "reply"},
+	"required": []string{"kind", "fields", "new_items", "command", "to", "reason", "reply"},
 	"properties": map[string]any{
 		"kind":   map[string]any{"type": "string", "enum": kinds},
 		"fields": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
@@ -57,6 +60,7 @@ var proposalSchema = map[string]any{
 			"properties": map[string]any{"field": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}},
 		}},
 		"command": map[string]any{"type": "string"},
+		"to":      map[string]any{"type": "string"},
 		"reason":  map[string]any{"type": "string"},
 		"reply":   map[string]any{"type": "string"},
 	},
@@ -121,6 +125,12 @@ Fields of this kind of work item:
 		}
 	}
 	b.WriteString(strings.Join(actions, ", ") + "\n")
+	// Seyal's own hand-overs (D68, M8). The model only passes on the words that name someone; Seyal
+	// matches them to a person on its own side, and asks the person to confirm with Yes (D74).
+	b.WriteString(`Also allowed, for every item: "pass" (give the item to someone else: put the words that name them, or the
+team, in "to", exactly as said, and why in "reason"), "take" (the person takes the item themselves), "send_back"
+(send it back to whoever had it before, or to an earlier step: "to" names them or the step, "reason" says why).
+`)
 	return b.String(), nil
 }
 
@@ -298,6 +308,27 @@ func (c *conversation) apply(pr *proposal, text string, pending *playbook.Field)
 		offered, err := c.answer(*pending, text)
 		return true, offered, err
 	}
+	// A person field that carries power (it says who gets the work or who may take a move) is only
+	// suggested: the person confirms it with Yes, once the rest of the message is saved (D74).
+	power := engine.PowerFields(c.p)
+	confirm := engine.Fields{}
+	for key, v := range values {
+		if !power[key] {
+			continue
+		}
+		// Typed words that are exactly an answer to Seyal's question about this field are the person's own
+		// answer, as without AI: only what the model read from other words needs a Yes.
+		if !c.spoken && pending != nil && pending.Key == key {
+			if typed, err := Understand(*pending, text, c.today, choices{c.ctx, c.tx}); err == nil && engine.SameValue(typed, v) {
+				continue
+			}
+		}
+		confirm[key] = v
+		delete(values, key)
+	}
+	if len(confirm) > 0 {
+		c.later = &propose{Do: doFill, Fields: confirm}
+	}
 	if len(values) > 0 {
 		refused, err := c.setFields(values, ledger.AgentActor(c.person))
 		if err != nil {
@@ -311,25 +342,47 @@ func (c *conversation) apply(pr *proposal, text string, pending *playbook.Field)
 		}
 	}
 	if len(offers) > 0 {
+		// One yes/no question at a time: the offer goes first, and the person field kept for a Yes is not
+		// suggested now. Seyal asks for it again later, when it is still needed.
+		c.later = nil
 		return true, true, c.offerNew(*c.field(offers[0].Field), offers[0].Name, offers[1:])
 	}
 	return true, false, nil
 }
 
-// aiCommand runs an action the model read from the message. Approving, refusing and actions that
-// need a reason only happen when the person typed the command itself, and nothing runs from the words
-// of a voice note (voiceGuard).
+// aiCommand handles a move the model read from the message. It only becomes a suggestion: the person
+// confirms it with Yes, and it then runs as them (D74, which updates D41: before, a plain move such as
+// "submit" ran at once). Approving and refusing only happen when the person typed the command itself,
+// and Seyal's own moves (by: seyal) never come from the model.
 func (c *conversation) aiCommand(pr *proposal, text string) error {
-	if c.spoken {
-		return c.say(voiceGuard)
-	}
 	if c.isCommand(text) {
 		return c.command(text)
 	}
+	// The model's words for who and why are cut short, like its free reply: Seyal may repeat them in
+	// the shared thread ("I don't know a team called …", the note in the question).
+	to, reason := limit(strings.TrimSpace(pr.To), maxModelTo), limit(strings.TrimSpace(pr.Reason), maxModelReason)
 	for _, t := range c.p.Transitions {
-		if t.Action == pr.Command && t.Needs == "" && slices.Contains(t.From, c.reply.Item.State) {
-			// The model read it; the ledger says so ("Seyal for <person>").
-			return c.commandBy(pr.Command, ledger.AgentActor(c.person))
+		if t.Action == pr.Command && t.By != "seyal" && slices.Contains(t.From, c.reply.Item.State) {
+			return c.suggest(propose{Do: doMove, To: pr.Command, Note: reason})
+		}
+	}
+	// Seyal's own hand-overs, read by the model ("Dev-kitta kudu" is "give it to Dev"): found as for
+	// typed words, then only suggested.
+	h := handWords{Do: pr.Command, To: to, Note: reason}
+	if slices.Contains([]string{doPass, doTake, doSendBack}, h.Do) && (h.Do == doTake || h.To != "") {
+		c.askFirst = true
+		defer func() { c.askFirst = false }()
+		handled, err := true, error(nil)
+		switch h.Do {
+		case doTake:
+			err = c.act(propose{Do: doTake})
+		case doSendBack:
+			handled, err = c.sendBack(h)
+		default:
+			handled, err = c.pass(h)
+		}
+		if err != nil || handled {
+			return err
 		}
 	}
 	return c.say(`To do that, please type the command itself, for example "submit", or "cancel because …".`)
@@ -447,6 +500,12 @@ func sortedKeys(m map[string]string) []string {
 	slices.Sort(keys)
 	return keys
 }
+
+// The longest model-written "to" and "reason" Seyal uses, in characters; longer ones are cut, with "…".
+const (
+	maxModelTo     = 120
+	maxModelReason = 300
+)
 
 func limit(s string, n int) string {
 	if len([]rune(s)) <= n {

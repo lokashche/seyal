@@ -225,7 +225,10 @@ func (c *conversation) start(pr *proposal) (Reply, error) {
 	if err := c.fromMessage(strings.TrimSpace(msg.Text)); err != nil {
 		return Reply{}, err
 	}
-	if !offered {
+	if err := c.flush(); err != nil {
+		return Reply{}, err
+	}
+	if !offered && !c.suggested {
 		if err := c.askNext(false); err != nil {
 			return Reply{}, err
 		}

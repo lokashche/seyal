@@ -166,8 +166,9 @@ on:
 `
 
 // TestOwnerFieldSavedLast: one message names both the step's owner field (Approver) and another power
-// field (Closer). The owner field sorts first, but it is saved last: saving it hands the item over, and
-// the starter, who no longer had it, could then not set Closer (D72 review fix).
+// field (Closer). The AI read them, so Seyal asks first (D74); on Yes, the owner field sorts first but
+// is saved last: saving it hands the item over, and the starter, who no longer had it, could then not
+// set Closer (D72 review fix).
 func TestOwnerFieldSavedLast(t *testing.T) {
 	o := newOffice(t)
 	o.login(o.mia) // newOffice gave Sam and Olga theirs
@@ -190,6 +191,11 @@ func TestOwnerFieldSavedLast(t *testing.T) {
 			Text: "Olga checks the petty cash, Mia closes it"})
 		return err
 	})
+	if r.Item.Fields["approver"] != nil || r.Item.Fields["closer"] != nil ||
+		!strings.Contains(said(r), `Set "Approver" to Olga Ops and "Closer" to Mia Maker on P-0001?`) {
+		t.Fatalf("before yes: fields = %v, Seyal said %q; want a suggestion and nothing set", r.Item.Fields, said(r))
+	}
+	r = o.write(r.Item.ID, o.sam, "yes")
 	if r.Item.Fields["approver"] != o.olga || r.Item.Fields["closer"] != o.mia || r.Item.AssigneeID != o.olga {
 		var said []string
 		for _, m := range r.Seyal {

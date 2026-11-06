@@ -461,7 +461,7 @@ func (p *Playbook) CheckNew() error {
 			}
 		}
 	}
-	var seen, seenField []string
+	var seen []string
 	for _, t := range p.Transitions {
 		if slices.Contains(ReservedMoves, t.Action) && !slices.Contains(seen, t.Action) {
 			seen = append(seen, t.Action)
@@ -469,32 +469,10 @@ func (p *Playbook) CheckNew() error {
 				"transition %s: %q is one of Seyal's own words (%s); give the move another name",
 				t.Action, t.Action, strings.Join(ReservedMoves, ", ")))
 		}
-		// "field:<f>" in a move's who lets the person named in f take the move. Until only the holder
-		// or an admin may change such a field (moving-work design, decision 14), whoever may change the
-		// details could name themselves and take the move, so a new version may not use it yet (D69).
-		for _, w := range t.Who {
-			if strings.HasPrefix(w, "field:") && !slices.Contains(seenField, t.Action) {
-				seenField = append(seenField, t.Action)
-				problems = append(problems, fmt.Sprintf(
-					"transition %s: who: %q can't be used yet: the person field isn't protected from being changed by others (use holder, starter, role:<role> or anyone)",
-					t.Action, w))
-			}
-		}
 	}
-	// The same goes for "field:<f>" in a step's pass_to: whoever may change the details (the starter,
-	// even after someone else has the item) could name a person of their choice there, and the holder
-	// could then pass the item to anyone as an ordinary pass, with no admin and no notice (D71 review).
-	// The step's own owner field is protected, but it always names the holder, so it adds nobody.
-	for _, state := range slices.Sorted(maps.Keys(p.Steps)) {
-		for _, w := range p.Steps[state].PassTo {
-			if strings.HasPrefix(w, "field:") {
-				problems = append(problems, fmt.Sprintf(
-					"step %s: pass_to: %q can't be used yet: the person field isn't protected from being changed by others (use starter, role:<role> or anyone)",
-					state, w))
-				break
-			}
-		}
-	}
+	// "field:<f>" in a move's who or a step's pass_to is allowed again (D74). Such a field carries power
+	// (engine.PowerFields): only whoever has the item or an admin may change it (D72), and a value the AI
+	// model or a voice note gives it needs the person's Yes first (D74).
 	if len(problems) == 0 {
 		return nil
 	}

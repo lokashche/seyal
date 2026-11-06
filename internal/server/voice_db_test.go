@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"html"
 	"math"
 	"mime/multipart"
 	"net/http"
@@ -344,9 +345,13 @@ func TestSpeakInsteadOfType(t *testing.T) {
 		if n := s.count("SELECT count(*) FROM work_items WHERE id::text = $1 AND state = 'cancelled'", id); n != 0 {
 			t.Error("a spoken cancel cancelled the work")
 		}
-		if _, page, _ := s.get(a, item); !strings.Contains(page, "To do that, type it or tap the button.") ||
-			!strings.Contains(page, "cancel because test") {
-			t.Errorf("Seyal didn't explain, or the words weren't kept as a note:\n%s", page)
+		// Seyal only suggests it, with Yes and No that say which suggestion they answer (D74).
+		_, page, _ := s.get(a, item)
+		page = html.UnescapeString(page)
+		if !strings.Contains(page, `Do "cancel" on`) || !strings.Contains(page, `with the reason "test"?`) ||
+			!strings.Contains(page, "cancel because test") || !strings.Contains(page, `name="button" value="suggestion:`) ||
+			!strings.Contains(page, "<button>Yes, do it</button>") {
+			t.Errorf("Seyal didn't suggest it with Yes and No, or the words weren't kept as a note:\n%s", page)
 		}
 		s.tablesMatchLedger(t)
 	})

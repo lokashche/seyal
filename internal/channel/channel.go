@@ -73,6 +73,10 @@ type Incoming struct {
 	Spoken   *Spoken
 	ThreadID string    // optional work item id
 	SentAt   time.Time // optional; now if zero
+	// Button is what a reply button the person pressed stands for, when the channel can tell (the web
+	// chat's Yes and No under a suggestion say which suggestion). It is "" for typed words. It isn't
+	// stored: the message's text says what was pressed.
+	Button string
 }
 
 // File is a file sent with a message.

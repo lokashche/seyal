@@ -229,7 +229,8 @@ func TestAIUnusableAnswerFallsBack(t *testing.T) {
 }
 
 // TestAIReadingNeverApproves: approving needs the person's own words; the model's reading of
-// "looks fine to me" is not enough.
+// "looks fine to me" is not enough. A move the model reads is only suggested, and runs when the person
+// says yes (D74, which changes D41: before, "submit" read by the model ran at once).
 func TestAIReadingNeverApproves(t *testing.T) {
 	o := newOffice(t)
 	o.withFake(map[string]string{
@@ -241,11 +242,20 @@ func TestAIReadingNeverApproves(t *testing.T) {
 	})
 	job := o.begin("Acme monthly books, 12000, pass, for books").Item.ID
 
-	o.says(o.write(job, o.sam, "ok send it for approval"), "Noted. Waiting for: sales, ops") // submit needs no reason: allowed
-	r := o.write(job, o.olga, "looks fine to me")
+	r := o.write(job, o.sam, "ok send it for approval")
+	o.says(r, `Do "submit" on J-2026-0001?`)
+	if r.Item.State != "draft" {
+		t.Fatalf("the model's reading moved the job to %s before yes", r.Item.State)
+	}
+	o.says(o.write(job, o.sam, "yes"), "Noted. Waiting for: sales, ops")
+	if n := o.count(`SELECT count(*) FROM ledger WHERE kind = 'item.state_changed' AND actor_kind = 'human'
+		AND actor_person_id = $1 AND body::jsonb->'payload'->'change' ? 'suggestion'`, o.sam); n != 1 {
+		t.Errorf("%d moves by Sam naming the suggestion, want 1", n)
+	}
+	r = o.write(job, o.olga, "looks fine to me")
 	o.says(r, "please type the command itself")
-	r = o.write(job, o.olga, "drop this one")
-	o.says(r, "please type the command itself")
+	r = o.write(job, o.olga, "drop this one") // Olga may not cancel here: said now, nothing suggested
+	o.says(r, "I couldn't cancel it")
 	if r.Item.State != "pending_approval" {
 		t.Fatalf("state = %s", r.Item.State)
 	}
@@ -283,6 +293,35 @@ func TestWhatTheModelSees(t *testing.T) {
 	}
 	if seen[0].Instructions != seen[1].Instructions {
 		t.Error("the instructions changed between two messages; they should stay the same so providers can cache them")
+	}
+
+	// Seyal's replies that name a person (a suggestion, "Only … can confirm this.", "Passed to …") are left
+	// out of what the model reads; people's own words are sent as before (D68, decision 18; D74).
+	job := r.Item.ID
+	if r = o.speak(job, o.sam, "pass to Olga Ops"); !strings.Contains(said(r), "Pass J-2026-0001 to Olga Ops?") ||
+		!strings.Contains(said(r), "Only Test Person can answer this.") {
+		t.Fatalf("a spoken pass: Seyal said %q; want a suggestion naming Olga and Sam", said(r))
+	}
+	q := o.buttons(job, o.sam)
+	if len(q) != 2 {
+		t.Fatalf("Sam's buttons = %+v; want Yes and No", q)
+	}
+	if r = o.press(job, o.mia, q[0]); !strings.Contains(said(r), "Only Test Person can confirm this.") {
+		t.Fatalf("Mia pressing Sam's Yes: Seyal said %q; want only Sam can confirm", said(r))
+	}
+	if r = o.write(job, o.sam, "yes"); !strings.Contains(said(r), "Passed to Olga Ops.") {
+		t.Fatalf("Sam's yes: Seyal said %q; want passed to Olga", said(r))
+	}
+	o.write(job, o.olga, "the client called about it") // read by the model
+	seen = f.Seen()
+	last := seen[len(seen)-1].Input
+	if !strings.Contains(last, "Person: pass to Olga Ops") {
+		t.Errorf("the model didn't see the person's own words (D41):\n%s", last)
+	}
+	for _, line := range strings.Split(last, "\n") {
+		if strings.HasPrefix(line, "Seyal: ") && (strings.Contains(line, "Olga") || strings.Contains(line, "Test Person")) {
+			t.Errorf("the model saw Seyal's reply naming a person: %q", line)
+		}
 	}
 }
 

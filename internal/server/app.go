@@ -428,8 +428,9 @@ func (v *view) item(id string) (*itemView, error) {
 		}
 	}
 	if !iv.Closed {
-		// Seyal's "which one do you mean?" after a typed hand-over wins: only its asker sees the buttons,
-		// and each button sends the whole command again, so every check runs again (D73).
+		// Seyal's Yes and No for a suggestion (D74), or its "which one do you mean?" after a typed hand-over
+		// (D73), wins: only the person asked sees the buttons, and every check runs again when one is
+		// pressed.
 		choose, err := ask.Choosing(v.ctx, v.tx, it, v.c.session.PersonID)
 		if err != nil {
 			return nil, err
@@ -894,6 +895,8 @@ func (s *Server) incoming(w http.ResponseWriter, r *http.Request, c *call) (chan
 		}
 	}
 	in.Text = strings.TrimSpace(strings.ReplaceAll(r.FormValue("text"), "\r\n", "\n")) // browsers send line breaks as CRLF
+	// A reply button under the thread (a suggestion's Yes or No) says which suggestion it answers.
+	in.Button = r.FormValue("button")
 	return in, nil
 }
 

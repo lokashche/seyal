@@ -118,13 +118,6 @@ func TestCheckNew(t *testing.T) {
 	tests := []struct{ name, old, new, want string }{
 		{"a move named take", "action: submit,", "action: take,", `"take" is one of Seyal's own words`},
 		{"a move named pass_on", "action: submit,", "action: pass_on,", `"pass_on" is one of Seyal's own words`},
-		// Until the person field is protected (moving-work design, decision 14), field: in a move's
-		// who would let anyone who may change the details name themselves and take the move.
-		{"who: a person field", "{ action: found, from: [looking], to: with_team, who: [holder] }", "{ action: found, from: [looking], to: with_team, who: [holder, \"field:reviewer\"] }", `who: "field:reviewer" can't be used yet`},
-		// The same for pass_to: the holder (or the starter) could set the field to anyone and the
-		// holder could then pass the item to them as an ordinary pass (D71 review).
-		{"pass_to: a person field", `pass_to: ["role:team"]`, `pass_to: ["role:team", "field:reviewer"]`,
-			`step with_team: pass_to: "field:reviewer" can't be used yet`},
 		{"the approvals step owned by a person field", "  looking: {", "  waiting: { owner: \"field:reviewer\" }\n  looking: {",
 			"step waiting: owner: the approvals step"},
 		{"the approved step owned by a person field", "  looking: {", "  approved: { owner: \"field:reviewer\" }\n  looking: {",
@@ -147,5 +140,27 @@ func TestCheckNew(t *testing.T) {
 				t.Errorf("CheckNew() = %v\nwant a problem mentioning %q", err, tt.want)
 			}
 		})
+	}
+}
+
+// TestPersonFieldsInWhoAndPassTo: "field:<f>" in a move's who or a step's pass_to was refused for new
+// versions until such a field was protected (D69, D71 review). Now only whoever has the item or an admin
+// may change it (D72), and an AI or voice value for it needs a Yes (D74), so a new version may use it.
+func TestPersonFieldsInWhoAndPassTo(t *testing.T) {
+	changed := strings.Replace(whoExample, "{ action: found, from: [looking], to: with_team, who: [holder] }",
+		"{ action: found, from: [looking], to: with_team, who: [holder, \"field:reviewer\"] }", 1)
+	changed = strings.Replace(changed, `pass_to: ["role:team"]`, `pass_to: ["role:team", "field:reviewer"]`, 1)
+	if changed == whoExample {
+		t.Fatal("test setup: the lines to change were not found")
+	}
+	p, err := Parse([]byte(changed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if err := p.CheckNew(); err != nil {
+		t.Errorf("CheckNew() = %v; want field: allowed in who and pass_to", err)
 	}
 }

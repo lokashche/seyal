@@ -77,3 +77,49 @@ func TestTypedHandOversOnScreen(t *testing.T) {
 		t.Errorf("the button's command should pass it to Ben Kumar, and the buttons go:\n%s", page)
 	}
 }
+
+// TestSuggestionOnScreen: a typed hand-over that isn't the whole command becomes a suggestion (D74).
+// The page shows Yes and No only to the person who asked, and each says which suggestion it answers.
+// Someone else's Yes does nothing; the asker's Yes passes it; the same Yes again does nothing.
+func TestSuggestionOnScreen(t *testing.T) {
+	s := newSiteWith(t, "../../examples/playbooks")
+	base := "/t/" + s.slug
+	var err error
+	if s.passwords["ben"], err = setup.NewPassword(context.Background(), s.app, s.mail("ben"), s.tenant); err != nil {
+		t.Fatal(err)
+	}
+	a := s.logIn(arjun)
+	_, home, _ := s.get(a, base+"/")
+	m := regexp.MustCompile(`value="([^"]+)" form="tell-form" data-name="Job evaluation"`).FindStringSubmatch(home)
+	if m == nil {
+		t.Fatalf("Tell Seyal doesn't offer Job evaluation:\n%s", problem(home))
+	}
+	_, _, h := s.post(a, base+"/tell", url.Values{"playbook": {m[1]}, "text": {"Monthly books for Sundaram"}}, nil)
+	job := h.Get("Location")
+	for _, answer := range []string{"sundaram", "monthly bookkeeping", "Books for the year", "pass", "send to ops"} {
+		s.post(a, job+"/say", url.Values{"text": {answer}}, nil)
+	}
+	p, b := s.logIn(priya), s.logIn("ben")
+	s.send(p, job+"/say", url.Values{"text": {"I'll take it"}})
+
+	page := html.UnescapeString(s.send(p, job+"/say", url.Values{"text": {"give to Ben the March file when it comes"}}))
+	button := regexp.MustCompile(`name="button" value="(suggestion:\d+)"><button>Yes, pass it</button>`).FindStringSubmatch(page)
+	if !regexp.MustCompile(`Pass J-\d{4}-\d{4} to Ben\?`).MatchString(page) || button == nil {
+		t.Fatalf("Priya should be asked to confirm, with Yes and No:\n%s", page)
+	}
+	if _, other, _ := s.get(b, job); strings.Contains(other, `name="button"`) {
+		t.Error("Ben sees the buttons of Priya's suggestion")
+	}
+	yes := url.Values{"text": {"yes"}, "button": {button[1]}}
+	if page = html.UnescapeString(s.send(b, job+"/say", yes)); !strings.Contains(page, "Only Priya Raman can confirm this.") ||
+		strings.Contains(page, "passed it to Ben") {
+		t.Errorf("Ben's Yes should do nothing:\n%s", problem(page))
+	}
+	if page = html.UnescapeString(s.send(p, job+"/say", yes)); !strings.Contains(page, "Priya Raman: passed it to Ben") {
+		t.Fatalf("Priya's Yes should pass it to Ben:\n%s", problem(page))
+	}
+	if page = html.UnescapeString(s.send(p, job+"/say", yes)); !strings.Contains(page, "Things changed since; say it again.") {
+		t.Errorf("the same Yes again should do nothing:\n%s", problem(page))
+	}
+	s.tablesMatchLedger(t)
+}
