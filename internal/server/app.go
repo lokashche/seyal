@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -51,6 +52,7 @@ type row struct {
 	Mine                                  bool   // the person (or their team) should act
 	Take                                  string // the holder the card shows (workitem.Item.HolderKey), when it offers "Take it"
 	Quoted                                bool   // Title is the start of the first message (the item has no title yet)
+	New                                   bool   // it came to the person (or their team) since they last saw it (D75, M7)
 }
 
 type tellView struct {
@@ -189,6 +191,7 @@ type view struct {
 	q         url.Values          // the page's query: which folder, process and order My Work shows
 	active    *[]workitem.Member  // active people with a login, once read (see members)
 	lost      map[string][]string // person id → roles they lost, once read (see stranded)
+	opened    string              // the item open on this page: it is being seen now, so its card isn't New
 }
 
 func (s *Server) newView(r *http.Request, tx pgx.Tx, c *call) (*view, error) {
@@ -414,7 +417,7 @@ func (v *view) item(id string) (*itemView, error) {
 	for _, f := range p.Fields {
 		// A person field that says who gets the item or who may take a move is changed only by whoever
 		// has the item or an admin; the one for this step hands the item over (D68, choice 14).
-		open := changeable && (!power[f.Key] || (iv.Hand != nil && iv.Hand.CanPass))
+		open := changeable && !engine.Fixed(p, it.Engine(), f.Key) && (!power[f.Key] || (iv.Hand != nil && iv.Hand.CanPass))
 		fv, err := v.field(f, it.Fields[f.Key], open)
 		if err != nil {
 			return nil, err
@@ -572,6 +575,7 @@ func (s *Server) show(w http.ResponseWriter, r *http.Request, c *call, itemID st
 		if err != nil {
 			return err
 		}
+		v.opened = itemID
 		if sc.Work, err = v.myWork(); err != nil {
 			return err
 		}
@@ -614,6 +618,40 @@ func (s *Server) show(w http.ResponseWriter, r *http.Request, c *call, itemID st
 	p := c.page(sc)
 	p.Error, p.Notice = problem, notice
 	s.render(w, r, status, "app", p)
+	if sc.Item != nil {
+		// After the page is built, so a failed write never breaks it.
+		s.markSeen(r, c, itemID, sc.Item.Item.Arrived())
+	}
+}
+
+// markSeen records, in a small transaction of its own, that the person saw the item: they opened it or
+// did something to it (D75, M7). arrived is the item's Arrived() as the page (or the change) read it,
+// not the clock: a hand-over that commits while the page is being built has a time from before the
+// page's, and the person hasn't seen it yet, so it must stay New. "" (an old item with neither time)
+// writes nothing. It runs after the page or the change is done, takes no ledger lock and writes nothing
+// to the ledger; if it fails, it is only logged, and the card may stay New.
+func (s *Server) markSeen(r *http.Request, c *call, itemID, arrived string) {
+	if arrived == "" {
+		return
+	}
+	at, err := time.Parse(workitem.HeldSinceLayout, arrived)
+	if err == nil {
+		err = db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
+			return workitem.MarkSeen(r.Context(), tx, c.session.PersonID, itemID, at)
+		})
+	}
+	if err != nil {
+		slog.Warn("could not mark an item seen", "path", r.URL.Path, "error", err)
+	}
+}
+
+// arrivedNow reads, at the end of a change's own transaction, when the item last came to its holder
+// (its Arrived()), for done to mark it seen. Changes take the ledger lock, so no other hand-over can
+// slip in between the change and this read.
+func arrivedNow(ctx context.Context, tx pgx.Tx, id string, arrived *string) error {
+	it, err := workitem.Get(ctx, tx, id)
+	*arrived = it.Arrived()
+	return err
 }
 
 // tell starts work from Tell Seyal. With one process, or one the person picked, it starts at once.
@@ -859,11 +897,14 @@ func (s *Server) say(w http.ResponseWriter, r *http.Request, c *call) {
 		s.showScreen(w, r, c, id, http.StatusUnprocessableEntity, capital(err.Error())+".")
 		return
 	}
+	var arrived string
 	err = db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
-		_, err := ask.Converse(r.Context(), tx, s.env(), id, in)
-		return err
+		if _, err := ask.Converse(r.Context(), tx, s.env(), id, in); err != nil {
+			return err
+		}
+		return arrivedNow(r.Context(), tx, id, &arrived)
 	})
-	s.done(w, r, c, id, err)
+	s.done(w, r, c, id, arrived, err)
 }
 
 // env is what the chat needs besides the database.
@@ -953,19 +994,24 @@ func voiceRefused(w http.ResponseWriter, err error) {
 
 func (s *Server) act(w http.ResponseWriter, r *http.Request, c *call) {
 	id := r.PathValue("id")
+	var arrived string
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		_, err := workitem.Act(r.Context(), tx, id, r.PostFormValue("action"), strings.TrimSpace(r.PostFormValue("reason")),
 			ledger.PersonActor(c.session.PersonID))
 		if err != nil {
 			return err
 		}
-		return ask.Nudge(r.Context(), tx, s.env(), id)
+		if err := ask.Nudge(r.Context(), tx, s.env(), id); err != nil {
+			return err
+		}
+		return arrivedNow(r.Context(), tx, id, &arrived)
 	})
-	s.done(w, r, c, id, err)
+	s.done(w, r, c, id, arrived, err)
 }
 
 func (s *Server) decide(w http.ResponseWriter, r *http.Request, c *call) {
 	id := r.PathValue("id")
+	var arrived string
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		seen, _ := strconv.Atoi(r.PostFormValue("version")) // the version the page showed
 		_, err := workitem.DecideSeen(r.Context(), tx, id, seen, c.session.PersonID, r.PostFormValue("slot"),
@@ -973,17 +1019,22 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, c *call) {
 		if err != nil {
 			return err
 		}
-		return ask.Nudge(r.Context(), tx, s.env(), id)
+		if err := ask.Nudge(r.Context(), tx, s.env(), id); err != nil {
+			return err
+		}
+		return arrivedNow(r.Context(), tx, id, &arrived)
 	})
-	s.done(w, r, c, id, err)
+	s.done(w, r, c, id, arrived, err)
 }
 
-// done sends the person back to the item after a change, or shows what was wrong.
-func (s *Server) done(w http.ResponseWriter, r *http.Request, c *call, id string, err error) {
+// done sends the person back to the item after a change, or shows what was wrong. arrived is the item's
+// Arrived() as the change left it (see markSeen and arrivedNow).
+func (s *Server) done(w http.ResponseWriter, r *http.Request, c *call, id, arrived string, err error) {
 	if err != nil {
 		s.problem(w, r, c, id, err)
 		return
 	}
+	s.markSeen(r, c, id, arrived) // doing something to an item is seeing it, e.g. Take it on a card
 	http.Redirect(w, r, "/t/"+c.tenant.Slug+"/items/"+id, http.StatusSeeOther)
 }
 

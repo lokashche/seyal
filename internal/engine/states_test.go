@@ -136,6 +136,35 @@ func TestCheckSet(t *testing.T) {
 	}
 }
 
+// TestPeriodFieldByHand: the schedule's period field is fixed on an item the schedule started (it
+// filled it), but people may fill it in on one started by hand, though the sample marks it readonly
+// (D80). Seyal may always fill it. Other readonly fields stay fixed either way.
+func TestPeriodFieldByHand(t *testing.T) {
+	p, err := playbook.LoadFile("../../examples/playbooks/monthly-return.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Fields = append(p.Fields, playbook.Field{Key: "filed_on", Type: "date", Readonly: true})
+	byHand, scheduled := Item{State: "prepare"}, Item{State: "prepare", Scheduled: true}
+	if err := CheckSet(p, byHand, "period", "Nov 2026"); err != nil {
+		t.Errorf("a person filling the period of an item started by hand: %v", err)
+	}
+	if err := CheckSet(p, scheduled, "period", "Oct 2026"); err == nil {
+		t.Error("a person changed the period the schedule filled in")
+	}
+	if err := CheckFill(p, scheduled, "period", "Nov 2026"); err != nil {
+		t.Errorf("Seyal filling the period of a scheduled item: %v", err)
+	}
+	for _, it := range []Item{byHand, scheduled} {
+		if !Fixed(p, it, "filed_on") || CheckSet(p, it, "filed_on", "2026-12-01") == nil {
+			t.Errorf("another readonly field is open to people (scheduled %v)", it.Scheduled)
+		}
+	}
+	if Fixed(p, byHand, "client") || Fixed(p, scheduled, "client") {
+		t.Error("an ordinary field is fixed")
+	}
+}
+
 // TestSteps: each step asks its own fields and needs its own; a conditional move is taken only when
 // its condition is true, otherwise the default; owners are read from the step.
 func TestSteps(t *testing.T) {

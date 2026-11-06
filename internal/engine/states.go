@@ -24,6 +24,9 @@ type Item struct {
 	// Escalated means Seyal's escalation was the latest hand-over (D75, M6): the item waited too long in
 	// its step and was handed on, for example to the Owner team. See IsHolder.
 	Escalated bool
+	// Scheduled means the process's schedule started it (D75, R), so the schedule filled its period
+	// field. See Fixed.
+	Scheduled bool
 }
 
 var (
@@ -192,7 +195,7 @@ func checkSet(p *playbook.Playbook, it Item, key string, v any, auto bool) error
 	switch {
 	case i < 0:
 		return fmt.Errorf("engine: unknown field %q", key)
-	case p.Fields[i].Readonly && !auto:
+	case Fixed(p, it, key) && !auto:
 		return fmt.Errorf("%s is filled in automatically and can't be changed", key)
 	case IsClosed(p, it.State):
 		return fmt.Errorf("set %s: %w", key, ErrClosed)
@@ -200,6 +203,18 @@ func checkSet(p *playbook.Playbook, it Item, key string, v any, auto bool) error
 		return nil
 	}
 	return CheckValue(p.Fields[i], v)
+}
+
+// Fixed reports whether people may not change field key on the item: it is filled in automatically
+// (readonly). The schedule's period field is the one exception (D80): on an item the schedule started
+// it is always fixed, because the schedule filled it; on an item someone started by hand nobody filled
+// it, so people fill it in like any other field, whatever its readonly says.
+func Fixed(p *playbook.Playbook, it Item, key string) bool {
+	if s := p.Schedule; s != nil && s.PeriodField == key {
+		return it.Scheduled
+	}
+	i := slices.IndexFunc(p.Fields, func(f playbook.Field) bool { return f.Key == key })
+	return i >= 0 && p.Fields[i].Readonly
 }
 
 // CheckValue checks that v fits field f's type. Values are as decoded from JSON.

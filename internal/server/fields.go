@@ -22,11 +22,11 @@ import (
 	"seyal/internal/workitem"
 )
 
-// field prepares one row of the side panel: the value people read, and the input to change it.
+// field prepares one row of the side panel: the value people read, and the input to change it. open
+// says whether the person may change it now (it isn't closed, fixed or theirs to leave alone).
 func (v *view) field(f playbook.Field, value any, open bool) (fieldView, error) {
 	shown := v.show(f, value)
-	fv := fieldView{Key: f.Key, Label: ask.Label(f), Value: shown,
-		Editable: open && !f.Readonly, Input: "text"}
+	fv := fieldView{Key: f.Key, Label: ask.Label(f), Value: shown, Editable: open, Input: "text"}
 	if !fv.Editable {
 		return fv, nil
 	}
@@ -144,6 +144,7 @@ func (s *Server) setField(w http.ResponseWriter, r *http.Request, c *call) {
 			values = append(values, v)
 		}
 	}
+	var arrived string
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		it, err := workitem.Get(r.Context(), tx, id)
 		if err != nil {
@@ -178,7 +179,10 @@ func (s *Server) setField(w http.ResponseWriter, r *http.Request, c *call) {
 		if _, err = workitem.SetFields(r.Context(), tx, id, engine.Fields{key: value}, ledger.PersonActor(c.session.PersonID)); err != nil {
 			return err
 		}
-		return ask.Nudge(r.Context(), tx, s.env(), id)
+		if err := ask.Nudge(r.Context(), tx, s.env(), id); err != nil {
+			return err
+		}
+		return arrivedNow(r.Context(), tx, id, &arrived)
 	})
-	s.done(w, r, c, id, err)
+	s.done(w, r, c, id, arrived, err)
 }

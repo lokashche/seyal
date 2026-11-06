@@ -289,8 +289,9 @@ func TestScheduleSwitchedOff(t *testing.T) {
 	if n := len(o.returns()); n != 0 {
 		t.Fatalf("a switched-off process started %d items", n)
 	}
-	var before time.Time
-	o.do(func(tx pgx.Tx) error { return tx.QueryRow(o.ctx, "SELECT now()").Scan(&before) })
+	// "before" comes from the app's clock, like the ledger's occurred_at that Since is read from; the
+	// database's now() may run a little behind it (Docker on Windows, for example), which made this flaky.
+	before := time.Now().UTC().Truncate(time.Microsecond)
 	o.do(func(tx pgx.Tx) error { return playbook.SetActive(o.ctx, tx, "monthly-return", true, o.by("chitra")) })
 	var p start.Plan
 	o.do(func(tx pgx.Tx) error {
@@ -305,7 +306,7 @@ func TestScheduleSwitchedOff(t *testing.T) {
 	// Switched off, then a new version with the same runs chosen: that switches it on again too, so it
 	// also counts from that moment (playbook.Use writes only playbook.used).
 	o.do(func(tx pgx.Tx) error { return playbook.SetActive(o.ctx, tx, "monthly-return", false, o.by("chitra")) })
-	o.do(func(tx pgx.Tx) error { return tx.QueryRow(o.ctx, "SELECT now()").Scan(&before) })
+	before = time.Now().UTC().Truncate(time.Microsecond)
 	o.useVersion("0.2", "A return filed every month", "A return filed each month")
 	o.do(func(tx pgx.Tx) error {
 		var err error

@@ -23,7 +23,7 @@
       {{range .Data.Work.Rows}}
       <div class="work-card">
       <a class="item{{if .Mine}} mine{{end}}{{if .Take}} takeable{{end}}" href="/t/{{$.Slug}}/items/{{.ID}}{{$.Data.Work.Query}}"{{if eq .ID $.Data.Current}} aria-current="true"{{end}}>
-        <span class="top"><span class="t{{if .Quoted}} q{{end}}">{{if .Quoted}}“{{.Title}}”{{else}}{{or .Title "Untitled"}}{{end}}</span><span class="ago">{{.Ago}}</span></span>
+        <span class="top">{{if .New}}<span class="new">New</span>{{end}}<span class="t{{if .Quoted}} q{{end}}">{{if .Quoted}}“{{.Title}}”{{else}}{{or .Title "Untitled"}}{{end}}</span><span class="ago">{{.Ago}}</span></span>
         {{if .Mine}}{{with .Hint}}<span class="hint">{{.}}</span>{{end}}{{else}}<span class="hint">{{or .Hint .Preview}}</span>{{end}}
         {{if and .Mine .Preview}}<span class="preview">{{.Preview}}</span>{{end}}
         <span class="meta"><span class="id">{{.Number}}{{with .Kind}} · {{.}}{{end}}</span><span class="pill {{.Pill}}">{{.Status}}</span>{{if .Owner}}<span class="avatar sm" title="With {{.OwnerName}}">{{.Owner}}</span>{{end}}</span>

@@ -112,6 +112,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .item .top { display: flex; gap: 10px; align-items: baseline; }
 .item .t { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 600; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item .t.q { font-weight: 500; }
+.item .new { flex: none; align-self: center; font-size: 10.5px; font-weight: 600; line-height: 1; padding: 3px 6px; border-radius: 5px; background: var(--accent-ink); color: var(--panel); }
 .item .ago { font-size: 11.5px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .item .hint, .item .preview { display: block; font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item.mine .hint { color: var(--accent-ink); }

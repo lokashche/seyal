@@ -112,9 +112,10 @@ func (s *Server) pass(w http.ResponseWriter, r *http.Request, c *call) {
 		return
 	}
 	var notice string
+	var it workitem.Item
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		var err error
-		_, notice, err = workitem.Pass(r.Context(), tx, id, to, ledger.PersonActor(c.session.PersonID))
+		it, notice, err = workitem.Pass(r.Context(), tx, id, to, ledger.PersonActor(c.session.PersonID))
 		return err
 	})
 	switch {
@@ -123,7 +124,7 @@ func (s *Server) pass(w http.ResponseWriter, r *http.Request, c *call) {
 	case notice != "":
 		s.show(w, r, c, id, http.StatusOK, "", notice)
 	default:
-		s.done(w, r, c, id, nil)
+		s.done(w, r, c, id, it.Arrived(), nil)
 	}
 }
 
@@ -131,9 +132,11 @@ func (s *Server) pass(w http.ResponseWriter, r *http.Request, c *call) {
 // the page showed.
 func (s *Server) take(w http.ResponseWriter, r *http.Request, c *call) {
 	id := r.PathValue("id")
+	var it workitem.Item
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
-		_, err := workitem.Take(r.Context(), tx, id, r.PostFormValue("holder"), via(r), ledger.PersonActor(c.session.PersonID))
+		var err error
+		it, err = workitem.Take(r.Context(), tx, id, r.PostFormValue("holder"), via(r), ledger.PersonActor(c.session.PersonID))
 		return err
 	})
-	s.done(w, r, c, id, err)
+	s.done(w, r, c, id, it.Arrived(), err)
 }

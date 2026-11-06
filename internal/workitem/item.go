@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 	_ "time/tzdata" // time zone data built in, so tenant time zones work on any server
+	"unicode"
 
 	"github.com/jackc/pgx/v5"
 
@@ -281,8 +282,16 @@ func (s session) refresh(it *Item) error {
 	it.FieldsHash = hash
 	it.DueOn = s.due(it.Fields)
 	it.Title, err = s.render(s.p.Title, it.Fields)
+	it.Title = tidyTitle(it.Title)
 	return err
 }
+
+// tidyTitle drops the separators a title pattern leaves at either end while a field in it is still
+// empty (D80): "{name} — {period}" with no period yet is "Acme Traders", not "Acme Traders —".
+func tidyTitle(title string) string { return strings.TrimFunc(title, isSeparator) }
+
+// isSeparator reports whether r is a space or a mark that only separates the parts of a title.
+func isSeparator(r rune) bool { return unicode.IsSpace(r) || strings.ContainsRune("—–-·:,;/|", r) }
 
 // due returns the earliest date among the playbook's deadline fields, or "".
 func (s session) due(fields engine.Fields) string {
@@ -392,7 +401,8 @@ func (s session) engineItem(it Item) engine.Item { return it.Engine() }
 // Engine is the part of the item the engine's rules need: its state, fields and who has it.
 func (it Item) Engine() engine.Item {
 	return engine.Item{State: it.State, Version: it.Version, Fields: it.Fields,
-		Assignee: it.AssigneeID, Team: it.Team, Starter: it.CreatedBy, Escalated: it.EscalatedTo()}
+		Assignee: it.AssigneeID, Team: it.Team, Starter: it.CreatedBy, Escalated: it.EscalatedTo(),
+		Scheduled: it.StartedVia == "schedule"}
 }
 
 // EscalatedTo reports whether Seyal's escalation was the item's latest hand-over (D75, M6): it was

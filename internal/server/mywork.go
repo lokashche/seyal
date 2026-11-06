@@ -67,6 +67,10 @@ func (v *view) myWork() (*myWork, error) {
 	if err != nil {
 		return nil, err
 	}
+	seen, err := workitem.SeenBy(v.ctx, v.tx, v.c.session.PersonID)
+	if err != nil {
+		return nil, err
+	}
 	type placed struct {
 		r      row
 		bucket int
@@ -97,6 +101,9 @@ func (v *view) myWork() (*myWork, error) {
 		if take {
 			r.Take = it.HolderKey()
 		}
+		// New: a card for the person (one of their own folders) that came to them, or their team, since
+		// they last saw it (D75, M7). A reminder doesn't change hands, so it never makes a card New.
+		r.New = r.Mine && it.ID != v.opened && workitem.IsNew(it, v.c.session.PersonID, seen[it.ID])
 		if it.AssigneeID != "" || it.Team != "" {
 			r.Owner = initials(r.OwnerName)
 		}

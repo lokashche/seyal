@@ -298,8 +298,11 @@ func (s *Server) processView(u playbook.InUse, lib *playbook.Library) *processVi
 	pv.States = strings.Join(states, " · ") + " (starts as " + human(p.Initial) + ")"
 
 	for _, f := range p.Fields {
+		// As on an item someone starts by hand: the schedule's period field is fixed only on items the
+		// schedule started (D80), and the schedule line already says it fills it.
+		fixed := engine.Fixed(p, engine.Item{}, f.Key)
 		pv.Fields = append(pv.Fields, processField{Label: ask.Label(f), Type: d.kind(f), Ask: f.Ask,
-			Required: f.Required, Fixed: f.Readonly})
+			Required: f.Required, Fixed: fixed})
 	}
 	for _, t := range p.Transitions {
 		from := make([]string, len(t.From))
