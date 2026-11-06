@@ -14,6 +14,7 @@ import (
 
 	"seyal/internal/auth"
 	"seyal/internal/db"
+	"seyal/internal/notify"
 	"seyal/internal/push"
 )
 
@@ -28,6 +29,10 @@ import (
 type pushView struct {
 	Key     string      // the server's public push key, for the browser; "" means phone notes are off on this server
 	Devices []deviceRow // the login's browsers with phone notes on
+	// Here is "" when this business allows phone notes; "file" when its set-up file has them off
+	// (notifications: off, the default), "paused" when an admin paused them (D89). A device serves every
+	// business of the login, so Turn on still shows: other businesses may send to it.
+	Here string
 }
 
 type deviceRow struct {
@@ -38,6 +43,16 @@ type deviceRow struct {
 // switches to the login's scope and back).
 func (s *Server) pushViewFor(r *http.Request, tx pgx.Tx, c *call) (pushView, error) {
 	pv := pushView{Key: s.pushKey}
+	ns, err := notify.LoadSettings(r.Context(), tx)
+	if err != nil {
+		return pv, err
+	}
+	switch {
+	case !ns.On:
+		pv.Here = "file"
+	case ns.Paused():
+		pv.Here = "paused"
+	}
 	devices, err := auth.Devices(r.Context(), tx, c.session.AccountID)
 	if err != nil {
 		return pv, err

@@ -224,6 +224,51 @@ func TestImportDemoBusiness(t *testing.T) {
 		}
 	})
 
+	t.Run("the phone-note switch and hours are recorded", func(t *testing.T) {
+		in(func(tx pgx.Tx) error {
+			var on bool
+			var from, until string
+			if err := tx.QueryRow(ctx, `SELECT notifications, notify_from, notify_until FROM tenants WHERE id = current_tenant()`).
+				Scan(&on, &from, &until); err != nil {
+				return err
+			}
+			if !on || from != "09:00" || until != "19:00" {
+				t.Errorf("the demo file stored notifications %v, hours %s-%s; want on, 09:00-19:00", on, from, until)
+			}
+			return nil
+		})
+		f.Business.Notifications, f.Business.NotifyHours = "", "08:30-24:00"
+		again, err := setup.Import(ctx, owner, app, f)
+		if err != nil || again.Changes != 1 {
+			t.Fatalf("import with phone notes left out = %+v, %v; want exactly 1 change", again, err)
+		}
+		in(func(tx pgx.Tx) error {
+			var on bool
+			var from, until, change string
+			if err := tx.QueryRow(ctx, `SELECT notifications, notify_from, notify_until FROM tenants WHERE id = current_tenant()`).
+				Scan(&on, &from, &until); err != nil {
+				return err
+			}
+			if on || from != "08:30" || until != "24:00" {
+				t.Errorf("stored notifications %v, hours %s-%s; want off (left out), 08:30-24:00", on, from, until)
+			}
+			if err := tx.QueryRow(ctx, `SELECT body::jsonb #>> '{payload,changes}' FROM ledger
+				WHERE kind = 'business.updated' AND subject_id::text = current_tenant()::text ORDER BY seq DESC LIMIT 1`).Scan(&change); err != nil {
+				return err
+			}
+			for _, want := range []string{`"notifications": {"new": "off", "old": "on"}`, `"notify_hours": {"new": "08:30-24:00", "old": "09:00-19:00"}`} {
+				if !strings.Contains(change, want) {
+					t.Errorf("business.updated changes = %s; want %s", change, want)
+				}
+			}
+			return nil
+		})
+		f.Business.Notifications, f.Business.NotifyHours = "on", ""
+		if _, err := setup.Import(ctx, owner, app, f); err != nil {
+			t.Fatal(err)
+		}
+	})
+
 	// A writer holds the ledger head and is about to add its event, whose tenant check locks the
 	// business's row (as a foreign key check does). An import at that moment waits for the writer,
 	// instead of locking that row first and waiting in a circle (a deadlock).

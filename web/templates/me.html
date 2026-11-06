@@ -31,6 +31,8 @@
     {{if not .Key}}
     <p class="why">Phone notes aren't switched on for this Seyal server yet. My Work still shows everything.</p>
     {{else}}
+    {{if eq .Here "file"}}<p class="why">Phone notes are off for {{$.Business}}: its set-up file doesn't turn them on. You get none about its work; My Work still shows everything.</p>
+    {{else if eq .Here "paused"}}<p class="why">Phone notes for {{$.Business}} are paused by an admin. You get none about its work until they are resumed; My Work still shows everything.</p>{{end}}
     <p class="why" data-push-state="checking">Checking this phone…</p>
     <div data-push-state="off" hidden>
       <p>Seyal can tell this phone when work comes to you. The lock screen shows only the item number and who sent it, never the item's title or a hand-over note.</p>

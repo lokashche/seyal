@@ -369,6 +369,13 @@ func Approvals(ctx context.Context, tx pgx.Tx, id string) (engine.ApprovalStatus
 	return s.status(it)
 }
 
+// StatusOf returns the approval status of it (an item or a ledger snapshot of one) under p, its own
+// process version, with every decision ever made on the item: only those for it's version and fields
+// count. The phone-note reader uses it outside a web request. tx must come from db.WithTenant.
+func StatusOf(ctx context.Context, tx pgx.Tx, p *playbook.Playbook, it Item) (engine.ApprovalStatus, error) {
+	return session{ctx: ctx, tx: tx, p: p}.status(it)
+}
+
 // Link connects two items. kind is "parent" (from = parent, to = child) or "started_by"
 // (from = the new item, to = the item that started it). tx must come from db.WithTenant.
 func Link(ctx context.Context, tx pgx.Tx, fromID, toID, kind string, by ledger.Actor) error {

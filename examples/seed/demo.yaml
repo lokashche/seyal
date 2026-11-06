@@ -14,6 +14,12 @@ business:
   # Days the office is closed. Seyal counts working days without them, before it reminds or hands work
   # on (D75). Left out: every day is a working day. "holidays: [2026-11-09]" lists dates it is closed.
   days_off: [sunday]
+  # Phone notes (D85, D89): the demo business allows them; each person still turns them on for their
+  # own phone on Me, and nothing is sent unless the server has SEYAL_PUSH=on. A real business leaves
+  # this out (off) until it chooses. Outside notify_hours, and on days off, phone notes wait for the
+  # next working morning.
+  notifications: on
+  notify_hours: "09:00-19:00"
 
 # The processes this business uses: sample templates by id, or your own files ("my-process.yaml",
 # relative to this file). The lists they need (clients, work types) come with them. Use "lists:" to

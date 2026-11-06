@@ -34,6 +34,12 @@ func (c Calendar) WorkingDays(from, to time.Time) int {
 	return n
 }
 
+// IsWorkingDay reports whether t's date, read in the calendar's time zone, is a working day: not a
+// weekly day off, not a holiday. Phone notes wait for one (D89).
+func (c Calendar) IsWorkingDay(t time.Time) bool {
+	return working(c.date(t), c.DaysOff, c.Holidays)
+}
+
 // HolidaysIn lists the holiday dates after from's date, up to and including to's date: the ones a
 // count left out, for the ledger.
 func (c Calendar) HolidaysIn(from, to time.Time) []string {

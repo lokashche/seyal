@@ -24,6 +24,7 @@ import (
 	"seyal/internal/config"
 	"seyal/internal/db"
 	"seyal/internal/media"
+	"seyal/internal/notify"
 	"seyal/internal/playbook"
 	"seyal/internal/server"
 )
@@ -123,10 +124,7 @@ func runServe(out io.Writer) error {
 	// The chaser runs next to the web server and stops with it: on Ctrl+C it starts nothing new, and
 	// serve waits for it within the same 10 seconds it gives the requests in progress.
 	var chasing sync.WaitGroup
-	if every > 0 {
-		c := chase.New(app, log.New(out, "", log.LstdFlags))
-		chasing.Go(func() { c.Run(ctx, every, chase.FirstWait) })
-	}
+	loops(ctx, &chasing, app, out, every, pushPublic != "")
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
@@ -135,7 +133,7 @@ func runServe(out io.Writer) error {
 		defer cancel()
 		hs.Shutdown(shutdown)
 		if !waitFor(shutdown, &chasing) {
-			fmt.Fprintln(out, "The chaser didn't stop in time; the database undoes its unfinished change.")
+			fmt.Fprintln(out, "The chaser or the phone-note reader didn't stop in time; the database undoes its unfinished change.")
 		}
 	}()
 
@@ -145,7 +143,7 @@ func runServe(out io.Writer) error {
 	if pushPublic == "" {
 		fmt.Fprintln(out, "  Phone notes are off (SEYAL_PUSH).")
 	} else {
-		fmt.Fprintln(out, "  Phone notes can be turned on, on Me (SEYAL_PUSH=on). None are sent yet.")
+		fmt.Fprintln(out, "  Phone notes can be turned on, on Me (SEYAL_PUSH=on). Seyal works out who gets one each minute, but sends none yet.")
 	}
 	if err := hs.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		stop() // the chaser stops too, before the database is closed
@@ -155,6 +153,23 @@ func runServe(out io.Writer) error {
 	<-stopped // ListenAndServe returns as soon as Shutdown starts: wait for the requests and the chaser
 	fmt.Fprintln(out, "Stopped.")
 	return nil
+}
+
+// loops starts what runs next to the web server until ctx ends, each counted in wg: the chaser,
+// unless every is 0 (SEYAL_CHASE_EVERY=off), and always the phone-note reader (D89). The reader is
+// its own loop, not a chaser task, so it runs with the chaser off too; with push off (SEYAL_PUSH) it
+// only moves each business's bookmark on, so switching phone notes on later never tells anyone about
+// old work. It returns what it started.
+func loops(ctx context.Context, wg *sync.WaitGroup, app db.Beginner, out io.Writer, every time.Duration, push bool) []string {
+	var started []string
+	if every > 0 {
+		c := chase.New(app, log.New(out, "", log.LstdFlags))
+		wg.Go(func() { c.Run(ctx, every, chase.FirstWait) })
+		started = append(started, "chaser")
+	}
+	reader := notify.New(app, log.New(out, "", log.LstdFlags), push)
+	wg.Go(func() { reader.Run(ctx, notify.Every) })
+	return append(started, "phone-note reader")
 }
 
 // waitFor waits for wg until ctx ends, and reports whether wg finished in time.

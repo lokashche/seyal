@@ -91,6 +91,9 @@ func TestCheckFindsMistakes(t *testing.T) {
 		{"bad holiday", "days_off: [sunday]", "days_off: [sunday]\n  holidays: [2026-02-30]", `holidays: "2026-02-30" is not a date`},
 		{"a holiday twice", "days_off: [sunday]", "days_off: [sunday]\n  holidays: [2026-11-09, 2026-11-09]", "holidays: 2026-11-09 is listed twice"},
 		{"bad chase line", "days_off: [sunday]", "days_off: [sunday]\n  chase: stop", `chase "stop": write "chase: paused"`},
+		{"bad phone-note switch", "notifications: on", "notifications: yes please", `notifications "yes please": write "notifications: on"`},
+		{"phone-note hours the wrong way round", `notify_hours: "09:00-19:00"`, `notify_hours: "19:00-09:00"`, "the start must be before the end"},
+		{"phone-note hours not times", `notify_hours: "09:00-19:00"`, `notify_hours: "9-7"`, "write it as 09:00-19:00"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

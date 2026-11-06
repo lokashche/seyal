@@ -18,6 +18,7 @@ import (
 	"seyal/internal/db"
 	"seyal/internal/engine"
 	"seyal/internal/ledger"
+	"seyal/internal/notify"
 	"seyal/internal/playbook"
 	"seyal/internal/start"
 )
@@ -31,6 +32,19 @@ type processList struct {
 	Templates []processRow // shipped templates the business doesn't have yet
 	DraftOn   bool         // AI drafting is switched on
 	Gap       *addGap      // a template that can't be added until the business's lists get its details
+	Leaves    leavesView   // "Leaves Seyal": what goes outside, with a fast stop (design 2.4)
+}
+
+// leavesView is the "Leaves Seyal" part at the bottom of Settings → Processes (D89): for now, phone
+// notes for this business, with the admin's Pause and Resume. Pausing needs no restart and no new
+// set-up file; it is a business.updated ledger event by the admin.
+type leavesView struct {
+	Server   bool   // the server has phone notes switched on (SEYAL_PUSH=on)
+	File     bool   // the set-up file turns them on (notifications: on)
+	Hours    string // its working hours for them, "09:00-19:00"
+	Paused   bool
+	PausedBy string // the admin's name
+	PausedAt string // "at 11:02", or "on 5 Nov at 11:02"
 }
 
 // addGap is the advice when a template needs details the business's lists don't have (D75, R), for
@@ -117,7 +131,8 @@ func (s *Server) showProcessesWith(w http.ResponseWriter, r *http.Request, c *ca
 		if id == "" {
 			sv.Processes = s.processList(inUse)
 			sv.Processes.Gap = gap
-			return nil
+			sv.Processes.Leaves, err = s.leavesFor(r, tx, c)
+			return err
 		}
 		i := slices.IndexFunc(inUse, func(u playbook.InUse) bool { return u.PlaybookID == id })
 		if i < 0 {
@@ -726,4 +741,48 @@ func (s *Server) explainListGap(r *http.Request, tx pgx.Tx, t *playbook.Playbook
 	}
 	return fmt.Errorf("version %s needs details your lists don't have yet: %s. Open Settings → Lists → %s and press \"Use the template's definition\", then try again",
 		t.Version, strings.Join(gaps, ", "), strings.Join(lists, ", "))
+}
+
+// leavesFor reads the "Leaves Seyal" part.
+func (s *Server) leavesFor(r *http.Request, tx pgx.Tx, c *call) (leavesView, error) {
+	ns, err := notify.LoadSettings(r.Context(), tx)
+	if err != nil {
+		return leavesView{}, err
+	}
+	lv := leavesView{Server: s.pushKey != "", File: ns.On, Hours: ns.Hours.String(), Paused: ns.Paused()}
+	if lv.Paused {
+		if err := tx.QueryRow(r.Context(), `SELECT display_name FROM persons WHERE tenant_id = current_tenant() AND id::text = $1`,
+			ns.PausedBy).Scan(&lv.PausedBy); err != nil {
+			return lv, err
+		}
+		at := ns.PausedAt.In(c.tenant.Zone)
+		lv.PausedAt = at.Format("at 15:04")
+		if at.Format(time.DateOnly) != time.Now().In(c.tenant.Zone).Format(time.DateOnly) {
+			lv.PausedAt = at.Format("on 2 Jan at 15:04")
+		}
+	}
+	return lv, nil
+}
+
+// pausePhoneNotes is the admin's [Pause] or [Resume] for this business's phone notes (D89). It works
+// at once: the reader looks at the pause before every pass.
+func (s *Server) pausePhoneNotes(w http.ResponseWriter, r *http.Request, c *call) {
+	pause := r.PostFormValue("do") == "pause"
+	if !pause && r.PostFormValue("do") != "resume" {
+		s.showProcesses(w, r, c, "", http.StatusUnprocessableEntity, "", "Please press Pause or Resume.")
+		return
+	}
+	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
+		_, err := notify.Pause(r.Context(), tx, pause, c.session.PersonID)
+		return err
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	notice := "Phone notes for this business are paused. Nobody gets one until you press Resume."
+	if !pause {
+		notice = "Phone notes for this business are on again. What happened while they were paused isn't sent."
+	}
+	s.showProcesses(w, r, c, "", http.StatusOK, notice, "")
 }

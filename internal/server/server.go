@@ -240,6 +240,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /t/{slug}/settings/processes", s.admin(s.addProcess))
 	mux.HandleFunc("GET /t/{slug}/settings/processes/{id}", s.admin(s.processPage))
 	mux.HandleFunc("POST /t/{slug}/settings/processes/{id}", s.admin(s.changeProcess))
+	mux.HandleFunc("POST /t/{slug}/settings/phone-notes", s.admin(s.pausePhoneNotes))
 	mux.HandleFunc("GET /t/{slug}/settings/lists", s.admin(s.listsPage))
 	mux.HandleFunc("POST /t/{slug}/settings/lists", s.admin(s.addList))
 	mux.HandleFunc("GET /t/{slug}/settings/lists/{kind}", s.admin(s.listPage))

@@ -161,6 +161,29 @@
   {{end}}
 </ul>
 {{end}}
+{{with .Leaves}}
+<h3 id="leaves-seyal">Leaves Seyal</h3>
+<p class="why">What Seyal sends outside this app, with a fast stop for each. A pause works at once, with no restart.</p>
+<ul class="rows">
+  <li><div class="row-head"><div>
+    <b>Phone notes</b>
+    {{if not .Server}}<span class="pill p-closed">off on this server</span>
+      <span class="r">This Seyal server doesn't send phone notes (SEYAL_PUSH is off). Nothing leaves Seyal.</span>
+    {{else if not .File}}<span class="pill p-closed">off</span>
+      <span class="r">This business's set-up file doesn't turn them on, so nobody here gets a phone note. To allow them, add notifications: on to the set-up file and import it again.</span>
+    {{else if .Paused}}<span class="pill p-closed">paused</span>
+      <span class="r">Paused by {{.PausedBy}} {{.PausedAt}}. Nobody here gets a phone note; what happens meanwhile isn't sent later.</span>
+    {{else}}<span class="pill p-ok">on</span>
+      <span class="r">The lock screen shows only the item number and who sent it. Working hours {{.Hours}}; at other times and on days off they wait for the morning.</span>
+    {{end}}
+  </div>
+  <form method="post" action="/t/{{$.Slug}}/settings/phone-notes" class="sform inline">
+    {{if .Paused}}<input type="hidden" name="do" value="resume"><button class="btn sm" aria-label="Resume phone notes for this business">Resume</button>
+    {{else}}<input type="hidden" name="do" value="pause"><button class="btn ghost sm" aria-label="Pause phone notes for this business">Pause</button>{{end}}
+  </form>
+  </div></li>
+</ul>
+{{end}}
 {{end}}{{end}}
 
 {{define "process"}}{{with .Data.Process}}
