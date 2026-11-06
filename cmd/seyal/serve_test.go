@@ -41,7 +41,7 @@ func TestLoops(t *testing.T) {
 		5 * time.Minute: {"chaser", "phone-note reader"},
 	} {
 		var wg sync.WaitGroup
-		if got := loops(ctx, &wg, nil, io.Discard, every, false); !slices.Equal(got, want) {
+		if got := loops(ctx, &wg, nil, io.Discard, every, newReader(nil, io.Discard, nil)); !slices.Equal(got, want) {
 			t.Errorf("with the chaser every %s: started %v, want %v", every, got, want)
 		}
 		wg.Wait()

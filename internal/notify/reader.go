@@ -33,13 +33,18 @@ import (
 //  2. Deliver: the notices that are due. Each is dropped if it no longer matters (the person opened
 //     the item since, left, the item is closed, the approval was given, or it waited too long). What
 //     is left becomes one phone note per person (grouped when there are several), within the hourly
-//     cap, and is handed to the Sender while its notices are locked. They are marked sent only when
-//     the Sender took it, in that person's own transaction, so a phone note is never lost, and a
-//     later failure never undoes the mark of one already handed on. Only a crash just after a
-//     hand-over may send that one note twice. Outside working hours Deliver sends nothing: what
-//     waits joins the morning note.
+//     cap, and is posted to the person's devices while its notices are locked (sender.go, part
+//     4a-5). They are marked sent only when a device's push service took it, in that person's own
+//     transaction, so a phone note is never lost, and a later failure never undoes the mark of one
+//     already posted. A note no device took is tried again after 1, 5 and 30 minutes, then given up.
+//     A note may go twice in two cases only: a crash just after a post, or a push service that took
+//     it but answered too late (after 10 seconds), so it counts as not taken. The repeat has the same
+//     tag, so the phone usually shows it in place of the first. Outside working hours Deliver sends
+//     nothing: what waits joins the morning note.
 //
-// Phone notes are not ledger events (D85, decision 4): they only point at events that are.
+// Besides the minute, a web request pokes the reader after a change (Poke), so a daytime hand-over
+// buzzes within seconds. Phone notes are not ledger events (D85, decision 4): they only point at
+// events that are.
 
 const (
 	Every      = time.Minute      // how often the reader runs
@@ -51,14 +56,14 @@ const (
 	maxPages   = 20               // pages per business per pass; the rest wait for the next pass
 	businessIn = 30 * time.Second // for one business's Read, and again for its Deliver
 	personIn   = 20 * time.Second // for one person's phone note: its checks, the hand-over and the mark
-	sendIn     = 10 * time.Second // for handing on one phone note
+	sendIn     = 10 * time.Second // for posting one phone note to all of its devices (at once)
 	markIn     = 5 * time.Second  // kept free after a hand-over, to save its mark
 	logPrefix  = "phone notes"
 )
 
 // Note is one phone note for one person: what the lock screen shows and where a tap goes. It holds
-// no device push address: the sender (part 4a-5) looks those up, locks the note for each device and
-// adds the address the device used to the path.
+// no device push address: Deliver looks those up, and the note is locked for each device on its way
+// (sender.go), with the address the device used put in front of the path.
 type Note struct {
 	Tenant  string // the business's id
 	Person  string // who is told
@@ -70,52 +75,112 @@ type Note struct {
 	Notices []int64 // the notices rows it carries
 }
 
-// Sender hands a phone note on to the person's devices (part 4a-5). Deliver calls it while the note's
-// notices are locked (so another copy of the app can't send them too), with a context of its own that
-// ends after sendIn. It marks them sent only when Send returns nil, in a transaction for that one
-// note. An error leaves them waiting (their tries go up), and the next pass tries again until they are
-// too old (MaxAge), so a phone note is never lost. If saving the mark fails after Send took a note
-// (the server stops, or the database is lost just then), that one note may go twice.
-type Sender interface {
-	Send(ctx context.Context, n Note) error
-}
-
 // Reader reads each business's new ledger events and makes its phone notes. Make one with New.
 type Reader struct {
 	DB  db.Beginner // the app pool: the app role, row-level security on
 	Log *log.Logger
 	// Push is the server's switch (SEYAL_PUSH=on). Off, the reader only moves each bookmark on.
 	Push bool
-	// Out hands phone notes on. nil: notices are made and wait (the sender is part 4a-5).
-	Out  Sender
+	// Out posts phone notes to devices (sender.go): *push.Sender, or a fake in tests. nil: notices
+	// are made and wait.
+	Out  Pusher
 	List func(ctx context.Context) ([]db.Tenant, error) // the businesses; nil: all of them
 	Now  func() time.Time                               // the clock; nil: time.Now (tests use another)
 
 	mu sync.Mutex // one pass at a time
+	// keyWorks holds each push service (pushFamily, for example "googleapis.com") that took a phone
+	// note since the server started: that push service accepts Seyal's key.
+	keyWorks sync.Map
+
+	pokeMu sync.Mutex
+	poked  map[string]bool // the businesses poked since the last poked pass, by id
+	pokes  chan struct{}   // one waiting poke at most: Poke never blocks
 }
 
-// New returns a reader for the app pool that writes its log lines to l. push is SEYAL_PUSH.
-func New(pool db.Beginner, l *log.Logger, push bool) *Reader {
-	return &Reader{DB: pool, Log: l, Push: push}
+// New returns a reader for the app pool that writes its log lines to l. out posts the phone notes;
+// nil means phone notes are off on this server (SEYAL_PUSH), and the reader only moves each
+// business's bookmark on.
+func New(pool db.Beginner, l *log.Logger, out Pusher) *Reader {
+	return &Reader{DB: pool, Log: l, Push: out != nil, Out: out}
 }
 
-// Run runs a pass every `every` until ctx ends. The first pass runs `every` after start.
+// PokeWait is how long the reader waits after a poke before it looks: the changes one person makes
+// in a moment (a hand-over, then a note) go as one phone note, and a burst of pokes is one pass.
+const PokeWait = 2 * time.Second
+
+// Poke asks the reader to read and deliver for one business soon, without waiting for the minute: a
+// web request calls it after a change, so a daytime hand-over buzzes within seconds. It never blocks,
+// and it does nothing while phone notes are off on the server.
+func (r *Reader) Poke(tenantID string) {
+	if r == nil || !r.Push || r.Out == nil {
+		return
+	}
+	r.pokeMu.Lock()
+	if r.poked == nil {
+		r.poked = map[string]bool{}
+	}
+	r.poked[tenantID] = true
+	pokes := r.pokeChan()
+	r.pokeMu.Unlock()
+	select {
+	case pokes <- struct{}{}:
+	default: // a poke already waits: it covers this one too
+	}
+}
+
+// pokeChan returns the poke channel, made on first use. r.pokeMu must be held.
+func (r *Reader) pokeChan() chan struct{} {
+	if r.pokes == nil {
+		r.pokes = make(chan struct{}, 1)
+	}
+	return r.pokes
+}
+
+// Run runs a pass every `every` until ctx ends, and a pass for the poked businesses PokeWait after a
+// poke. The first full pass runs `every` after start.
 func (r *Reader) Run(ctx context.Context, every time.Duration) {
 	tick := time.NewTicker(every)
 	defer tick.Stop()
+	r.pokeMu.Lock()
+	pokes := r.pokeChan()
+	r.pokeMu.Unlock()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
+			r.Pass(ctx)
+		case <-pokes:
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(PokeWait):
+			}
+			r.pass(ctx, r.takePoked())
 		}
-		r.Pass(ctx)
 	}
 }
 
+// takePoked returns, and forgets, the businesses poked so far.
+func (r *Reader) takePoked() map[string]bool {
+	r.pokeMu.Lock()
+	defer r.pokeMu.Unlock()
+	poked := r.poked
+	r.poked = nil
+	if poked == nil {
+		poked = map[string]bool{}
+	}
+	return poked
+}
+
 // Pass looks at every business once: it reads its new events, then delivers what is due. It returns
-// how many notices it made and how many phone notes it handed on.
+// how many notices it made and how many phone notes a device took.
 func (r *Reader) Pass(ctx context.Context) (made, sent int) {
+	return r.pass(ctx, nil)
+}
+
+// pass is Pass for the businesses in only (by id), or for all of them when only is nil.
+func (r *Reader) pass(ctx context.Context, only map[string]bool) (made, sent int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	list, err := r.businesses(ctx)
@@ -126,6 +191,9 @@ func (r *Reader) Pass(ctx context.Context) (made, sent int) {
 	for _, t := range list {
 		if ctx.Err() != nil {
 			break // stopping: start nothing new
+		}
+		if only != nil && !only[t.ID] {
+			continue
 		}
 		m, s, err := r.business(ctx, t)
 		if err != nil && ctx.Err() == nil {
@@ -241,7 +309,7 @@ var interesting = []string{"item.started", "item.assigned", "item.state_changed"
 // Read makes the business's notices from its new ledger events and moves its bookmark on, and
 // returns how many it made. With phone notes off (the server's switch, the set-up file, an admin's
 // pause) it only moves the bookmark to the ledger's end, so switching back on brings no flood. Pass
-// runs it for every business; part 4a-5's poke can run it for one.
+// runs it for every business, a poke for the poked ones.
 func (r *Reader) Read(ctx context.Context, t db.Tenant) (int, error) {
 	now := r.now()
 	made := 0

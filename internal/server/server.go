@@ -76,6 +76,8 @@ type Server struct {
 	pushKey string
 	// turnOnRate and helloRate limit the phone-note routes each login may call (phonenotes.go).
 	turnOnRate, helloRate *limiter
+	// poke tells the phone-note reader a business changed (Config.Poke); nil: nothing is told.
+	poke func(tenantID string)
 }
 
 // RequestLimit is how long the web server gives one request to be read and answered: cmd/seyal sets
@@ -100,6 +102,10 @@ type Config struct {
 	// on (SEYAL_PUSH=on). Empty means they are off: Me offers no Turn on, so no browser asks its
 	// push service for an address.
 	PushKey string
+	// Poke, when set, is called with the business's id after each logged-in POST in a business (a
+	// hand-over, a decision, a new item...): the phone-note reader then looks within seconds instead
+	// of within the minute (D90). It must never block. nil: nothing is poked.
+	Poke func(tenantID string)
 }
 
 // New prepares the web app.
@@ -109,7 +115,8 @@ func New(cfg Config) (*Server, error) {
 		speaking: newSpeechSlots(speechAtOnce, speechPerBusiness), voiceRate: newLimiter(speechPerMinute, time.Minute),
 		audioUsed: newAudioUse(), voiceKey: seal.NewKey(),
 		askRate: newLimiter(questionsPerMinute, time.Minute), limit: cmp.Or(cfg.RequestLimit, RequestLimit),
-		pushKey: cfg.PushKey, turnOnRate: newLimiter(turnOnsPerHour, time.Hour), helloRate: newLimiter(hellosPerMinute, time.Minute)}
+		pushKey: cfg.PushKey, turnOnRate: newLimiter(turnOnsPerHour, time.Hour), helloRate: newLimiter(hellosPerMinute, time.Minute),
+		poke: cfg.Poke}
 	if s.ai == nil {
 		s.ai = &ai.Setup{USDtoINR: 88}
 	}
@@ -386,6 +393,11 @@ func (s *Server) authed(h func(http.ResponseWriter, *http.Request, *call)) http.
 			return
 		}
 		h(w, r, c)
+		// A change may have told someone (a hand-over, a decision): the phone-note reader looks now,
+		// not within the minute. A POST that changed nothing costs the reader one quick look.
+		if r.Method == http.MethodPost && s.poke != nil {
+			s.poke(t.ID)
+		}
 	}
 }
 

@@ -250,6 +250,32 @@ func BusinessDevices(ctx context.Context, tx pgx.Tx) ([]BusinessDevice, error) {
 	})
 }
 
+// DeviceAnswered records what a push service said about a device of personID, a person of the
+// current business (part 4a-5): ok means it took a phone note (last_ok_at), otherwise the push service
+// said the device is gone or no longer accepts Seyal's key, and the device ends ("gone"), so Me shows
+// "Turn on again". The device is changed in its login's own scope (row rule), so only a device of
+// that person's login can change. tx must come from db.WithTenant.
+func DeviceAnswered(ctx context.Context, tx pgx.Tx, personID, deviceID string, ok bool) error {
+	var account *string
+	if err := tx.QueryRow(ctx, `SELECT account_id::text FROM persons WHERE tenant_id = current_tenant() AND id::text = $1`,
+		personID).Scan(&account); err != nil {
+		return fmt.Errorf("auth: the device's login: %w", err)
+	}
+	if account == nil {
+		return nil // the login was unlinked since: its devices no longer serve this person
+	}
+	return asLogin(ctx, tx, *account, func() error {
+		if ok {
+			_, err := tx.Exec(ctx, `UPDATE push_devices SET last_ok_at = now() WHERE id::text = $1 AND ended_at IS NULL`, deviceID)
+			if err != nil {
+				return fmt.Errorf("auth: device answered: %w", err)
+			}
+			return nil
+		}
+		return endDevice(ctx, tx, deviceID, "gone")
+	})
+}
+
 // endDevice ends an open device of the current login with why.
 func endDevice(ctx context.Context, tx pgx.Tx, deviceID, why string) error {
 	if _, err := tx.Exec(ctx, `

@@ -6,10 +6,14 @@ package notify_test
 
 import (
 	"context"
+	"crypto/ecdh"
 	"crypto/rand"
-	"errors"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -26,22 +30,44 @@ import (
 	"seyal/internal/notify"
 	"seyal/internal/people"
 	"seyal/internal/playbook"
+	"seyal/internal/push"
+	"seyal/internal/send"
 	"seyal/internal/setup"
 	"seyal/internal/testdb"
 	"seyal/internal/workitem"
 )
 
-// fakeOut stands in for the sender (part 4a-5): it keeps the phone notes it is handed. Nothing leaves
-// this computer.
+// fakeOut stands in for the push services (it does what *push.Sender does, without locking the note
+// or calling anyone): it keeps the phone notes posted to it, as the phone's service worker would read
+// them, and answers 201 unless a test says otherwise. Nothing leaves this computer.
 type fakeOut struct {
 	mu    sync.Mutex
-	notes []notify.Note
-	fail  int // refuse this many phone notes first, as a push service that is down would
+	notes []note
+	posts int // every post, whatever the answer
+	fail  int // answer this many posts first with "could not connect", as a push service that is down would
 	calls int
 	// before, when set, runs first on each Send, with its number (1, 2, ...): a test's way to make
 	// the sender slow, or to make it break.
 	before func(call int)
+	// answer, when set, gives the reply code (and Retry-After) for each post; nil means 201.
+	answer func(d push.Device) (status int, retryAfter string)
+	// err, when set, is returned instead of an answer (a broken sender).
+	err error
 }
+
+// note is one phone note a device got: who owns the device, and what its service worker reads.
+type note struct {
+	Person   string // the device owner's name
+	Endpoint string
+	Body     string
+	Navigate string
+	Tag      string
+	TTL      time.Duration
+}
+
+// deviceOwner is the name of each test device's owner, by device push address. It is shared by every
+// firm: in TestTwoBusinesses Dev's one login (and device) serves two businesses.
+var deviceOwner sync.Map
 
 // whenSending sets before, counting the Sends from now on.
 func (f *fakeOut) whenSending(before func(call int)) {
@@ -50,7 +76,14 @@ func (f *fakeOut) whenSending(before func(call int)) {
 	f.calls, f.before = 0, before
 }
 
-func (f *fakeOut) Send(_ context.Context, n notify.Note) error {
+// answering sets answer.
+func (f *fakeOut) answering(answer func(d push.Device) (int, string)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.answer = answer
+}
+
+func (f *fakeOut) Send(_ context.Context, d push.Device, m push.Message) (send.Answer, error) {
 	f.mu.Lock()
 	f.calls++
 	call, before := f.calls, f.before
@@ -60,12 +93,82 @@ func (f *fakeOut) Send(_ context.Context, n notify.Note) error {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.posts++
+	if f.err != nil {
+		return send.Answer{}, f.err
+	}
 	if f.fail > 0 {
 		f.fail--
-		return errors.New("the fake push service is down")
+		return send.Answer{}, &send.Failure{Reason: send.ReasonConnect}
 	}
-	f.notes = append(f.notes, n)
-	return nil
+	status, retry := http.StatusCreated, ""
+	if f.answer != nil {
+		status, retry = f.answer(d)
+	}
+	if status/100 != 2 {
+		return send.Answer{Status: status, RetryAfter: retry}, nil
+	}
+	var p struct {
+		WebPush      int `json:"web_push"`
+		Notification struct {
+			Title, Body, Navigate, Tag string
+		} `json:"notification"`
+	}
+	if err := json.Unmarshal(m.Payload, &p); err != nil || p.WebPush != 8030 || p.Notification.Title != notify.Title ||
+		p.Notification.Tag != m.Topic {
+		return send.Answer{}, fmt.Errorf("the fake push service can't read the note %s: %v", m.Payload, err)
+	}
+	owner, _ := deviceOwner.Load(d.Endpoint)
+	name, _ := owner.(string)
+	f.notes = append(f.notes, note{Person: name, Endpoint: d.Endpoint, Body: p.Notification.Body, Navigate: p.Notification.Navigate,
+		Tag: p.Notification.Tag, TTL: m.TTL})
+	return send.Answer{Status: status}, nil
+}
+
+// addDevice turns phone notes on for the person with key in a made-up browser, as the owner (the way
+// TurnOnDevice would), and returns its device push address and id.
+func (f *firm) addDevice(key string) (endpoint, id string) {
+	f.t.Helper()
+	return f.addDeviceAt(key, "https://fcm.googleapis.com/fcm/send/")
+}
+
+// addDeviceAt is addDevice with a device push address under base, a made-up one of another push
+// service (base names the service; nothing is ever posted there).
+func (f *firm) addDeviceAt(key, base string) (endpoint, id string) {
+	f.t.Helper()
+	k, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	secret := make([]byte, 16)
+	rand.Read(secret)
+	endpoint = base + "test-" + key + "-" + rand.Text()
+	session := fmt.Sprintf("%x", sha256.Sum256([]byte(endpoint)))
+	err = db.WithTenant(f.ctx, f.owner, f.tenant.ID, func(tx pgx.Tx) error { // persons' row rule binds the owner too
+		return tx.QueryRow(f.ctx, `
+			WITH a AS (SELECT account_id FROM persons WHERE id = $1),
+			s AS (INSERT INTO account_sessions (token_sha256, account_id, expires_at)
+				SELECT $2, account_id, now() + interval '14 days' FROM a RETURNING account_id)
+			INSERT INTO push_devices (account_id, account_session_id, endpoint, p256dh, auth, origin, label)
+			SELECT account_id, $2, $3, $4, $5, 'https://seyal.kaveri-demo.example', 'Chrome on Android' FROM s
+			RETURNING id::text`, f.people[key], session, endpoint,
+			base64.RawURLEncoding.EncodeToString(k.PublicKey().Bytes()), base64.RawURLEncoding.EncodeToString(secret)).Scan(&id)
+	})
+	if err != nil {
+		f.t.Fatalf("a device for %s: %v", key, err)
+	}
+	deviceOwner.Store(endpoint, f.names[f.people[key]])
+	return endpoint, id
+}
+
+// endedWhy is why a device ended ("" while it gets phone notes), read as the owner.
+func (f *firm) endedWhy(id string) string {
+	f.t.Helper()
+	var why string
+	if err := f.owner.QueryRow(f.ctx, `SELECT coalesce(ended_why, '') FROM push_devices WHERE id = $1`, id).Scan(&why); err != nil {
+		f.t.Fatal(err)
+	}
+	return why
 }
 
 // firm is a fresh copy of Kaveri Associates (demo) on the shipped samples (all made up). Asha (Sales),
@@ -80,12 +183,15 @@ type firm struct {
 	tenant db.Tenant
 	people map[string]string // demo key → person id
 	names  map[string]string // person id → name
-	job    string            // job evaluation's version id
-	zone   *time.Location
-	clock  time.Time // the reader's clock
-	out    *fakeOut
-	log    strings.Builder
-	r      *notify.Reader
+	// devices and endpoints are each person's phone, by demo key: its id and its device push address.
+	// Asha, Ben, Dev, Chitra and Elan each have one.
+	devices, endpoints map[string]string
+	job                string // job evaluation's version id
+	zone               *time.Location
+	clock              time.Time // the reader's clock
+	out                *fakeOut
+	log                strings.Builder
+	r                  *notify.Reader
 }
 
 func newFirm(t *testing.T) *firm {
@@ -115,6 +221,10 @@ func newFirm(t *testing.T) *firm {
 	}
 	for _, p := range f.People {
 		fm.names[sum.People[p.Key]] = p.Name
+	}
+	fm.devices, fm.endpoints = map[string]string{}, map[string]string{}
+	for _, key := range []string{"asha", "ben", "dev", "chitra", "elan"} {
+		fm.endpoints[key], fm.devices[key] = fm.addDevice(key) // each has one phone with phone notes on
 	}
 	fm.do(func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `SELECT current_version_id::text FROM tenant_playbooks WHERE playbook_id = 'job-evaluation'`).Scan(&fm.job)
@@ -165,14 +275,14 @@ func (f *firm) told() []string {
 	defer f.out.mu.Unlock()
 	var out []string
 	for _, n := range f.out.notes {
-		out = append(out, f.names[n.Person]+": "+n.Body)
+		out = append(out, n.Person+": "+n.Body)
 	}
 	f.out.notes = nil
 	slices.Sort(out)
 	return out
 }
 
-func (f *firm) notes() []notify.Note {
+func (f *firm) notes() []note {
 	f.out.mu.Lock()
 	defer f.out.mu.Unlock()
 	return slices.Clone(f.out.notes)
@@ -694,8 +804,8 @@ func TestNoNoteAtNight(t *testing.T) {
 	want(t, "09:00 the next day", f.pass(), "Dev: While it was quiet: 3 new work", "Ben: New work from Dev: "+items[0].Number)
 }
 
-// TestRefusedNoteWaits: a phone note the sender doesn't take is not marked sent. It waits, and goes on
-// the next pass.
+// TestRefusedNoteWaits: a phone note no push service takes is not marked sent. It waits a minute, and
+// goes on the first pass after that.
 func TestRefusedNoteWaits(t *testing.T) {
 	f := newFirm(t)
 	job := f.heldBy(1, "ben")[0]
@@ -712,7 +822,9 @@ func TestRefusedNoteWaits(t *testing.T) {
 	if r := f.results(); r[""] != 1 {
 		t.Errorf("notices by result: %v; want Dev's one waiting", r)
 	}
-	want(t, "the next pass", f.pass(), "Dev: New work from Ben: "+job.Number)
+	want(t, "the next pass, within the minute", f.pass())
+	f.clock = f.clock.Add(time.Minute)
+	want(t, "a minute later", f.pass(), "Dev: New work from Ben: "+job.Number)
 	f.do(func(tx pgx.Tx) error {
 		var tries int
 		err := tx.QueryRow(f.ctx, `SELECT tries FROM notices WHERE tenant_id = current_tenant() AND result = 'sent' AND item_id::text = $1

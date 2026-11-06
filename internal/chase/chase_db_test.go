@@ -332,7 +332,10 @@ func TestBusyBusinessDoesNotStopAnother(t *testing.T) {
 	r := newTestReminder()
 	var out bytes.Buffer
 	c := r.chaser(app, &out, busyPlace, other)
-	c.Limits = Limits{LockWait: 200 * time.Millisecond, Business: 500 * time.Millisecond}
+	// Room enough that a busy test database (other packages run at the same time) can't use up the
+	// business's time before its first item reaches the lock: two items wait 600ms each, the third
+	// would pass 1.5s, so the business stops at its own limit.
+	c.Limits = Limits{LockWait: 600 * time.Millisecond, Business: 1500 * time.Millisecond}
 	started := time.Now()
 	if n := c.Round(ctx); n != 1 || reminders(t, app, other, "elsewhere") != 1 {
 		t.Errorf("round did %d things, want 1: the other business's item; log: %s", n, out.String())
@@ -343,7 +346,7 @@ func TestBusyBusinessDoesNotStopAnother(t *testing.T) {
 	if !strings.Contains(out.String(), "C-0001: busy, tried again next round") {
 		t.Errorf("log = %q; want the busy item named", out.String())
 	}
-	if !strings.Contains(out.String(), "chase "+busyPlace.tenant.Slug+": stopped after 500ms") {
+	if !strings.Contains(out.String(), "chase "+busyPlace.tenant.Slug+": stopped after 1.5s") {
 		t.Errorf("log = %q; want the busy business stopped at its time limit", out.String())
 	}
 

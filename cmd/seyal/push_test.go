@@ -65,11 +65,11 @@ func TestPushSwitch(t *testing.T) {
 	good := []string{"SEYAL_PUSH_PUBLIC_KEY", keys.Public(), "SEYAL_PUSH_PRIVATE_KEY", keys.Private(),
 		"SEYAL_PUSH_CONTACT", "mailto:office@kaveri-demo.example"}
 	for _, off := range []string{"", "off"} {
-		if key, err := pushKey(env(append([]string{"SEYAL_PUSH", off}, good...)...)); key != "" || err != nil {
+		if key, sender, err := pushKey(env(append([]string{"SEYAL_PUSH", off}, good...)...)); key != "" || sender != nil || err != nil {
 			t.Errorf("SEYAL_PUSH=%q = %q, %v; want off", off, key, err)
 		}
 	}
-	if key, err := pushKey(env(append([]string{"SEYAL_PUSH", "on"}, good...)...)); key != keys.Public() || err != nil {
+	if key, sender, err := pushKey(env(append([]string{"SEYAL_PUSH", "on"}, good...)...)); key != keys.Public() || sender == nil || err != nil {
 		t.Errorf("SEYAL_PUSH=on = %q, %v; want the public key", key, err)
 	}
 	for name, kv := range map[string][]string{
@@ -79,7 +79,7 @@ func TestPushSwitch(t *testing.T) {
 			"SEYAL_PUSH_CONTACT", "mailto:office@kaveri-demo.example"},
 		"no contact": {"SEYAL_PUSH", "on", "SEYAL_PUSH_PUBLIC_KEY", keys.Public(), "SEYAL_PUSH_PRIVATE_KEY", keys.Private()},
 	} {
-		_, err := pushKey(env(kv...))
+		_, _, err := pushKey(env(kv...))
 		if err == nil {
 			t.Errorf("%s: no error", name)
 			continue
