@@ -17,6 +17,19 @@ import (
 var businessWords = regexp.MustCompile(
 	`(?i)\b(jobs?|clients?|customers?|fees?|gym|turf|invoices?|gst|whatsapp|telegram)\b`)
 
+// The outgoing callers (internal/send, internal/push) copy http.DefaultClient instead of writing Go's
+// HTTP type by name: the list catches the type's name, but not the longer names that contain it.
+func TestBusinessWordsAndGoHTTPNames(t *testing.T) {
+	if !businessWords.MatchString("c := http.Client{Timeout: time.Second}") {
+		t.Error("the word list no longer catches Go's HTTP type by name")
+	}
+	for _, line := range []string{"c := *http.DefaultClient", "TLSClientConfig: cfg"} {
+		if businessWords.MatchString(line) {
+			t.Errorf("the word list catches %q, which the outgoing callers need", line)
+		}
+	}
+}
+
 func TestCoreHasNoBusinessWords(t *testing.T) {
 	files := 0
 	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {

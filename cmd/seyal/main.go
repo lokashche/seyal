@@ -56,6 +56,8 @@ func run(args []string, out io.Writer) error {
 		return runSetPassword(args[1:], out)
 	case "link":
 		return runLink(args[1:], out)
+	case "push":
+		return runPush(args[1:], out)
 	case "help", "-h", "--help":
 		usage(out)
 		return nil
@@ -86,6 +88,8 @@ Commands:
   seed           load the fictional demo business and print its logins
   set-password   give a login a new password (--email EMAIL [--business SLUG])
   link           add an existing login to a business (--email EMAIL --business SLUG)
+  push keys      make the server's phone-note keys and print them as two .env lines
+                 (nothing leaves this computer; keep the private key secret and backed up)
   help           show this help
 `, appName)
 }
