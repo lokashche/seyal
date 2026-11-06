@@ -89,6 +89,9 @@ type itemView struct {
 	Links   []linkView
 	Closed  bool
 	NotMine bool // open, but this person may only read it and write notes (D55)
+	// StepSince is since when the item is in this step (its step stay, D76), shown like Since; "" for a
+	// closed item and for items from before D76.
+	StepSince string
 	// PassOnly names the step's team when the person has the item but isn't in that team, so they may
 	// only pass it on (D68, choice 22).
 	PassOnly string
@@ -334,6 +337,9 @@ func (v *view) item(id string) (*itemView, error) {
 		iv.With = cmp.Or(name, it.Team) + " team"
 	}
 	iv.Since = v.since(it.HeldSince)
+	if !iv.Closed {
+		iv.StepSince = v.since(it.StepSince)
+	}
 
 	if iv.Links, err = v.links(it.ID); err != nil {
 		return nil, err

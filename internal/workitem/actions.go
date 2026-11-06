@@ -65,13 +65,13 @@ func Start(ctx context.Context, tx pgx.Tx, in NewItem) (Item, error) {
 	it := Item{
 		Number:            FormatNumber(s.p.Numbering, year, seq),
 		PlaybookVersionID: in.PlaybookVersionID,
-		State:             s.p.Initial,
 		Version:           1,
 		Fields:            engine.Fields{},
 		StartedVia:        in.Via,
 		StartedRef:        in.Ref,
 		CreatedBy:         actorPerson(in.By),
 	}
+	enterStep(&it, s.p.Initial)
 	if err := s.apply(&it, in.Fields, in.By.Kind == ledger.System); err != nil {
 		return Item{}, err
 	}
@@ -175,8 +175,8 @@ func (s session) setFields(it Item, values engine.Fields, by ledger.Actor, h *ha
 	it.Version++
 	change := map[string]any{"values": values}
 	from := it.State
-	it.State = engine.StateAfterEdit(s.p, it.State)
-	if it.State != from {
+	if next := engine.StateAfterEdit(s.p, it.State); next != from {
+		enterStep(&it, next)
 		change["state_from"] = from
 	}
 	if err := s.update(it); err != nil {
@@ -429,7 +429,7 @@ func (s session) prefill(it *Item, f playbook.Field, key string) error {
 // goes up, so decisions from an earlier round (e.g. a rejection) don't count again.
 func (s session) move(it *Item, to string, change map[string]any, by ledger.Actor, in arrival) error {
 	from := it.State
-	it.State = to
+	enterStep(it, to)
 	if a := s.p.Approvals; a != nil && to == a.In && from != a.In {
 		it.Version++
 	}

@@ -42,6 +42,14 @@ type Item struct {
 	HeldSince   string `json:"held_since,omitempty"`
 	HandoffFrom string `json:"handoff_from,omitempty"`
 	HandoffNote string `json:"handoff_note,omitempty"`
+	// The current step stay (D76): when it started (UTC, HeldSinceLayout), the last reminder in it, how
+	// many reminders it had (0 to 2) and when it was escalated. The chaser reads them, so it never does
+	// the same thing twice. Old snapshots and old items don't have them, and read as "" and 0; an empty
+	// StepSince means "never chase".
+	StepSince   string `json:"step_since,omitempty"`
+	RemindedAt  string `json:"reminded_at,omitempty"`
+	Reminders   int    `json:"reminders,omitempty"`
+	EscalatedAt string `json:"escalated_at,omitempty"`
 }
 
 // HeldSinceLayout is how held_since is written in the snapshot: UTC, to whole microseconds (what
@@ -52,7 +60,15 @@ const HeldSinceLayout = "2006-01-02T15:04:05.000000Z"
 // SelectHeldSince reads the held_since column as HeldSinceLayout does, or "".
 const SelectHeldSince = `coalesce(to_char(held_since AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '')`
 
-// heldSinceNow is the moment of a hand-over, in the form the snapshot keeps.
+// SelectStay reads the four step-stay columns in Item's order, the moments as HeldSinceLayout does.
+var SelectStay = stamp("step_since") + ", " + stamp("reminded_at") + ", reminders, " + stamp("escalated_at")
+
+// stamp reads one timestamptz column as HeldSinceLayout does, or "".
+func stamp(column string) string {
+	return `coalesce(to_char(` + column + ` AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), '')`
+}
+
+// heldSinceNow is the moment of a hand-over (or of a new step stay), in the form the snapshot keeps.
 func heldSinceNow() string {
 	return time.Now().UTC().Truncate(time.Microsecond).Format(HeldSinceLayout)
 }
@@ -60,15 +76,16 @@ func heldSinceNow() string {
 // ErrNotFound means there is no work item with that id.
 var ErrNotFound = errors.New("work item not found")
 
-const selectItems = `
+var selectItems = `
 	SELECT id::text, number, playbook_version_id::text, title, state,
 		coalesce(assignee_id::text, ''), coalesce(to_char(due_on, 'YYYY-MM-DD'), ''),
 		version, fields, fields_sha256, started_via, coalesce(started_ref, ''),
 		coalesce(created_by::text, ''), coalesce(team, ''),
-		` + SelectHeldSince + `, coalesce(handoff_from::text, ''), coalesce(handoff_note, '')
+		` + SelectHeldSince + `, coalesce(handoff_from::text, ''), coalesce(handoff_note, ''),
+		` + SelectStay + `
 	FROM work_items WHERE tenant_id = current_tenant()`
 
-const selectItem = selectItems + ` AND id::text = $1`
+var selectItem = selectItems + ` AND id::text = $1`
 
 // Get returns one work item. tx must come from db.WithTenant.
 func Get(ctx context.Context, tx pgx.Tx, id string) (Item, error) {
@@ -149,7 +166,7 @@ func scanItem(row pgx.Row) (Item, error) {
 	var it Item
 	err := row.Scan(&it.ID, &it.Number, &it.PlaybookVersionID, &it.Title, &it.State, &it.AssigneeID,
 		&it.DueOn, &it.Version, &it.Fields, &it.FieldsHash, &it.StartedVia, &it.StartedRef, &it.CreatedBy, &it.Team,
-		&it.HeldSince, &it.HandoffFrom, &it.HandoffNote)
+		&it.HeldSince, &it.HandoffFrom, &it.HandoffNote, &it.StepSince, &it.RemindedAt, &it.Reminders, &it.EscalatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Item{}, ErrNotFound
 	}
@@ -197,12 +214,13 @@ func open(ctx context.Context, tx pgx.Tx, versionID string) (session, error) {
 func (s session) insert(it *Item) error {
 	err := s.tx.QueryRow(s.ctx, `
 		INSERT INTO work_items (tenant_id, number, playbook_version_id, title, state, assignee_id, due_on,
-			version, fields, fields_sha256, started_via, started_ref, created_by, team)
+			version, fields, fields_sha256, started_via, started_ref, created_by, team, step_since)
 		VALUES (current_tenant(), $1, $2, $3, $4, nullif($5::text, '')::uuid, nullif($6::text, '')::date,
-			$7, $8, $9, $10, nullif($11::text, ''), nullif($12::text, '')::uuid, nullif($13::text, ''))
+			$7, $8, $9, $10, nullif($11::text, ''), nullif($12::text, '')::uuid, nullif($13::text, ''),
+			nullif($14::text, '')::timestamptz)
 		RETURNING id::text`,
 		it.Number, it.PlaybookVersionID, it.Title, it.State, it.AssigneeID, it.DueOn,
-		it.Version, it.Fields, it.FieldsHash, it.StartedVia, it.StartedRef, it.CreatedBy, it.Team).Scan(&it.ID)
+		it.Version, it.Fields, it.FieldsHash, it.StartedVia, it.StartedRef, it.CreatedBy, it.Team, it.StepSince).Scan(&it.ID)
 	if err != nil {
 		return fmt.Errorf("workitem: insert: %w", err)
 	}
@@ -214,14 +232,27 @@ func (s session) update(it Item) error {
 		UPDATE work_items SET title = $2, state = $3, assignee_id = nullif($4::text, '')::uuid,
 			due_on = nullif($5::text, '')::date, version = $6, fields = $7, fields_sha256 = $8,
 			team = nullif($9::text, ''), held_since = nullif($10::text, '')::timestamptz,
-			handoff_from = nullif($11::text, '')::uuid, handoff_note = nullif($12::text, ''), updated_at = now()
+			handoff_from = nullif($11::text, '')::uuid, handoff_note = nullif($12::text, ''),
+			step_since = nullif($13::text, '')::timestamptz, reminded_at = nullif($14::text, '')::timestamptz,
+			reminders = $15, escalated_at = nullif($16::text, '')::timestamptz, updated_at = now()
 		WHERE tenant_id = current_tenant() AND id::text = $1`,
 		it.ID, it.Title, it.State, it.AssigneeID, it.DueOn, it.Version, it.Fields, it.FieldsHash, it.Team,
-		it.HeldSince, it.HandoffFrom, it.HandoffNote)
+		it.HeldSince, it.HandoffFrom, it.HandoffNote, it.StepSince, it.RemindedAt, it.Reminders, it.EscalatedAt)
 	if err != nil {
 		return fmt.Errorf("workitem: update: %w", err)
 	}
 	return nil
+}
+
+// enterStep puts the item into state and starts a new step stay there (D76): the clock for reminders
+// starts now, and the reminders and escalation of the stay before are cleared. Every way into a step goes
+// through it: a start, a move (also back into the same step), a send back, approvals settling, linked
+// work moving the item on, and an edit that reopens approvals. A pass or a take doesn't: the item stays
+// in the same step, so passing it around can't put its chasing off.
+func enterStep(it *Item, state string) {
+	it.State = state
+	it.StepSince = heldSinceNow()
+	it.RemindedAt, it.Reminders, it.EscalatedAt = "", 0, ""
 }
 
 // record writes an event about the item to the ledger: what changed, plus a full snapshot.

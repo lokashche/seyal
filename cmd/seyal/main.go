@@ -70,13 +70,15 @@ func usage(out io.Writer) {
 
 Commands:
   version        print the version
-  serve          start the web app (SEYAL_ADDR, default 127.0.0.1:8080)
+  serve          start the web app (SEYAL_ADDR, default 127.0.0.1:8080) and the chaser
+                 (SEYAL_CHASE_EVERY, default 5m; off to turn it off)
   dev up         start the local database (Docker)
   dev down       stop the local database
   dev test       run the quick tests
   dev test-db    run the database tests (needs "dev up")
   dev reset      wipe the LOCAL database and files, then load the demo (asks first)
   dev serve      run the web app and restart it when the code changes (--lan: phones on Wi-Fi too)
+  dev chase      chase the LOCAL demo business once, as if on another day (--as-if 2026-11-09)
   migrate        apply all pending database migrations
   verify         check every ledger for tampering (--full: from the start)
   check          verify the integrity of the playbooks and master data

@@ -191,7 +191,8 @@
 <aside class="pane side-pane" aria-label="Fields and approvals">
   <div class="pane-h"><b>Details</b><small>version {{.Item.Version}}</small><a class="dl" href="/t/{{$.Slug}}/items/{{.Item.ID}}/report" hx-boost="false" title="A printable report of this item; save it as PDF">Report</a></div>
   <div class="side">
-    <div><span class="pill {{.Pill}}">{{.Status}}</span>{{if .With}} <span class="why">with {{.With}}{{with .Since}} · since {{.}}{{end}}</span>{{end}}</div>
+    <div><span class="pill {{.Pill}}">{{.Status}}</span>{{if .With}} <span class="why">with {{.With}}{{with .Since}} · since {{.}}{{end}}{{with .StepSince}} · in this step since {{.}}{{end}}</span>{{end}}</div>
+    {{if not .With}}{{with .StepSince}}<p class="why">In this step since {{.}}</p>{{end}}{{end}}
     {{with .Hand}}
     <div class="hand">
       {{if .Nobody}}<p class="why nobody">Nobody can take this. As an admin, pass it on to someone who can.</p>{{end}}

@@ -91,10 +91,11 @@ func TestTakeAndPassOnScreen(t *testing.T) {
 		t.Error("the job should have left Priya's For my team")
 	}
 
-	// Ben's panel: since today, Pass on with only Ops people and the team, the privacy line, Give back.
+	// Ben's panel: since today, in this step since today (D76), Pass on with only Ops people and the
+	// team, the privacy line, Give back.
 	_, page, _ := s.get(b, job)
 	page = html.UnescapeString(page)
-	for _, want := range []string{"with Ben · since today", "Pass on…", `value="person:` + priyaID + `">Priya Raman`,
+	for _, want := range []string{"with Ben · since today · in this step since today", "Pass on…", `value="person:` + priyaID + `">Priya Raman`,
 		`value="team:ops">the Operations team`, "Everyone in the business can see this, and it can't be deleted.",
 		"Give back to the Operations team", `name="holder" value="person:` + ben + `"`} {
 		if !strings.Contains(page, want) {

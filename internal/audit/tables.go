@@ -225,7 +225,8 @@ func (c *checker) items() error {
 			coalesce(assignee_id::text, ''), coalesce(to_char(due_on, 'YYYY-MM-DD'), ''),
 			version, fields, fields_sha256, started_via, coalesce(started_ref, ''),
 			coalesce(created_by::text, ''), coalesce(team, ''),
-			`+workitem.SelectHeldSince+`, coalesce(handoff_from::text, ''), coalesce(handoff_note, '')
+			`+workitem.SelectHeldSince+`, coalesce(handoff_from::text, ''), coalesce(handoff_note, ''),
+			`+workitem.SelectStay+`
 		FROM work_items WHERE tenant_id = current_tenant() ORDER BY id`)
 	if err != nil {
 		return err
@@ -274,6 +275,11 @@ func diffItem(w, g workitem.Item) string {
 		{"held since", w.HeldSince, g.HeldSince},
 		{"handed over by", w.HandoffFrom, g.HandoffFrom},
 		{"hand-over note", w.HandoffNote, g.HandoffNote},
+		// The step stay (D76): what the chaser did is kept on the item, so it is checked like the rest.
+		{"in this step since", w.StepSince, g.StepSince},
+		{"reminded at", w.RemindedAt, g.RemindedAt},
+		{"reminders", w.Reminders, g.Reminders},
+		{"escalated at", w.EscalatedAt, g.EscalatedAt},
 	}
 	if err1 != nil || err2 != nil {
 		return "fields can't be read"

@@ -91,3 +91,19 @@ func within(ctx context.Context, db Beginner, s Scope, fn func(pgx.Tx) error) er
 		return fn(tx)
 	})
 }
+
+// Tenant is one business on the server: its id and its slug (the short name in its web address).
+type Tenant struct{ ID, Slug string }
+
+// Tenants lists every business on the server, by slug. It reads only the server-wide tenants table,
+// so it runs with no business set; work for one business then goes through WithTenant.
+func Tenants(ctx context.Context, b Beginner) ([]Tenant, error) {
+	var list []Tenant
+	err := WithServer(ctx, b, func(tx pgx.Tx) error {
+		rows, _ := tx.Query(ctx, "SELECT id::text, slug FROM tenants ORDER BY slug")
+		var err error
+		list, err = pgx.CollectRows(rows, pgx.RowToStructByPos[Tenant])
+		return err
+	})
+	return list, err
+}

@@ -7,11 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // runDev handles developer helpers. They shell out to docker and go, and are meant to be run
@@ -37,6 +38,8 @@ func runDev(args []string, out io.Writer) error {
 		return devReset(os.Stdin, out)
 	case "serve":
 		return devServe(args[1:], out)
+	case "chase":
+		return devChase(args[1:], out)
 	default:
 		usage(out)
 		return fmt.Errorf("dev: unknown subcommand %q", args[0])
@@ -48,7 +51,7 @@ func runDev(args []string, out io.Writer) error {
 // the database is on this computer, and asks the person to type "reset" first.
 func devReset(in io.Reader, out io.Writer) error {
 	if err := localOnly(os.Getenv("SEYAL_OWNER_DATABASE_URL"), os.Getenv("SEYAL_DATABASE_URL")); err != nil {
-		return err
+		return fmt.Errorf("dev reset: %w", err)
 	}
 	media := os.Getenv("SEYAL_MEDIA_DIR")
 	if media == "" {
@@ -75,19 +78,34 @@ func devReset(in io.Reader, out io.Writer) error {
 	return runSeed(out)
 }
 
-// localOnly refuses database addresses that aren't on this computer, so a reset can never reach a
-// real server.
+// localOnly refuses database addresses that aren't on this computer, so a reset (or a pretend-day
+// chase) can never reach a real server. It checks the hosts the database driver will really use, read
+// the driver's way: a host=… at the end of the address, a list of hosts, or PGHOST all count.
 func localOnly(urls ...string) error {
 	for _, raw := range urls {
-		u, err := url.Parse(raw)
-		if raw == "" || err != nil {
-			return errors.New("dev reset: the database addresses aren't set; check .env")
+		if raw == "" {
+			return errors.New("the database addresses aren't set; check .env")
 		}
-		if h := u.Hostname(); h != "localhost" && h != "127.0.0.1" && h != "::1" {
-			return fmt.Errorf("dev reset: refused, the database is on %q, not this computer", h)
+		cfg, err := pgconn.ParseConfig(raw)
+		if err != nil {
+			return errors.New("a database address in .env can't be read; check it")
+		}
+		hosts := []string{cfg.Host}
+		for _, f := range cfg.Fallbacks {
+			hosts = append(hosts, f.Host)
+		}
+		for _, h := range hosts {
+			if !localHost(h) {
+				return fmt.Errorf("refused, the database is on %q, not this computer", h)
+			}
 		}
 	}
 	return nil
+}
+
+// localHost reports whether a database host is this computer: its local names, or a Unix socket folder.
+func localHost(h string) bool {
+	return h == "localhost" || h == "127.0.0.1" || h == "::1" || strings.HasPrefix(h, "/")
 }
 
 // confirmed reads one line and reports whether it is exactly word.

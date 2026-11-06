@@ -19,6 +19,12 @@ func TestResetSafety(t *testing.T) {
 		{[]string{local, "postgres://seyal_app:x@127.0.0.1:5432/seyal"}, true},
 		{[]string{local, "postgres://seyal_app:x@db.example.com:5432/seyal"}, false},
 		{[]string{local, ""}, false},
+		// The driver reads a host=… at the end of the address, and lists of hosts: each one counts.
+		{[]string{local, "postgres://seyal_app:x@localhost:5432/seyal?host=db.example.com"}, false},
+		{[]string{"postgres://seyal_owner:x@localhost:5432,db.example.com:5432/seyal"}, false},
+		{[]string{"postgres://seyal_app:x@localhost:5432/seyal?host=127.0.0.1"}, true},
+		{[]string{"host=db.example.com user=seyal_app dbname=seyal"}, false},
+		{[]string{"postgres://seyal_app:x@[::1]:5432/seyal"}, true},
 	} {
 		if err := localOnly(tt.urls...); (err == nil) != tt.ok {
 			t.Errorf("localOnly(%q) = %v, want ok %v", tt.urls, err, tt.ok)
@@ -42,5 +48,18 @@ func TestResetSafety(t *testing.T) {
 	var out bytes.Buffer
 	if err := devReset(strings.NewReader("no\n"), &out); err != nil || !strings.Contains(out.String(), "Nothing was changed.") {
 		t.Errorf("answering no = %v, %q", err, out.String())
+	}
+}
+
+// TestDevChaseSafety: dev chase needs a day and refuses a database that isn't on this computer, before
+// connecting to anything.
+func TestDevChaseSafety(t *testing.T) {
+	var out bytes.Buffer
+	if err := devChase(nil, &out); err == nil || !strings.Contains(err.Error(), "--as-if") {
+		t.Errorf("no day = %v, want the usage", err)
+	}
+	t.Setenv("SEYAL_DATABASE_URL", "postgres://seyal_app:x@db.example.com:5432/seyal")
+	if err := devChase([]string{"--as-if", "2026-11-09"}, &out); err == nil || !strings.Contains(err.Error(), "not this computer") {
+		t.Errorf("a database elsewhere = %v, want it refused", err)
 	}
 }

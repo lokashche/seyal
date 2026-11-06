@@ -7,17 +7,20 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"seyal/internal/ai"
+	"seyal/internal/chase"
 	"seyal/internal/config"
 	"seyal/internal/db"
 	"seyal/internal/media"
@@ -40,12 +43,17 @@ func secureCookies(setting, addr string) bool {
 	return !local
 }
 
-// runServe starts the web app. The playbook and master-data folders are loaded as templates; each
-// business manages its own processes and lists in Settings.
+// runServe starts the web app, and the chaser next to it (D76). The playbook and master-data folders
+// are loaded as templates; each business manages its own processes and lists in Settings.
 func runServe(out io.Writer) error {
 	// Ctrl+C, or a service manager / Docker stopping it: finish the requests in progress, then stop.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	every, err := chase.Every(os.Getenv("SEYAL_CHASE_EVERY"))
+	if err != nil {
+		return err
+	}
 
 	url, err := config.Need("SEYAL_DATABASE_URL")
 	if err != nil {
@@ -62,8 +70,7 @@ func runServe(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	rows, _ := app.Query(ctx, "SELECT id::text, slug FROM tenants ORDER BY slug")
-	tenants, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ ID, Slug string }])
+	tenants, err := db.Tenants(ctx, app) // the same list the chaser goes through each round
 	if err != nil {
 		return err
 	}
@@ -108,18 +115,49 @@ func runServe(out io.Writer) error {
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: server.RequestLimit, // voice notes can be large
 		WriteTimeout: server.RequestLimit, IdleTimeout: 2 * time.Minute,
 	}
+	// The chaser runs next to the web server and stops with it: on Ctrl+C it starts nothing new, and
+	// serve waits for it within the same 10 seconds it gives the requests in progress.
+	var chasing sync.WaitGroup
+	if every > 0 {
+		c := chase.New(app, log.New(out, "", log.LstdFlags))
+		chasing.Go(func() { c.Run(ctx, every, chase.FirstWait) })
+	}
+	stopped := make(chan struct{})
 	go func() {
+		defer close(stopped)
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		hs.Shutdown(shutdown)
+		if !waitFor(shutdown, &chasing) {
+			fmt.Fprintln(out, "The chaser didn't stop in time; the database undoes its unfinished change.")
+		}
 	}()
 
 	fmt.Fprintf(out, "Seyal is running. Press Ctrl+C to stop.\n")
 	fmt.Fprintf(out, "  Log in at http://%s/\n", addr)
+	fmt.Fprintf(out, "  %s\n", chase.Says(every))
 	if err := hs.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		stop() // the chaser stops too, before the database is closed
+		chasing.Wait()
 		return err
 	}
+	<-stopped // ListenAndServe returns as soon as Shutdown starts: wait for the requests and the chaser
 	fmt.Fprintln(out, "Stopped.")
 	return nil
+}
+
+// waitFor waits for wg until ctx ends, and reports whether wg finished in time.
+func waitFor(ctx context.Context, wg *sync.WaitGroup) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }

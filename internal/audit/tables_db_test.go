@@ -134,6 +134,11 @@ func TestTamperingWithTablesIsFound(t *testing.T) {
 		{"hand-over note added", "", "UPDATE work_items SET handoff_note = 'quietly added' WHERE id = $1", "work_items", "hand-over note is quietly added"},
 		{"held since changed", "", "UPDATE work_items SET held_since = now() WHERE id = $1", "work_items", "held since is 20"},
 		{"handed over by changed", "", "UPDATE work_items SET handoff_from = created_by WHERE id = $1", "work_items", "handed over by is"},
+		// So are the four step-stay columns (D76): a reminder or an escalation added or wiped outside Seyal.
+		{"step stay moved", "", "UPDATE work_items SET step_since = step_since - interval '3 days' WHERE id = $1", "work_items", "in this step since is 20"},
+		{"reminder added", "", "UPDATE work_items SET reminded_at = now() WHERE id = $1", "work_items", "reminded at is 20"},
+		{"reminder count changed", "", "UPDATE work_items SET reminders = 2 WHERE id = $1", "work_items", "reminders is 2"},
+		{"escalation added", "", "UPDATE work_items SET escalated_at = now() WHERE id = $1", "work_items", "escalated at is 20"},
 		{"link removed", "", "DELETE FROM work_item_links WHERE from_item_id = $1", "work_item_links", "missing"},
 		{"standard fee changed in master data", "", `UPDATE master_items SET fields = '{"standard_fee": 1}' WHERE key = 'monthly-books' AND $1::text <> ''`,
 			"master_items", "differs from the ledger"},
