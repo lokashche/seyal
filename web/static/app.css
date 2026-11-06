@@ -104,6 +104,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .sort { margin-left: auto; display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--r); background: var(--hover); font-size: 12px; white-space: nowrap; }
 .sort a { color: var(--muted); text-decoration: none; padding: 2px 8px; border-radius: 5px; }
 .sort a[aria-current="true"] { color: var(--ink); background: var(--panel); box-shadow: 0 1px 2px rgb(0 0 0 / .08); }
+.brief { flex: none; margin: 0; padding: 9px 16px; border-bottom: 1px solid var(--line); font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.brief b { font-weight: 600; color: var(--ink); }
+.brief a { color: var(--accent-ink); text-decoration: none; white-space: nowrap; }
+.brief a:hover { text-decoration: underline; }
 .groups { display: flex; flex-direction: column; overflow: auto; }
 .item { position: relative; display: flex; flex-direction: column; gap: 3px; padding: 11px 16px 11px 18px; border-bottom: 1px solid var(--line); text-decoration: none; color: var(--ink); }
 .item:hover { background: var(--hover); }

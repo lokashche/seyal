@@ -19,6 +19,7 @@
       {{if and $.Admin .Data.Work.Process}}<a class="dl" href="/t/{{$.Slug}}/export/{{.Data.Work.Process}}" hx-boost="false" download title="Download all {{.Data.Work.Title}} work (open and closed) as a spreadsheet" aria-label="Download as a spreadsheet">{{icon "download"}}</a>{{end}}
       <span class="sort"><a href="?{{replaceSort .Data.Work.Query "recent"}}"{{if eq .Data.Work.Sort "recent"}} aria-current="true"{{end}}>Newest</a> · <a href="?{{replaceSort .Data.Work.Query "due"}}"{{if eq .Data.Work.Sort "due"}} aria-current="true"{{end}}>Due</a></span>
     </div>
+    {{with .Data.Work.Brief}}<p class="brief">{{if .Parts}}<b>Today, {{.Day}}:</b> {{range $i, $p := .Parts}}{{if $i}} · {{end}}<a href="/t/{{$.Slug}}/{{$p.URL}}">{{$p.Text}}</a>{{end}}{{else}}Nothing waiting on you today.{{end}}</p>{{end}}
     <div class="groups">
       {{range .Data.Work.Rows}}
       <div class="work-card">

@@ -192,11 +192,12 @@ type view struct {
 	active    *[]workitem.Member  // active people with a login, once read (see members)
 	lost      map[string][]string // person id → roles they lost, once read (see stranded)
 	opened    string              // the item open on this page: it is being seen now, so its card isn't New
+	flags     map[string]string   // item id → why an admin must step in (flagGone, flagRole, flagNobody, flagEscalate), set by next
 }
 
 func (s *Server) newView(r *http.Request, tx pgx.Tx, c *call) (*view, error) {
 	v := &view{ctx: r.Context(), tx: tx, c: c, today: time.Now().In(c.tenant.Zone).Format(time.DateOnly),
-		playbooks: map[string]*playbook.Playbook{}, q: r.URL.Query()}
+		playbooks: map[string]*playbook.Playbook{}, q: r.URL.Query(), flags: map[string]string{}}
 	var err error
 	if v.names, err = pairs(v, "SELECT id::text, display_name FROM persons WHERE tenant_id = current_tenant()"); err != nil {
 		return nil, err

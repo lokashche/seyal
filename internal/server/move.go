@@ -175,12 +175,12 @@ func movedLine(done workitem.Reassigned, to string) string {
 
 // stranded is the admins' card hint for an item whose holder can't work it any more (D75, M3): "With
 // Ben, who is no longer active: pass it on", or "With Ben, who is no longer in Operations: pass it on".
-// It is "" otherwise.
-func (v *view) stranded(p *playbook.Playbook, it workitem.Item, members []workitem.Member) (string, error) {
+// It is "" otherwise. flag says which of the two it is (flagGone or flagRole), for the briefing.
+func (v *view) stranded(p *playbook.Playbook, it workitem.Item, members []workitem.Member) (hint, flag string, err error) {
 	if v.lost == nil {
 		lost, err := workitem.FormerRoles(v.ctx, v.tx)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		v.lost = lost
 	}
@@ -188,11 +188,11 @@ func (v *view) stranded(p *playbook.Playbook, it workitem.Item, members []workit
 	name := v.names[it.AssigneeID]
 	switch {
 	case gone:
-		return "With " + name + ", who is no longer active: pass it on", nil
+		return "With " + name + ", who is no longer active: pass it on", flagGone, nil
 	case role != "":
-		return "With " + name + ", who is no longer in " + v.roleName(role) + ": pass it on", nil
+		return "With " + name + ", who is no longer in " + v.roleName(role) + ": pass it on", flagRole, nil
 	}
-	return "", nil
+	return "", "", nil
 }
 
 // roleName is a role's name, or its key when it has none.

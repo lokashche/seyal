@@ -154,6 +154,16 @@ func TestMyWorkFolders(t *testing.T) {
 			t.Errorf("%s should show only the request, and keep itself on links:\n%s", q, problem(list))
 		}
 	}
+	// The process's own entry is marked current only when its link is the list shown: a briefing link
+	// that narrows Needs my approval to the process is another list.
+	current := regexp.MustCompile(`<a class="fold sub" href="[^"]*p=internal-request[^"]*" aria-current="true">`)
+	if _, list, _ := s.get(a, base+"/?p=internal-request"); !current.MatchString(list) {
+		t.Errorf("?p=internal-request should mark Internal request current:\n%s", problem(list))
+	}
+	if _, list, _ := s.get(a, base+"/?f=approval&p=internal-request"); current.MatchString(list) ||
+		!strings.Contains(list, "<b>Needs my approval · Internal request</b>") {
+		t.Errorf("?f=approval&p=internal-request should be Needs my approval for the request, without marking the process current:\n%s", problem(list))
+	}
 	if _, list, _ := s.get(a, base+"/?f=nonsense&s=due"); !strings.Contains(list, `aria-current="true">Due</a>`) {
 		t.Errorf("sorting by due date should be marked:\n%s", problem(list))
 	}

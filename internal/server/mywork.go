@@ -17,6 +17,7 @@ import (
 	"seyal/internal/ask"
 	"seyal/internal/engine"
 	"seyal/internal/playbook"
+	"seyal/internal/start"
 	"seyal/internal/workitem"
 )
 
@@ -37,6 +38,16 @@ var folders = []struct{ key, title string }{
 	{"waiting", "Waiting on others"}, {"all", "All open work"},
 }
 
+// lists are the briefing's two lists that aren't folders (D75, B): the person's cards due today, from
+// their four own folders, and their New cards. They open only from the briefing line.
+var lists = map[string]string{"today": "Due today", "new": "New for you"}
+
+// withProcess are the lists that may be narrowed to one process: the five the briefing line links to
+// (For my team for the admins' parts), so a line that counts one process opens just what it counted.
+// Only a link that names the list does so: ?p= alone is all the process's open work. The folder column
+// never combines a process with a folder (D51): a process there is all its open work.
+var withProcess = map[string]bool{"approval": true, "overdue": true, "today": true, "new": true, "team": true}
+
 // myWork is the folder column and the list. The column has two parts that each add up: the person's
 // own folders, and all open work (in total and per process). The list shows the chosen folder (?f=)
 // or process (?p=, which always means all open work of that process), in the chosen order
@@ -50,6 +61,20 @@ type myWork struct {
 	Process   string // the chosen process's id, when the list shows one process
 	Sort      string
 	Query     string // "?f=…&p=…&s=…", kept on links so the list stays as chosen
+	Brief     brief  // the line at the top of the list
+}
+
+// brief is the daily briefing (D75, B): one line about the person's own work today, worked out on
+// every page from the same cards as the folders, so the line and the folders always agree. Nothing is
+// stored and nothing goes to the ledger.
+type brief struct {
+	Day   string      // "Fri 4 Dec", in the business's time zone
+	Parts []briefPart // the counts that aren't zero; none means "Nothing waiting on you today."
+}
+
+// briefPart is one count of the line, for example "2 due today", and the list it opens.
+type briefPart struct {
+	Text, URL string // URL is relative to the business's address: "?f=today" or "settings/processes/<id>"
 }
 
 type folder struct {
@@ -67,6 +92,11 @@ func (v *view) myWork() (*myWork, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Which items the person may see is decided in one place (D75, decision 12): today everyone active
+	// sees every item, and someone no longer active sees an empty My Work, as in Ask Seyal.
+	if items, err = workitem.Visible(v.ctx, v.tx, v.c.session.PersonID, items); err != nil {
+		return nil, err
+	}
 	seen, err := workitem.SeenBy(v.ctx, v.tx, v.c.session.PersonID)
 	if err != nil {
 		return nil, err
@@ -76,6 +106,7 @@ func (v *view) myWork() (*myWork, error) {
 		bucket int
 		pbID   string
 		due    string
+		fresh  bool // New, counting the item open on this page too (so the "new" list keeps its card)
 	}
 	var all []placed
 	byProcess := map[string]int{}
@@ -103,14 +134,15 @@ func (v *view) myWork() (*myWork, error) {
 		}
 		// New: a card for the person (one of their own folders) that came to them, or their team, since
 		// they last saw it (D75, M7). A reminder doesn't change hands, so it never makes a card New.
-		r.New = r.Mine && it.ID != v.opened && workitem.IsNew(it, v.c.session.PersonID, seen[it.ID])
+		fresh := r.Mine && workitem.IsNew(it, v.c.session.PersonID, seen[it.ID])
+		r.New = fresh && it.ID != v.opened
 		if it.AssigneeID != "" || it.Team != "" {
 			r.Owner = initials(r.OwnerName)
 		}
 		if untitled(r.Title) {
 			r.Title, r.Quoted = x.firstWords, x.firstWords != ""
 		}
-		all = append(all, placed{r, bucket, p.ID, it.DueOn})
+		all = append(all, placed{r, bucket, p.ID, it.DueOn, fresh})
 		byProcess[p.ID]++
 		if bucket < otherOpen {
 			counts[bucket]++
@@ -124,7 +156,7 @@ func (v *view) myWork() (*myWork, error) {
 		w.Sort = "recent"
 	}
 	chosen := q.Get("f")
-	if !slices.ContainsFunc(folders, func(f struct{ key, title string }) bool { return f.key == chosen }) {
+	if lists[chosen] == "" && !slices.ContainsFunc(folders, func(f struct{ key, title string }) bool { return f.key == chosen }) {
 		chosen = "all"
 		for _, k := range []int{needsApproval, overdue, yourTurn, yourTeam} {
 			if counts[k] > 0 {
@@ -137,8 +169,11 @@ func (v *view) myWork() (*myWork, error) {
 	if byProcess[proc] == 0 {
 		proc = ""
 	}
-	if proc != "" {
-		chosen = "all" // a process is a part of all open work, never of a personal folder
+	if proc != "" && !(withProcess[chosen] && q.Get("f") == chosen) {
+		// In the folder column a process is a part of all open work, never of a personal folder; only a
+		// briefing link (which names its list) narrows a list to one process. Without ?f=, the folder
+		// chosen above is the person's first one with cards, which the link didn't ask for.
+		chosen = "all"
 	}
 	link := func(f, p string) string {
 		vals := url.Values{}
@@ -163,18 +198,86 @@ func (v *view) myWork() (*myWork, error) {
 			w.Title = f.title
 		}
 	}
+	w.Title = cmp.Or(lists[chosen], w.Title)
 	if len(kinds) > 1 {
 		for _, id := range slices.Sorted(maps.Keys(byProcess)) {
 			w.Processes = append(w.Processes, folder{Key: id, Title: sentence(id), Count: byProcess[id],
-				Current: id == proc, URL: link("all", id)})
+				Current: id == proc && chosen == "all", URL: link("all", id)})
 		}
 	}
 	if proc != "" {
-		w.Title, w.Process = sentence(proc), proc
+		if chosen != "all" {
+			w.Title += " · " + sentence(proc) // a list the briefing line opened, for one process
+		} else {
+			w.Title = sentence(proc)
+		}
+		w.Process = proc
+	}
+
+	// The briefing counts the cards the folders hold, only the open process's when one is open.
+	var late, today, fresh, approve, gone, lost, nobody, stuck int
+	for _, pl := range all {
+		if proc != "" && pl.pbID != proc {
+			continue
+		}
+		switch pl.bucket {
+		case needsApproval:
+			approve++
+		case overdue:
+			late++
+		}
+		if pl.bucket <= yourTeam && pl.due == v.today {
+			today++
+		}
+		if pl.r.New {
+			fresh++
+		}
+		switch v.flags[pl.r.ID] {
+		case flagGone:
+			gone++
+		case flagRole:
+			lost++
+		case flagNobody:
+			nobody++
+		case flagEscalate:
+			stuck++
+		}
+	}
+	if day, err := time.Parse(time.DateOnly, v.today); err == nil {
+		w.Brief.Day = day.Format("Mon 2 Jan")
+	}
+	add := func(n int, text, to string) {
+		if n > 0 {
+			w.Brief.Parts = append(w.Brief.Parts, briefPart{Text: fmt.Sprintf("%d %s", n, text), URL: to})
+		}
+	}
+	add(late, "overdue", link("overdue", proc))
+	add(today, "due today", link("today", proc))
+	add(fresh, "new for you", link("new", proc))
+	add(approve, "waiting on your approval", link("approval", proc))
+	if v.c.admin() {
+		add(gone, "with someone no longer active", link("team", proc))
+		add(lost, "with someone no longer in the step's role", link("team", proc))
+		add(nobody, "that nobody can take", link("team", proc))
+		add(stuck, "couldn't escalate", link("team", proc))
+		held, err := v.heldSchedules(proc)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range held {
+			// One part per process, so each opens the process whose warning it counted.
+			add(1, "schedule held back in "+sentence(id), "settings/processes/"+url.PathEscape(id))
+		}
 	}
 
 	for _, pl := range all {
 		in := chosen == "all" || folders[pl.bucket].key == chosen
+		switch chosen {
+		case "today":
+			in = pl.bucket <= yourTeam && pl.due == v.today
+		case "new":
+			in = pl.fresh
+		}
 		if pl.bucket == otherOpen {
 			in = chosen == "all"
 		}
@@ -205,6 +308,32 @@ func (v *view) myWork() (*myWork, error) {
 		})
 	}
 	return w, nil
+}
+
+// Why an admin must step in on a card (D75, M3 and M6), as next finds it, for the briefing's admin
+// counts.
+const (
+	flagGone     = "gone"     // its holder is no longer active
+	flagRole     = "role"     // its holder is no longer in the step's role
+	flagNobody   = "nobody"   // nobody can take it (D68): its team has nobody active, or nobody may take it
+	flagEscalate = "escalate" // Seyal couldn't escalate it: nobody could receive it
+)
+
+// heldSchedules lists the processes, switched on, whose schedule is held back (too many list entries
+// match) or stopped (its list lacks what it needs), as Settings → Processes warns (D75, R); only the
+// open process, when one is open.
+func (v *view) heldSchedules(proc string) ([]string, error) {
+	plans, err := start.Find(v.ctx, v.tx, time.Now().In(v.c.tenant.Zone))
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, p := range plans {
+		if (proc == "" || p.PlaybookID == proc) && (p.Problem != "" || p.HeldBack()) {
+			ids = append(ids, p.PlaybookID)
+		}
+	}
+	return ids, nil
 }
 
 // untitled reports whether a title says nothing yet: empty, or only the punctuation of a title
@@ -276,16 +405,20 @@ func (v *view) next(p *playbook.Playbook, it workitem.Item) (bucket int, hint st
 	if v.c.admin() && !mine && workitem.CouldNotEscalate(p, it, members) {
 		// Seyal wanted to hand it on but nobody could receive it: admins pass it on (D75, M6), or take
 		// it themselves if they may.
+		v.flags[it.ID] = flagEscalate
 		take = (team || free) && workitem.MayTake(p, it, v.actor(), members)
 		return yourTeam, v.couldNotEscalate(p, it), take, nil
 	}
 	if !mine && !team && !free {
 		if v.c.admin() && workitem.NobodyCanTake(p, it, members) {
+			v.flags[it.ID] = flagNobody
 			return yourTeam, "Nobody can take this", false, nil // admins pass it on (D68, choice 13)
 		}
 		if v.c.admin() {
 			// Its holder left or lost the step's role: admins pass it on (D75, M3).
-			if h, err := v.stranded(p, it, members); err != nil || h != "" {
+			h, flag, err := v.stranded(p, it, members)
+			if err != nil || h != "" {
+				v.flags[it.ID] = flag
 				return yourTeam, h, false, err
 			}
 		}
