@@ -236,28 +236,11 @@ func (v *view) mine(it workitem.Item) bool {
 	if err != nil {
 		return false
 	}
-	return canDecide(st, v.c.session) != nil
+	return workitem.CanDecide(st, decider(v.c.session)) != nil
 }
 
-// canDecide returns the slots the person may decide now: waiting, one of their roles, and they
-// haven't decided another slot of this version (one decision per person per version).
-func canDecide(st engine.ApprovalStatus, s auth.Session) map[string]bool {
-	for _, slot := range st.Slots {
-		if slot.ApprovedBy == s.PersonID {
-			return nil
-		}
-	}
-	var ok map[string]bool
-	for _, slot := range st.Slots {
-		if slices.Contains(st.Waiting, slot.Slot) && slices.Contains(s.Roles, slot.Role) {
-			if ok == nil {
-				ok = map[string]bool{}
-			}
-			ok[slot.Slot] = true
-		}
-	}
-	return ok
-}
+// decider is the person a session belongs to, as workitem.CanDecide sees them.
+func decider(s auth.Session) engine.Person { return engine.Person{ID: s.PersonID, Roles: s.Roles} }
 
 func (v *view) status(p *playbook.Playbook, it workitem.Item) (pill, status string) {
 	status = human(it.State)
@@ -479,7 +462,7 @@ func (v *view) item(id string) (*itemView, error) {
 		}
 		allowed := map[string]bool{}
 		if it.State == p.Approvals.In {
-			allowed = canDecide(st, v.c.session)
+			allowed = workitem.CanDecide(st, decider(v.c.session))
 		}
 		// What each approval's ledger event recorded (D75, decision 11), so the card and the ledger agree.
 		worked, err := workitem.WorkedOnApprovals(v.ctx, v.tx, it.ID)

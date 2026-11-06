@@ -371,7 +371,7 @@ func (v *view) next(p *playbook.Playbook, it workitem.Item) (bucket int, hint st
 		if err != nil {
 			return 0, "", false, err
 		}
-		if canDecide(st, s) != nil {
+		if workitem.CanDecide(st, decider(s)) != nil {
 			if it.Reminders > 0 {
 				return needsApproval, "Your approval is needed · Seyal reminded you", false, nil
 			}
