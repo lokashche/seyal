@@ -108,6 +108,16 @@ func (lib *Library) checkMasterUse(p *Playbook, only string) error {
 			}
 		}
 	}
+	// A schedule picks the entries of its list by a yes/no detail (D75, R), so a list change can't
+	// remove that detail while the process is in use (as for a prefill's details).
+	if s := p.Schedule; s != nil && fields[s.ForEach] != nil && fields[s.ForEach].Type == "master" && s.Where != "" {
+		f := fields[s.ForEach]
+		if kind := lib.Masters[f.Kind]; kind != nil && (only == "" || f.Kind == only) {
+			if d := kind.field(s.Where); d == nil || d.Type != "bool" {
+				add("schedule: where: %s has no yes/no detail %q", f.Kind, s.Where)
+			}
+		}
+	}
 	for _, r := range p.masterRefs {
 		kind := lib.Masters[fields[r.field].Kind]
 		if only != "" && fields[r.field].Kind != only {

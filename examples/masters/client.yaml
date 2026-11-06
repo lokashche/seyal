@@ -9,3 +9,6 @@ fields:
   - { key: email, label: Email, type: text }
   - { key: phone, label: Phone, type: text }
   - { key: is_new, label: New (not checked yet), type: bool }
+  # For recurring work (the sample Monthly return): which clients need one, and who prepares it.
+  - { key: monthly_return, label: Files a monthly return, type: bool }
+  - { key: handled_by, label: Handled by, type: person }

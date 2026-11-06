@@ -1,0 +1,46 @@
+# Sample playbook: a return filed every month for each client that needs one (D75, R).
+# Seyal starts it on its own: on the 1st of each month, one item for the month that just ended, for
+# every active client with "Files a monthly return" ticked in Settings → Lists → Client. The item goes
+# to the client's "Handled by" person (or, if nobody is set or they can't take work, anyone in
+# Operations can take it), and is due on the 20th of the month after the period.
+# Generic example only. Real playbooks live in each business's own set-up, not in this folder.
+id: monthly-return
+version: "0.1"
+description: A return filed every month for each client that needs one.
+examples:
+  - "Monthly return for Acme Traders"
+numbering: "M-{yyyy}-{seq:4}"
+title: "{client} — {period}"
+roles: [ops, owner]
+
+fields:
+  - { key: client, label: Client, type: master, kind: client, required: true,
+      prefill: { preparer: handled_by } }
+  - { key: period, label: Period, type: text, readonly: true }
+  - { key: due_on, label: Due by, type: date }
+  - { key: preparer, label: Prepared by, type: person }
+  - { key: filed_note, label: Filing reference, type: text, required: true }
+
+states: [prepare, filed, cancelled]
+initial: prepare
+steps:
+  prepare:
+    owner: "field:preparer"
+    pass_to: ["role:ops"]
+    remind_after: 5 days    # a reminder only: no escalation in a step owned by a person field
+
+schedule:
+  every: month            # month, quarter or year
+  day: 1                  # the run day (1-28)
+  for_each: client        # a master field: one item for each active entry of its list...
+  where: monthly_return   # ...that has this yes/no detail ticked (required)
+  period: previous        # previous (just ended) or current
+  period_field: period    # gets the period's name: "Nov 2026", "Jul–Sep 2026", "2026-27"
+  due: { field: due_on, months_after: 1, day: 20 }   # optional: the 20th of the month after the period
+  max_per_run: 30         # optional
+
+deadlines:
+  - { due_from: due_on }
+transitions:
+  - { action: filed, from: [prepare], to: filed, when: required_filled }
+  - { action: cancel, from: [prepare], to: cancelled, needs: reason, who: [holder, "role:owner"] }

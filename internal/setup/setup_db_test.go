@@ -103,10 +103,11 @@ func TestImportDemoBusiness(t *testing.T) {
 				ids = append(ids, p.PlaybookID)
 			}
 			slices.Sort(ids)
-			// Other work, the catch-all, is in the demo for the "move someone's work" story (D75, M3).
-			if !slices.Equal(ids, []string{"job-evaluation", "other-work"}) || len(kinds) != 2 ||
+			// Other work, the catch-all, is in the demo for the "move someone's work" story (D75, M3), and
+			// the recurring Monthly return for recurring work (D75, R).
+			if !slices.Equal(ids, []string{"job-evaluation", "monthly-return", "other-work"}) || len(kinds) != 2 ||
 				kinds["client"] == nil || kinds["work_type"] == nil {
-				t.Errorf("processes %v, lists %v; want job-evaluation and other-work, with client and work_type", ids, kinds)
+				t.Errorf("processes %v, lists %v; want job-evaluation, monthly-return and other-work, with client and work_type", ids, kinds)
 			}
 			return err
 		})

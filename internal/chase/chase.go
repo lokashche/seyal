@@ -78,9 +78,9 @@ type Task struct {
 // A Finder lists what may be due in one business. It only reads: its transaction is read-only.
 type Finder func(ctx context.Context, tx pgx.Tx, b Business) ([]Task, error)
 
-// Finders is what a round looks for: reminders and escalations (M6, deadlines.go). Recurring work
-// (R) adds its own later.
-var Finders = []Finder{findDeadlines}
+// Finders is what a round looks for: reminders and escalations (M6, deadlines.go), and recurring work
+// (R, schedules.go).
+var Finders = []Finder{findDeadlines, findSchedules}
 
 // Chaser runs rounds. Make one with New; the fields left empty get their defaults.
 type Chaser struct {

@@ -29,6 +29,10 @@ type NewItem struct {
 	Parent            string // optional: id of the parent item
 	StartedBy         string // optional: id of the item whose change started this one
 	By                ledger.Actor
+	// A schedule's start (D75, R) says which period ("Nov 2026") and why, in plain words ("Monthly
+	// schedule: Nov 2026, for Acme Traders"); Extra adds what Seyal went by (today, as_if) to the event.
+	Period, Reason string
+	Extra          map[string]any
 }
 
 // Start creates a work item: it takes the next number, fills the given fields (and whatever
@@ -75,14 +79,30 @@ func Start(ctx context.Context, tx pgx.Tx, in NewItem) (Item, error) {
 	if err := s.apply(&it, in.Fields, in.By.Kind == ledger.System); err != nil {
 		return Item{}, err
 	}
+	left, err := s.unfitOwner(&it, in.Fields)
+	if err != nil {
+		return Item{}, err
+	}
 	if err := s.refresh(&it); err != nil {
 		return Item{}, err
 	}
 	if err := s.insert(&it); err != nil {
 		return Item{}, err
 	}
-	if err := s.record("item.started", it, map[string]any{"via": in.Via, "ref": in.Ref}, in.By); err != nil {
+	change := map[string]any{"via": in.Via, "ref": in.Ref}
+	maps.Copy(change, in.Extra)
+	for key, v := range map[string]string{"period": in.Period, "reason": in.Reason} {
+		if v != "" {
+			change[key] = v
+		}
+	}
+	if err := s.record("item.started", it, change, in.By); err != nil {
 		return Item{}, err
+	}
+	if left != "" {
+		if err := s.record("item.posted", it, map[string]any{"text": left}, ledger.SystemActor); err != nil {
+			return Item{}, err
+		}
 	}
 	if in.Parent != "" {
 		if err := Link(ctx, tx, in.Parent, it.ID, "parent", in.By); err != nil {
@@ -435,6 +455,34 @@ func (s session) prefill(it *Item, f playbook.Field, key string) error {
 		}
 	}
 	return nil
+}
+
+// unfitOwner checks a new item's first step, when a list entry filled in the person field that owns it
+// (D75, R): the person must be able to hold work (mayHold), as when a person sets that field. If they
+// can't (no longer active, no login yet), the field is left empty: work Seyal started is then free work
+// that anyone the step allows may take, and work a person started stays with them. It returns the
+// thread line that says so, or "". A value given directly
+// (given) is left as it is: the usual checks already ran on it.
+func (s session) unfitOwner(it *Item, given engine.Fields) (string, error) {
+	kind, key, _ := strings.Cut(s.p.Steps[it.State].Owner, ":")
+	person, _ := it.Fields[key].(string)
+	if _, set := given[key]; kind != "field" || person == "" || set {
+		return "", nil
+	}
+	why, err := s.mayHold(person, "")
+	if err != nil || why == "" {
+		return "", err
+	}
+	name, err := s.personName(person)
+	if err != nil {
+		return "", err
+	}
+	delete(it.Fields, key)
+	text := fmt.Sprintf("%s %s, so %s is left empty.", name, why, s.fieldLabel(key))
+	if it.CreatedBy == "" {
+		text += " Anyone who may work this step can take it." // nobody started it: it is free work
+	}
+	return text, nil
 }
 
 // move puts the item into a new state, records it, and runs what happens on entering it. in says how

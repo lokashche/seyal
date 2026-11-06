@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -18,6 +19,7 @@ import (
 	"seyal/internal/engine"
 	"seyal/internal/ledger"
 	"seyal/internal/playbook"
+	"seyal/internal/start"
 )
 
 // Settings → Processes: each business manages its own processes (playbooks). A process is shown in
@@ -28,6 +30,15 @@ type processList struct {
 	InUse     []processRow
 	Templates []processRow // shipped templates the business doesn't have yet
 	DraftOn   bool         // AI drafting is switched on
+	Gap       *addGap      // a template that can't be added until the business's lists get its details
+}
+
+// addGap is the advice when a template needs details the business's lists don't have (D75, R), for
+// example "Yearly review needs details your lists don't have yet: Members → Wants a review. [Add it and
+// use version 0.1]".
+type addGap struct {
+	ID, Name, Version string
+	Gaps              []listGap
 }
 
 type processRow struct {
@@ -46,10 +57,27 @@ type processView struct {
 	Deadlines         []string
 	Versions          []playbook.VersionInfo
 	CurrentID         string
-	Source            string    // the definition, for advanced editing
-	Template          string    // a newer template version, if the shipped one differs
-	ListGaps          []listGap // details the template version needs that the business's lists lack
-	DraftOn           bool      // AI drafting is switched on
+	Source            string        // the definition, for advanced editing
+	Template          string        // a newer template version, if the shipped one differs
+	ListGaps          []listGap     // details the template version needs that the business's lists lack
+	DraftOn           bool          // AI drafting is switched on
+	Schedule          *scheduleLine // how the process starts on its own now, if it does (D75, R)
+	// ScheduleRule is the schedule's rule in plain words, without live counts, or "" for a process that
+	// doesn't start on its own. It is in the details and under "What changes" of a draft, so an admin
+	// sees before saving that a version starts work on its own.
+	ScheduleRule string
+	// TemplateSchedule is the newer template version's rule, when it differs from this version's
+	// ("" when it doesn't start on its own: TemplateNoSchedule says whether this version does and it won't).
+	TemplateSchedule   string
+	TemplateNoSchedule bool
+}
+
+// scheduleLine is the one line Settings shows for a process that starts on its own, for example "Starts
+// on its own: yearly on the 1st, for members with “Wants a review” ticked (2 now). Next run: 1 Apr 2027."
+// Warn is set when a run is held back or the schedule can't run.
+type scheduleLine struct {
+	Text string
+	Warn bool
 }
 
 // listGap is one of the business's lists that lacks details a template version needs.
@@ -74,6 +102,12 @@ func (s *Server) processPage(w http.ResponseWriter, r *http.Request, c *call) {
 // showProcesses renders the list (id == "") or one process, with an optional notice or problem.
 // draft, when given, is shown in the editor instead of the saved definition (after a failed save).
 func (s *Server) showProcesses(w http.ResponseWriter, r *http.Request, c *call, id string, status int, notice, problem string, draft ...string) {
+	s.showProcessesWith(w, r, c, id, status, notice, problem, nil, draft...)
+}
+
+// showProcessesWith is showProcesses, with advice about a template's missing list details on the list.
+func (s *Server) showProcessesWith(w http.ResponseWriter, r *http.Request, c *call, id string, status int, notice, problem string,
+	gap *addGap, draft ...string) {
 	sv := settingsView{Tab: "processes", Tabs: s.tabs(c, "processes")}
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		inUse, err := playbook.ListInUse(r.Context(), tx)
@@ -82,6 +116,7 @@ func (s *Server) showProcesses(w http.ResponseWriter, r *http.Request, c *call, 
 		}
 		if id == "" {
 			sv.Processes = s.processList(inUse)
+			sv.Processes.Gap = gap
 			return nil
 		}
 		i := slices.IndexFunc(inUse, func(u playbook.InUse) bool { return u.PlaybookID == id })
@@ -95,16 +130,10 @@ func (s *Server) showProcesses(w http.ResponseWriter, r *http.Request, c *call, 
 		sv.Process = s.processView(inUse[i], lib)
 		sv.Process.DraftOn = s.draftOn()
 		if t := s.lib.Playbooks[id]; t != nil && sv.Process.Template != "" {
-			for _, kind := range playbook.NeededKinds(t) {
-				tm := s.lib.Masters[kind]
-				if missing := playbook.MissingDetails(lib.Masters[kind], tm); len(missing) > 0 {
-					g := listGap{Kind: kind, List: listLabel(tm) + "s"}
-					for _, f := range missing {
-						g.Details = append(g.Details, ask.Label(f))
-					}
-					sv.Process.ListGaps = append(sv.Process.ListGaps, g)
-				}
-			}
+			sv.Process.ListGaps = s.listGaps(t, lib.Masters)
+		}
+		if sv.Process.Schedule, err = s.scheduleLine(r, tx, c, inUse[i], lib); err != nil {
+			return err
 		}
 		if len(draft) > 0 {
 			sv.Process.Source = draft[0]
@@ -122,6 +151,102 @@ func (s *Server) showProcesses(w http.ResponseWriter, r *http.Request, c *call, 
 	p := c.page(sv)
 	p.Notice, p.Error = notice, problem
 	s.render(w, r, status, "settings", p)
+}
+
+// listGaps lists, for each list template t needs, the details the template has and the business's own
+// list (in kinds) lacks. A list the business doesn't have at all isn't a gap: it is copied whole.
+func (s *Server) listGaps(t *playbook.Playbook, kinds map[string]*playbook.MasterKind) []listGap {
+	var gaps []listGap
+	for _, kind := range playbook.NeededKinds(t) {
+		tm := s.lib.Masters[kind]
+		if missing := playbook.MissingDetails(kinds[kind], tm); len(missing) > 0 {
+			g := listGap{Kind: kind, List: listLabel(tm) + "s"}
+			for _, f := range missing {
+				g.Details = append(g.Details, ask.Label(f))
+			}
+			gaps = append(gaps, g)
+		}
+	}
+	return gaps
+}
+
+// addListDetails adds to the business's lists the details template t's lists have and theirs lack,
+// keeping the business's own changes to those lists.
+func (s *Server) addListDetails(r *http.Request, tx pgx.Tx, t *playbook.Playbook, by ledger.Actor) error {
+	kinds, err := playbook.Kinds(r.Context(), tx)
+	if err != nil {
+		return err
+	}
+	for _, kind := range playbook.NeededKinds(t) {
+		missing := playbook.MissingDetails(kinds[kind], s.lib.Masters[kind])
+		if len(missing) == 0 {
+			continue
+		}
+		merged, err := kinds[kind].WithDetails(missing)
+		if err != nil {
+			return err
+		}
+		if _, err := playbook.SaveKind(r.Context(), tx, merged, by); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// scheduleLine describes how a process starts on its own (D75, R), or is nil for one that doesn't.
+func (s *Server) scheduleLine(r *http.Request, tx pgx.Tx, c *call, u playbook.InUse, lib *playbook.Library) (*scheduleLine, error) {
+	if u.Playbook.Schedule == nil {
+		return nil, nil
+	}
+	p, ok, err := start.For(r.Context(), tx, u.PlaybookID, time.Now().In(c.tenant.Zone))
+	if err != nil || !ok {
+		return nil, err
+	}
+	if p.Problem != "" {
+		return &scheduleLine{Warn: true, Text: "Schedule stopped: " + p.Problem + ". Nothing starts on its own until the list has it again."}, nil
+	}
+	sc := p.Schedule
+	entries, detail := human(p.Kind)+"s", human(sc.Where)
+	if mk := lib.Masters[p.Kind]; mk != nil {
+		entries = strings.ToLower(listLabel(mk)) + "s"
+		for _, f := range mk.Fields {
+			if f.Key == sc.Where {
+				detail = ask.Label(f)
+			}
+		}
+	}
+	line := &scheduleLine{Text: fmt.Sprintf("Starts on its own: %s on the %s, for %s with “%s” ticked (%d now).",
+		start.Every(sc.Every), ordinal(sc.Day), entries, detail, p.Now)}
+	switch {
+	case !p.Active:
+		line.Text += " Switched off for new work, so it starts nothing now."
+	case p.HeldBack():
+		line.Warn = true
+		line.Text += fmt.Sprintf(" Held back: %d %s match, the limit is %d. Untick some, or raise max_per_run in a new version; the %s run then starts at Seyal's next check.",
+			len(p.Entries), entries, sc.Limit(), p.Period.Name)
+	case p.Ready && !p.Decided:
+		line.Text += " The " + p.Period.Name + " run starts at Seyal's next check."
+	case p.Ready && len(p.Waiting()) > 0:
+		line.Text += fmt.Sprintf(" The %s run has %d still to start, at Seyal's next checks.", p.Period.Name, len(p.Waiting()))
+	default:
+		line.Text += " Next run: " + p.Next().RunDay.Format("2 Jan 2006") + "."
+	}
+	return line, nil
+}
+
+// ordinal writes a day of the month as people say it: 1st, 2nd, 3rd, 4th, 11th, 21st.
+func ordinal(n int) string {
+	suffix := "th"
+	switch {
+	case n%100 >= 11 && n%100 <= 13:
+	case n%10 == 1:
+		suffix = "st"
+	case n%10 == 2:
+		suffix = "nd"
+	case n%10 == 3:
+		suffix = "rd"
+	}
+	return strconv.Itoa(n) + suffix
 }
 
 func (s *Server) processList(inUse []playbook.InUse) *processList {
@@ -144,8 +269,12 @@ func (s *Server) row(p *playbook.Playbook, active bool) processRow {
 	if p.Approvals != nil {
 		slots = len(p.Approvals.Slots)
 	}
+	summary := fmt.Sprintf("%d fields · %d states · %d approvals", len(p.Fields), len(p.States), slots)
+	if sc := p.Schedule; sc != nil {
+		summary += " · starts on its own " + start.Every(sc.Every)
+	}
 	return processRow{ID: p.ID, Name: sentence(p.ID), Description: p.Description, Version: p.Version, Active: active,
-		Summary: fmt.Sprintf("%d fields · %d states · %d approvals", len(p.Fields), len(p.States), slots)}
+		Summary: summary}
 }
 
 // processView describes one process in plain words.
@@ -154,8 +283,12 @@ func (s *Server) processView(u playbook.InUse, lib *playbook.Library) *processVi
 	d := describer{p: p, lib: lib}
 	pv := &processView{processRow: s.row(p, u.Active), Numbering: p.Numbering, Versions: u.Versions,
 		CurrentID: u.Current.ID, Source: u.Current.Source}
+	pv.ScheduleRule = d.schedule()
 	if t := s.lib.Playbooks[p.ID]; t != nil && t.Version != p.Version {
 		pv.Template = t.Version
+		if rule := (describer{p: t, lib: lib}).schedule(); rule != pv.ScheduleRule {
+			pv.TemplateSchedule, pv.TemplateNoSchedule = rule, rule == ""
+		}
 	}
 
 	states := make([]string, len(p.States))
@@ -223,6 +356,58 @@ func (s *Server) processView(u playbook.InUse, lib *playbook.Library) *processVi
 type describer struct {
 	p   *playbook.Playbook
 	lib *playbook.Library
+}
+
+// schedule describes the process's schedule (D75, R) in plain words, without live counts, for example
+// "Monthly on the 1st, for the month just ended: for members with “Wants a reminder” ticked, at
+// most 30 a run. Fills Period with the period's name. Due by: the 20th of the month after the period."
+// It is "" for a process that doesn't start on its own. Every part of the schedule is in it, so a change
+// to any part shows under a draft's "What changes".
+func (d describer) schedule() string {
+	sc := d.p.Schedule
+	if sc == nil {
+		return ""
+	}
+	kind := sc.ForEach
+	if f := d.field(sc.ForEach); f != nil && f.Kind != "" {
+		kind = f.Kind
+	}
+	entries, detail := human(kind)+"s", human(sc.Where)
+	if d.lib != nil {
+		if mk := d.lib.Masters[kind]; mk != nil {
+			entries = strings.ToLower(listLabel(mk)) + "s"
+			for _, f := range mk.Fields {
+				if f.Key == sc.Where {
+					detail = ask.Label(f)
+				}
+			}
+		}
+	}
+	when := "just ended"
+	if sc.Period == "current" {
+		when = "just starting"
+	}
+	line := fmt.Sprintf("%s on the %s, for the %s %s: for %s with “%s” ticked, at most %d a run.",
+		capital(start.Every(sc.Every)), ordinal(sc.Day), sc.Every, when, entries, detail, sc.Limit())
+	if sc.PeriodField != "" {
+		line += " Fills " + d.label(sc.PeriodField) + " with the period's name."
+	}
+	if due := sc.Due; due.Field != "" {
+		on := "the last day"
+		if due.Day != "last" {
+			on = "the " + ordinal(due.DueDay())
+		}
+		switch due.MonthsAfter {
+		case 0:
+			on += " of the period's last month"
+		case 1:
+			on += " of the month after the period"
+		default:
+			on += fmt.Sprintf(", %d months after the period", due.MonthsAfter)
+		}
+		line += " " + d.label(due.Field) + ": " + on + "."
+	}
+	return line
 }
 
 func (d describer) field(key string) *playbook.Field {
@@ -332,6 +517,9 @@ func (d describer) literal(v any) string {
 	return fmt.Sprint(v)
 }
 
+// errListGap stops adding a template whose lists' details the business lacks; the page offers to add them.
+var errListGap = errors.New("the lists lack details the template needs")
+
 // addProcess starts using a shipped template, or drafts a new process from plain words.
 func (s *Server) addProcess(w http.ResponseWriter, r *http.Request, c *call) {
 	if r.PostFormValue("action") != "" {
@@ -343,12 +531,25 @@ func (s *Server) addProcess(w http.ResponseWriter, r *http.Request, c *call) {
 		http.NotFound(w, r)
 		return
 	}
+	var gap *addGap
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		by := ledger.PersonActor(c.session.PersonID)
+		if r.PostFormValue("lists") == "add" {
+			// The admin pressed "Add them and use version ...": first the details the lists lack.
+			if err := s.addListDetails(r, tx, t, by); err != nil {
+				return err
+			}
+		}
 		if err := playbook.EnsureKinds(r.Context(), tx, s.lib, t, by); err != nil {
 			return err
 		}
 		if err := s.checkForBusiness(r, tx, t); err != nil {
+			kinds, kerr := playbook.Kinds(r.Context(), tx)
+			if gaps := s.listGaps(t, kinds); kerr == nil && len(gaps) > 0 {
+				// The business's own lists lack details the template's have (D75, R): offer to add them.
+				gap = &addGap{ID: t.ID, Name: sentence(t.ID), Version: t.Version, Gaps: gaps}
+				return errListGap
+			}
 			return err
 		}
 		if err := playbook.EnsureStarted(r.Context(), tx, s.lib, t, by); err != nil {
@@ -357,6 +558,12 @@ func (s *Server) addProcess(w http.ResponseWriter, r *http.Request, c *call) {
 		_, err := playbook.EnsureUsed(r.Context(), tx, t, by)
 		return err
 	})
+	if errors.Is(err, errListGap) {
+		// The banner at the top says so too: the advice itself is further down, perhaps out of sight.
+		s.showProcessesWith(w, r, c, "", http.StatusUnprocessableEntity, "",
+			gap.Name+" needs details your lists don't have yet. See below to add them.", gap)
+		return
+	}
 	if err != nil {
 		s.showProcesses(w, r, c, "", http.StatusUnprocessableEntity, "", capital(err.Error())+".")
 		return
@@ -393,22 +600,8 @@ func (s *Server) changeProcess(w http.ResponseWriter, r *http.Request, c *call) 
 			if r.PostFormValue("action") == "template_lists" {
 				// First add the details the template's lists have and the business's lack, keeping
 				// the business's own changes to those lists.
-				kinds, err := playbook.Kinds(r.Context(), tx)
-				if err != nil {
+				if err := s.addListDetails(r, tx, t, by); err != nil {
 					return err
-				}
-				for _, kind := range playbook.NeededKinds(t) {
-					missing := playbook.MissingDetails(kinds[kind], s.lib.Masters[kind])
-					if len(missing) == 0 {
-						continue
-					}
-					merged, err := kinds[kind].WithDetails(missing)
-					if err != nil {
-						return err
-					}
-					if _, err := playbook.SaveKind(r.Context(), tx, merged, by); err != nil {
-						return err
-					}
 				}
 			}
 			if err := playbook.EnsureKinds(r.Context(), tx, s.lib, t, by); err != nil {

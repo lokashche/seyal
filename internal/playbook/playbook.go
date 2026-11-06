@@ -36,6 +36,9 @@ type Playbook struct {
 	Approvals   *Approvals          `yaml:"approvals"`
 	Deadlines   []Deadline          `yaml:"deadlines"`
 	On          map[string][]Action `yaml:"on"` // state → actions to run on entering it
+	// Schedule starts work on its own, every period, one item for each ticked list entry (D75, R).
+	// nil: the process starts only from a message or from linked work.
+	Schedule *Schedule `yaml:"schedule"`
 
 	Source     []byte      `yaml:"-"` // the exact file contents
 	Hash       [32]byte    `yaml:"-"` // sha256 of Source, used to spot changed files

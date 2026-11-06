@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -48,6 +49,14 @@ type office struct {
 
 func newOffice(t *testing.T) *office {
 	t.Helper()
+	return openOffice(t, false)
+}
+
+// openOffice is newOffice, with the demo's recurring Monthly return too when schedules is true (D75,
+// R). Without it a pretend day past the 1st of a month would also start the month's returns, so the
+// other tests leave it out.
+func openOffice(t *testing.T, schedules bool) *office {
+	t.Helper()
 	ctx := context.Background()
 	owner, app := testdb.Connect(t)
 	lib, err := playbook.LoadLibrary("../../examples/playbooks", "../../examples/masters")
@@ -60,6 +69,12 @@ func newOffice(t *testing.T) *office {
 	}
 	f.Business.Slug = "test-" + strings.ToLower(rand.Text()[:10])
 	f.Business.DaysOff = nil
+	if !schedules {
+		f.Processes = slices.DeleteFunc(f.Processes, func(id string) bool { return id == "monthly-return" })
+		if err := f.Check(lib); err != nil { // the processes it imports are worked out by Check
+			t.Fatal(err)
+		}
+	}
 	for i, p := range f.People {
 		f.People[i].Email = p.Key + "@" + f.Business.Slug + ".kaveri-demo.example"
 	}

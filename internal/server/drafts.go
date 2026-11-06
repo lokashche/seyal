@@ -193,6 +193,10 @@ func changes(before, after *processView) []string {
 
 func plainLines(pv *processView) []string {
 	lines := []string{"Description: " + pv.Description, "Numbered " + pv.Numbering, "Steps: " + pv.States}
+	if pv.ScheduleRule != "" {
+		// Seyal starts work on its own with it, so adding, removing or changing it must show.
+		lines = append(lines, "Starts on its own: "+pv.ScheduleRule)
+	}
 	for _, f := range pv.Fields {
 		l := fmt.Sprintf("Detail %s: %s", f.Label, f.Type)
 		if f.Required {

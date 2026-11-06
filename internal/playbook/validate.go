@@ -475,6 +475,7 @@ func (p *Playbook) CheckNew() error {
 	// (engine.PowerFields): only whoever has the item or an admin may change it (D72), and a value the AI
 	// model or a voice note gives it needs the person's Yes first (D74).
 	problems = append(problems, p.timingProblems()...)
+	problems = append(problems, p.scheduleProblems()...)
 	if len(problems) == 0 {
 		return nil
 	}

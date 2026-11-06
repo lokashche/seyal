@@ -136,6 +136,18 @@
   <li class="none">No processes yet. Describe one below, or add one from the templates.</li>
   {{end}}
 </ul>
+{{with .Gap}}
+<div class="callout">
+  <p><b>{{.Name}} needs details your lists don't have yet:</b>
+    {{range $i, $g := .Gaps}}{{if $i}}; {{end}}{{range $j, $d := $g.Details}}{{if $j}}, {{end}}{{$g.List}} → {{$d}}{{end}}{{end}}.</p>
+  <form method="post" action="/t/{{$.Slug}}/settings/processes" class="sform inline">
+    <input type="hidden" name="template" value="{{.ID}}"><input type="hidden" name="lists" value="add">
+    <button class="btn sm">Add {{if gt (len .Gaps) 1}}them{{else}}{{with index .Gaps 0}}{{if gt (len .Details) 1}}them{{else}}it{{end}}{{end}}{{end}} and use version {{.Version}}</button>
+    {{range .Gaps}}<a class="btn ghost sm" href="/t/{{$.Slug}}/settings/lists/{{.Kind}}">See {{.List}}</a>{{end}}
+  </form>
+  <p class="why">Only the missing details are added; your own changes to the lists stay. Entries get the new details empty, to fill in later.</p>
+</div>
+{{end}}
 {{template "describe" (dict "Slug" $.Slug "Action" (print "/t/" $.Slug "/settings/processes") "On" .DraftOn "New" true)}}
 {{with .Templates}}
 <h3>Templates you can add</h3>
@@ -155,6 +167,9 @@
 <p><a href="/t/{{$.Slug}}/settings/processes">← All processes</a></p>
 <h2>{{.Name}} <span class="pill {{if .Active}}p-ok{{else}}p-closed{{end}}">{{if .Active}}in use{{else}}switched off{{end}}</span></h2>
 <p class="why">{{.Description}} · version {{.Version}} · numbered {{.Numbering}}</p>
+{{with .Schedule}}{{if .Warn}}<p class="callout warn" role="status">{{.Text}}</p>{{else}}<p class="why">{{.Text}}</p>{{end}}{{end}}
+{{if .Template}}{{with .TemplateSchedule}}<p class="why">Template version {{$.Data.Process.Template}} starts on its own: {{.}}</p>
+{{else}}{{if .TemplateNoSchedule}}<p class="why">Template version {{.Template}} doesn't start work on its own.</p>{{end}}{{end}}{{end}}
 
 <form method="post" action="/t/{{$.Slug}}/settings/processes/{{.ID}}" class="sform inline">
   {{if .Active}}<button class="btn ghost sm" name="action" value="disable">Switch off for new work</button>
@@ -211,6 +226,7 @@
 {{with .Approvals}}<h3>Approvals</h3><ul class="rows plain">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
 {{with .OnState}}<h3>What Seyal does by itself</h3><ul class="rows plain">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
 {{with .Deadlines}}<h3>Deadlines</h3><ul class="rows plain">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
+{{with .ScheduleRule}}<h3>Starts on its own</h3><p class="why">{{.}}</p>{{end}}
 {{end}}
 
 {{define "describe"}}

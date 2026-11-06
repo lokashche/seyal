@@ -178,6 +178,10 @@ func (b *builder) describe(kind string, change map[string]any, it workitem.Item)
 	str := func(key string) string { s, _ := change[key].(string); return s }
 	switch kind {
 	case "item.started":
+		if reason := str("reason"); str("via") == "schedule" && reason != "" {
+			// "Monthly schedule: Nov 2026, for Acme Traders" (D75, R)
+			return "started this from the " + strings.ToLower(reason[:1]) + reason[1:] + "."
+		}
 		return "started " + it.Number
 	case "item.fields_set":
 		if change["copied_from"] != nil {
