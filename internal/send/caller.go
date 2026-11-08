@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Package send holds Seyal's safe outgoing caller: the one way Seyal itself calls an address on
-// the internet (phone notes now, other apps later). It refuses every address it wasn't told to
-// allow, checks the real IP address at the moment of connecting, follows no redirect, uses no
-// proxy, gives up after a fixed time, reads only a little of the reply, and never puts the address
-// it called into an error.
+// the internet (phone notes and other apps). It refuses every address it wasn't told to allow,
+// checks the real IP address at the moment of connecting, follows at most one redirect (and only to
+// a host it was told about), uses no proxy, gives up after a fixed time, reads only a little of the
+// reply, and never puts the address it called into an error. It also signs what goes to other apps
+// (Standard Webhooks) and guards text against spreadsheet formulas.
 //
 // The word for Go's HTTP type is not written here (the engine's word list forbids it), so the
 // caller copies http.DefaultClient and changes the copy.
@@ -20,6 +21,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -52,11 +54,14 @@ func (f *Failure) Error() string { return f.Reason }
 func fail(reason string) error { return &Failure{Reason: reason} }
 
 // Answer is what the other side said: its reply code, its Retry-After header (empty if none) and at
-// most the caller's reply limit of its reply.
+// most the caller's reply limit of its reply. For a redirect that was not followed, Body is empty (a
+// redirect's page repeats the full address it points to) and RedirectHost holds only the host it
+// pointed to, never the rest of the address.
 type Answer struct {
-	Status     int
-	RetryAfter string
-	Body       []byte
+	Status       int
+	RetryAfter   string
+	Body         []byte
+	RedirectHost string
 }
 
 // Caller makes outgoing calls to allowed hosts only. Make one with New; it is safe to share between
@@ -64,6 +69,7 @@ type Answer struct {
 type Caller struct {
 	hostOK   func(host string) bool
 	maxReply int64
+	timeout  time.Duration // for the whole call, a followed redirect included
 	do       func(*http.Request) (*http.Response, error)
 	anyPort  bool // only tests set it, to reach a fake on a random port
 }
@@ -96,7 +102,7 @@ func newCaller(hostOK func(host string) bool, timeout time.Duration, maxReply in
 	c.Timeout = timeout
 	// Never follow a redirect: the 3xx answer itself comes back, like any other answer.
 	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &Caller{hostOK: hostOK, maxReply: maxReply, do: c.Do}
+	return &Caller{hostOK: hostOK, maxReply: maxReply, timeout: timeout, do: c.Do}
 }
 
 // CheckAddress checks a web address before any call: https, no name and password in it, no port
@@ -137,10 +143,19 @@ func plainName(host string) bool {
 	return true
 }
 
-// Post sends body to address with the given headers, and returns the answer. A call that got any
-// answer, even 4xx or 5xx, returns that answer and no error; the caller of Post decides what the
-// code means. Its error is always a *Failure.
+// Post sends body to address with the given headers, and returns the answer. It follows no
+// redirect. A call that got any answer, even 3xx, 4xx or 5xx, returns that answer and no error; the
+// caller of Post decides what the code means. Its error is always a *Failure.
 func (c *Caller) Post(ctx context.Context, address string, header http.Header, body []byte) (Answer, error) {
+	return c.PostRedirect(ctx, address, nil, header, body)
+}
+
+// PostRedirect is Post, but it follows one redirect when it points to an https address whose host
+// is in redirectTo and also allowed by the caller's host list. The second address gets the same
+// checks as the first (and the same IP check when connecting). After a 307 or 308 the body and
+// headers are sent again; after a 301, 302 or 303 the second call is a plain GET with neither. Any
+// other redirect, or a second one, comes back as the 3xx answer itself.
+func (c *Caller) PostRedirect(ctx context.Context, address string, redirectTo []string, header http.Header, body []byte) (Answer, error) {
 	u, err := checkAddress(address, c.hostOK, c.anyPort)
 	if err != nil {
 		return Answer{}, err
@@ -152,9 +167,35 @@ func (c *Caller) Post(ctx context.Context, address string, header http.Header, b
 			}
 		}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	res, err := c.call(ctx, http.MethodPost, u, header, body)
 	if err != nil {
-		return Answer{}, fail(ReasonAddress)
+		return Answer{}, err
+	}
+	if next := c.redirectTo(res, redirectTo); next != nil {
+		io.Copy(io.Discard, io.LimitReader(res.Body, c.maxReply)) // so the connection can be used again
+		res.Body.Close()
+		method, h, b := http.MethodGet, http.Header(nil), []byte(nil)
+		if res.StatusCode == http.StatusTemporaryRedirect || res.StatusCode == http.StatusPermanentRedirect {
+			method, h, b = http.MethodPost, header, body
+		}
+		if res, err = c.call(ctx, method, next, h, b); err != nil {
+			return Answer{}, err
+		}
+	}
+	return c.answer(res), nil
+}
+
+// call makes one request. Its error is always a *Failure.
+func (c *Caller) call(ctx context.Context, method string, u *url.URL, header http.Header, body []byte) (*http.Response, error) {
+	var r io.Reader
+	if body != nil {
+		r = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), r)
+	if err != nil {
+		return nil, fail(ReasonAddress)
 	}
 	req.Header = header.Clone()
 	if req.Header == nil {
@@ -162,14 +203,58 @@ func (c *Caller) Post(ctx context.Context, address string, header http.Header, b
 	}
 	res, err := c.do(req)
 	if err != nil {
-		return Answer{}, fail(reason(err))
+		return nil, fail(reason(err))
 	}
+	return res, nil
+}
+
+// isRedirect reports whether code is one of the five redirect codes.
+func isRedirect(code int) bool {
+	switch code {
+	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther,
+		http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+		return true
+	}
+	return false
+}
+
+// redirectTo returns the address a redirect answer may be followed to, or nil when it isn't a
+// redirect or may not be followed: not https, a host not in allowed (or not on the caller's own
+// list), another port, or too long.
+func (c *Caller) redirectTo(res *http.Response, allowed []string) *url.URL {
+	if len(allowed) == 0 || !isRedirect(res.StatusCode) {
+		return nil
+	}
+	loc, err := res.Location() // relative addresses are read against the first address
+	if err != nil {
+		return nil
+	}
+	ok := func(host string) bool { return c.hostOK(host) && slices.Contains(allowed, host) }
+	next, err := checkAddress(loc.String(), ok, c.anyPort)
+	if err != nil {
+		return nil
+	}
+	return next
+}
+
+// answer reads the reply. A redirect answer keeps only the host it points to, and no body.
+func (c *Caller) answer(res *http.Response) Answer {
 	defer res.Body.Close()
+	a := Answer{Status: res.StatusCode, RetryAfter: res.Header.Get("Retry-After")}
+	if isRedirect(res.StatusCode) {
+		if loc, err := res.Location(); err == nil {
+			if host := strings.ToLower(loc.Hostname()); plainName(host) {
+				a.RedirectHost = host
+			}
+		}
+		return a
+	}
 	reply, err := io.ReadAll(io.LimitReader(res.Body, c.maxReply))
 	if err != nil {
 		reply = nil // a reply that broke off: the code still counts
 	}
-	return Answer{Status: res.StatusCode, RetryAfter: res.Header.Get("Retry-After"), Body: reply}, nil
+	a.Body = reply
+	return a
 }
 
 // errBlocked is what the dial check returns; reason turns it into ReasonBlocked.
