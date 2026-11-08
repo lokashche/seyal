@@ -341,8 +341,8 @@ type Poster interface {
 	PostRedirect(ctx context.Context, address string, redirectTo []string, header http.Header, body []byte) (Answer, error)
 }
 
-// The test send's fictional data (design 2.3): the sample sheet script puts rows whose number starts
-// with TEST- on a tab of their own.
+// The test send's fictional data (design 2.3): the body says "test": true, and the sample sheet
+// script puts those rows on a tab of their own (by that mark, never by the number).
 const (
 	TestNumber = "TEST-0000"
 	TestName   = "Acme Traders"
