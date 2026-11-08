@@ -83,3 +83,20 @@ func TestOtherAppsSaid(t *testing.T) {
 		t.Errorf("a re-import with sending on and the hosts listed says %q, want nothing", out.String())
 	}
 }
+
+// TestPublicURL: SEYAL_PUBLIC_URL (D96) is the server's own https address, for an item's link in a
+// send; empty leaves links out, and anything else stops the start.
+func TestPublicURL(t *testing.T) {
+	get := func(v string) func(string) string { return func(string) string { return v } }
+	for v, want := range map[string]string{"": "", "https://seyal.example": "https://seyal.example",
+		"https://seyal.example/": "https://seyal.example"} {
+		if got, err := publicURL(get(v)); err != nil || got != want {
+			t.Errorf("publicURL(%q) = %q, %v; want %q", v, got, err, want)
+		}
+	}
+	for _, bad := range []string{"http://seyal.example", "https://seyal.example/app", "seyal.example", "https://seyal.example?x=1"} {
+		if _, err := publicURL(get(bad)); err == nil {
+			t.Errorf("publicURL(%q) was accepted", bad)
+		}
+	}
+}

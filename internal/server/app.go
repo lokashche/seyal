@@ -108,6 +108,23 @@ type itemView struct {
 	Share    []shareView // the Share panel's messages (D91): "Tell a colleague" first
 	// ChatLinks shows the Share panel's chat link button (SEYAL_SHARE_CHAT_LINKS, D92).
 	ChatLinks bool
+	// Other apps (D96): the "will send" lines, the sends that wait or failed, and whether the person is
+	// an admin (who may press Send again or Leave it).
+	WillSend []willSendView
+	Sends    []sendView
+	Admin    bool
+}
+
+// willSendView is one "When approved, Seyal will send to …" line.
+type willSendView struct {
+	When, To, Label, Service, Line string
+	Link                           bool // the item's link goes too
+}
+
+// sendView is one send of the item that hasn't gone yet, or failed.
+type sendView struct {
+	ID, Label, Text string
+	Failed          bool
 }
 
 type entryView struct {
@@ -477,6 +494,10 @@ func (v *view) item(id string) (*itemView, error) {
 	}
 	iv.ChatLinks = v.chatLinks
 
+	if err := v.sends(iv); err != nil {
+		return nil, err
+	}
+
 	if p.Approvals != nil {
 		st, err := workitem.Approvals(v.ctx, v.tx, id)
 		if err != nil {
@@ -507,6 +528,49 @@ func (v *view) item(id string) (*itemView, error) {
 		}
 	}
 	return iv, nil
+}
+
+// sends fills the item's "Other apps" part (D96): what will be sent if the item moves on, and its
+// sends that wait or failed (a send that went is in the thread).
+func (v *view) sends(iv *itemView) error {
+	plans, err := workitem.SendPlans(v.ctx, v.tx, iv.Item)
+	if err != nil {
+		return err
+	}
+	for _, p := range plans {
+		iv.WillSend = append(iv.WillSend, willSendView{When: human(p.State), To: p.To, Label: cmp.Or(p.Label, p.To),
+			Service: p.Service, Line: p.Line, Link: p.Link})
+	}
+	list, err := workitem.ItemSends(v.ctx, v.tx, iv.Item.ID)
+	if err != nil {
+		return err
+	}
+	for _, s := range list {
+		sv := sendView{ID: s.ID, Label: s.Label, Failed: s.Failed}
+		switch {
+		case s.Done, s.Left:
+			continue
+		case s.Failed && s.LastReason == workitem.ReasonTooBig:
+			sv.Text = "Couldn't send to “" + s.Label + "”: the item's details are " + s.LastReason + ". An admin can press Leave it."
+		case s.Expired:
+			sv.Text = "Couldn't send to “" + s.Label + "” within 24 hours"
+			if s.LastReason != "" {
+				sv.Text += " (" + s.LastReason + ")"
+			}
+			sv.Text += ". An admin can press Send again."
+		case s.Failed:
+			sv.Text = "Couldn't send to “" + s.Label + "” (" + s.LastReason + "). An admin can fix it, then press Send again."
+		case s.Tries == 0 && s.LastReason != "":
+			sv.Text = "Waiting to send to “" + s.Label + "”: " + s.LastReason + ". It expires 24 hours after it was queued."
+		case s.Tries == 0 || s.LastReason == "":
+			sv.Text = "Sending to “" + s.Label + "” in a moment."
+		default:
+			sv.Text = "Couldn't send to “" + s.Label + "” yet (" + s.LastReason + "). Trying again at " + v.when(s.NextAt) + "."
+		}
+		iv.Sends = append(iv.Sends, sv)
+	}
+	iv.Admin = v.c.admin()
+	return nil
 }
 
 // quick offers one-tap answers for the question Seyal is waiting on, when there are few choices.

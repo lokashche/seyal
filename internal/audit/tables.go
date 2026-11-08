@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Package audit checks that the tables Seyal keeps for screens (work items, approvals, links,
-// master items, lists, playbook versions, messages, voice transcripts and other apps) match what the ledger says happened. The ledger is the
+// master items, lists, playbook versions, messages, voice transcripts, other apps and sends) match what the ledger says happened. The ledger is the
 // record; the tables are a convenient copy. Anyone who edits a table directly, bypassing Seyal,
 // is caught here.
 package audit
@@ -42,7 +42,7 @@ func CheckTables(ctx context.Context, tx pgx.Tx) ([]Problem, error) {
 		return nil, err
 	}
 	c := &checker{ctx: ctx, tx: tx, want: want}
-	for _, check := range []func() error{c.items, c.approvals, c.links, c.masters, c.kinds, c.playbooks, c.messages, c.transcripts, c.otherApps} {
+	for _, check := range []func() error{c.items, c.approvals, c.links, c.masters, c.kinds, c.playbooks, c.messages, c.transcripts, c.otherApps, c.sends} {
 		if err := check(); err != nil {
 			return nil, err
 		}
@@ -63,7 +63,26 @@ type expected struct {
 	transcripts map[string]bool
 	// otherApps are the SHA-256 of each other app's row (send.Target.Hash), by name (D95)
 	otherApps map[string]string
+	// sends are each send's body SHA-256, as its item.send_queued events recorded it, and how its last
+	// event says it ended, by send id (D96)
+	sends map[string]sendWant
 }
+
+// sendWant is what the ledger says about one send: its body's SHA-256, and how it ended (sendEnd).
+type sendWant struct {
+	SHA256 string
+	End    string
+}
+
+// How a send ended, as its last event says (or as its row shows): it waits (queued, or queued again),
+// it went, it failed, it expired; "left " before failed or expired: an admin's Leave it.
+const (
+	endWaiting = "waiting"
+	endDone    = "done"
+	endFailed  = "failed"
+	endExpired = "expired"
+	endLeft    = "left "
+)
 
 type approval struct {
 	PersonID   string
@@ -100,6 +119,7 @@ func replay(ctx context.Context, tx pgx.Tx) (expected, error) {
 		messages:    map[string]channel.Message{},
 		transcripts: map[string]bool{},
 		otherApps:   map[string]string{},
+		sends:       map[string]sendWant{},
 	}
 	rows, err := tx.Query(ctx, `SELECT body FROM ledger WHERE tenant_id = current_tenant() ORDER BY seq`)
 	if err != nil {
@@ -218,6 +238,36 @@ func (w expected) apply(kind, subject, actor string, payload json.RawMessage) er
 	}
 	if p.Item != nil {
 		w.items[subject] = *p.Item
+	}
+	if slices.Contains(workitem.SendKinds, kind) {
+		var q struct {
+			Send    string `json:"send"`
+			SHA256  string `json:"body_sha256"`
+			Expired bool   `json:"expired"`
+		}
+		if err := json.Unmarshal(p.Change, &q); err != nil {
+			return err
+		}
+		sw := w.sends[q.Send]
+		switch kind {
+		case workitem.KindSendQueued:
+			if _, ok := w.sends[q.Send]; ok && sw.SHA256 != q.SHA256 {
+				sw.SHA256 = "differs between its events"
+			} else {
+				sw.SHA256 = q.SHA256
+			}
+			sw.End = endWaiting
+		case workitem.KindSendDone:
+			sw.End = endDone
+		case workitem.KindSendFailed:
+			sw.End = endFailed
+			if q.Expired {
+				sw.End = endExpired
+			}
+		case workitem.KindSendLeft:
+			sw.End = endLeft + sw.End
+		}
+		w.sends[q.Send] = sw
 	}
 	if kind == "item.decided" {
 		var d struct {
@@ -550,4 +600,63 @@ func (c *checker) otherApps() error {
 	}
 	leftovers(c, "other_apps", c.want.otherApps)
 	return nil
+}
+
+// sends checks each send in the outbox (D96) against its events: every send in the ledger has its row,
+// every row is in the ledger, the row's body is still the exact one the ledger recorded (its SHA-256,
+// kept in the row too), and how the row says it ended (went, failed, expired, left, or still waiting)
+// is what its last event says. Each try (tries, next_at, last_*) is operational, like ai_calls, and isn't
+// checked. A problem names only the send id. tx must come from db.WithTenant.
+func (c *checker) sends() error {
+	rows, err := c.tx.Query(c.ctx, `
+		SELECT id, body, body_sha256, done_at IS NOT NULL, gave_up_at IS NOT NULL, expired_at IS NOT NULL,
+			left_at IS NOT NULL
+		FROM sends WHERE tenant_id = current_tenant() ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, body, stored string
+		var done, gaveUp, expired, left bool
+		if err := rows.Scan(&id, &body, &stored, &done, &gaveUp, &expired, &left); err != nil {
+			return err
+		}
+		w, ok := c.want.sends[id]
+		delete(c.want.sends, id)
+		sum := sha256.Sum256([]byte(body))
+		switch {
+		case !ok:
+			c.add("sends", id, "not in the ledger (added outside Seyal)")
+		case stored != w.SHA256:
+			c.add("sends", id, "its body's fingerprint differs from the ledger")
+		case hex.EncodeToString(sum[:]) != w.SHA256:
+			c.add("sends", id, "its body was changed outside Seyal")
+		case rowEnd(done, gaveUp, expired, left) != w.End:
+			c.add("sends", id, "how it ended differs from the ledger (changed outside Seyal)")
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	leftovers(c, "sends", c.want.sends)
+	return nil
+}
+
+// rowEnd is how a sends row says the send ended (the table allows at most one of done, gave up and
+// expired).
+func rowEnd(done, gaveUp, expired, left bool) string {
+	end := endWaiting
+	switch {
+	case done:
+		end = endDone
+	case gaveUp:
+		end = endFailed
+	case expired:
+		end = endExpired
+	}
+	if left {
+		end = endLeft + end
+	}
+	return end
 }

@@ -280,6 +280,17 @@ func (f *File) Check(lib *playbook.Library) error {
 		}
 		apps[o.Name] = true
 	}
+	// A process's `do: send` may go only to an other app this file lists, and only with fields (and the
+	// link) that app may receive (D96): switching the process on here is when that is checked.
+	var targets []send.Target
+	for _, o := range f.OtherApps {
+		targets = append(targets, o.target())
+	}
+	for _, id := range slices.Sorted(maps.Keys(f.chosen.Playbooks)) {
+		for _, p := range send.CheckProcess(targets, f.chosen.Playbooks[id]) {
+			add("process %s: %s", id, p)
+		}
+	}
 	for _, name := range f.NewSecrets {
 		if !apps[name] {
 			add("--new-secret %q: the file lists no other app by that name", name)

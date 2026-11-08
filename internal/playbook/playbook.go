@@ -202,14 +202,18 @@ type Deadline struct {
 
 // Action is something Seyal does automatically, e.g. post a message or assign someone.
 type Action struct {
-	Do      string            `yaml:"do"`       // post, assign, copy, start, tell_parent
+	Do      string            `yaml:"do"`       // post, assign, copy, start, tell_parent, send
 	Text    string            `yaml:"text"`     // for post
-	To      string            `yaml:"to"`       // person field, for assign; the field to fill, for copy
+	To      string            `yaml:"to"`       // person field, for assign; the field to fill, for copy; the other app's name, for send
 	From    string            `yaml:"from"`     // the field to copy from, for copy
 	Process string            `yaml:"process"`  // for start: the id of the process to start as linked work
 	Action  string            `yaml:"action"`   // for tell_parent: the parent's action to take
 	Copy    map[string]string `yaml:"copy"`     // for start: child field → this field; for tell_parent: parent field → this field
 	IfEmpty bool              `yaml:"if_empty"` // for copy: only while the field to fill is still empty
+	// For send (D96): the fields that go to the other app (each must be on the app's own list in the
+	// business's set-up file), and whether the item's link goes too (the app must allow it).
+	Fields []string `yaml:"fields"`
+	Link   bool     `yaml:"link"`
 }
 
 // Parse reads one playbook from YAML. Unknown keys are errors, so typos are caught.

@@ -385,6 +385,35 @@
     </details>
     {{end}}
 
+    {{if or .WillSend .Sends}}
+    {{/* Other apps (D96): what Seyal will send when the item gets to a step that sends, so approvers see
+         it before they approve; and a send that waits or failed, with Send again and Leave it for admins. */}}
+    <details class="sec" open id="sends"><summary>Other apps</summary>
+      {{range .WillSend}}
+      <div class="willsend">
+        <p>When {{.When}}, Seyal will send to “{{.Label}}”:</p>
+        <p class="code">{{.Line}}</p>
+        <p class="why">{{if .Service}}Leaves Seyal: these values{{if .Link}} and the item's link (this server's address and the item's id){{end}}, to {{.Service}}.{{else}}The business's set-up file lists no other app called {{.To}}, so this can't go.{{end}}</p>
+      </div>
+      {{end}}
+      {{range .Sends}}
+      <div class="ap">
+        <div>{{.Text}}</div>
+        {{if and .Failed $.Data.Item.Admin}}
+        <form method="post" action="/t/{{$.Slug}}/items/{{$.Data.Item.Item.ID}}/send-again">
+          <input type="hidden" name="send" value="{{.ID}}">
+          <button class="btn sm" aria-label="Send again to {{.Label}}">Send again</button>
+        </form>
+        <form method="post" action="/t/{{$.Slug}}/items/{{$.Data.Item.Item.ID}}/leave-send">
+          <input type="hidden" name="send" value="{{.ID}}">
+          <button class="btn ghost sm" aria-label="Leave the send to {{.Label}}: it won't go">Leave it</button>
+        </form>
+        {{end}}
+      </div>
+      {{end}}
+    </details>
+    {{end}}
+
     {{with .Actions}}
     <details class="sec first-on-phones" open><summary>Actions</summary>
     <div class="acts">

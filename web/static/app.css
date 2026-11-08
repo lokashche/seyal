@@ -303,6 +303,7 @@ details.evt.shared > summary::-webkit-details-marker { display: none; }
 .sform.wide { max-width: none; }
 code, .code { font-family: var(--f-mono); font-size: 12.5px; }
 .code { line-height: 1.5; white-space: pre; tab-size: 2; }
+.willsend .code { white-space: normal; overflow-wrap: anywhere; margin: 4px 0; } /* the "will send" line wraps on phones (D96) */
 .panel .banner { border-radius: 8px; } /* messages sit inside the pane they belong to, so nothing else moves */
 .panel div.banner { margin: 12px 0; border-radius: 8px; white-space: normal; }
 .main-pane > .banner { flex: none; }

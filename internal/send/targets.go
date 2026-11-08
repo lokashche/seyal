@@ -298,6 +298,44 @@ func Pause(ctx context.Context, tx pgx.Tx, name string, paused bool, by string) 
 	return err == nil, err
 }
 
+// Seyal's own reasons to pause a target (D96): its address was switched off (410), or it got more
+// than CapPerHour sends in an hour.
+const (
+	WhyGone = "gone"
+	WhyCap  = "cap"
+)
+
+// CapPerHour is the most sends one target gets in an hour (design 2.3, step 6).
+const CapPerHour = 30
+
+// SeyalPause pauses a target for Seyal's own reason why (WhyGone or WhyCap), unless it is already
+// paused in the app. Like an admin's Pause, it is a business.updated ledger event (by Seyal), written in
+// the same transaction; an admin's Resume ends it. It reports whether anything changed. The caller holds
+// the ledger head lock (ledger.Lock). tx must come from db.WithTenant.
+func SeyalPause(ctx context.Context, tx pgx.Tx, name, why string) (bool, error) {
+	if why != WhyGone && why != WhyCap {
+		return false, errors.New("send: pause: unknown reason")
+	}
+	t, err := Find(ctx, tx, name)
+	if err != nil || t.State.Paused() {
+		return false, err
+	}
+	var tenantID string
+	if err := tx.QueryRow(ctx, `SELECT current_tenant()::text`).Scan(&tenantID); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO other_app_state (tenant_id, name, paused_at, why) VALUES (current_tenant(), $1, now(), $2)
+		ON CONFLICT (tenant_id, name) DO UPDATE SET paused_at = excluded.paused_at, paused_by = NULL, why = excluded.why`,
+		name, why); err != nil {
+		return false, fmt.Errorf("send: pause: %w", err)
+	}
+	_, err = ledger.Append(ctx, tx, ledger.Event{Kind: "business.updated", SubjectType: "business", SubjectID: tenantID,
+		Payload: map[string]any{"changes": map[string]any{pausedKey + name: map[string]any{"old": false, "new": true, "why": why}}}}.
+		By(ledger.SystemActor))
+	return err == nil, err
+}
+
 // Poster sends one post: *Caller is one, and tests use a fake.
 type Poster interface {
 	PostRedirect(ctx context.Context, address string, redirectTo []string, header http.Header, body []byte) (Answer, error)

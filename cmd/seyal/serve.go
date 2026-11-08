@@ -25,9 +25,11 @@ import (
 	"seyal/internal/db"
 	"seyal/internal/media"
 	"seyal/internal/notify"
+	"seyal/internal/outbox"
 	"seyal/internal/playbook"
 	"seyal/internal/push"
 	"seyal/internal/server"
+	"seyal/internal/workitem"
 )
 
 // secureCookies decides whether login cookies are sent only over HTTPS: as set ("true" or "false"),
@@ -112,13 +114,17 @@ func runServe(out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if workitem.PublicURL, err = publicURL(os.Getenv); err != nil {
+		return err
+	}
 	reader := newReader(app, out, pusher)
+	sender := outbox.New(app, log.New(out, "", log.LstdFlags), sendOn, sendHosts, nil)
 	srv, err := server.New(server.Config{
 		App: app, Store: media.Disk{Dir: mediaDir}, Library: lib, AI: aiSetup,
 		SecureCookies: secureCookies(os.Getenv("SEYAL_SECURE_COOKIES"), os.Getenv("SEYAL_ADDR")),
 		BehindProxy:   os.Getenv("SEYAL_BEHIND_PROXY") == "true",
 		PushKey:       pushPublic,
-		Poke:          reader.Poke,
+		Poke:          func(id string) { reader.Poke(id); sender.Poke(id) },
 		ChatLinks:     chat,
 		SendOn:        sendOn,
 		SendHosts:     sendHosts,
@@ -138,7 +144,7 @@ func runServe(out io.Writer) error {
 	// The chaser runs next to the web server and stops with it: on Ctrl+C it starts nothing new, and
 	// serve waits for it within the same 10 seconds it gives the requests in progress.
 	var chasing sync.WaitGroup
-	loops(ctx, &chasing, app, out, every, reader)
+	loops(ctx, &chasing, app, out, every, reader, sender)
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
@@ -147,7 +153,7 @@ func runServe(out io.Writer) error {
 		defer cancel()
 		hs.Shutdown(shutdown)
 		if !waitFor(shutdown, &chasing) {
-			fmt.Fprintln(out, "The chaser or the phone-note reader didn't stop in time; the database undoes its unfinished change.")
+			fmt.Fprintln(out, "The chaser, the phone-note reader or the sender didn't stop in time; the database undoes its unfinished change.")
 		}
 	}()
 
@@ -186,9 +192,12 @@ func newReader(app db.Beginner, out io.Writer, pusher *push.Sender) *notify.Read
 }
 
 // loops starts what runs next to the web server until ctx ends, each counted in wg: the chaser,
-// unless every is 0 (SEYAL_CHASE_EVERY=off), and always the phone-note reader. The reader is its own
-// loop, not a chaser task, so it runs with the chaser off too. It returns what it started.
-func loops(ctx context.Context, wg *sync.WaitGroup, app db.Beginner, out io.Writer, every time.Duration, reader *notify.Reader) []string {
+// unless every is 0 (SEYAL_CHASE_EVERY=off), and always the phone-note reader and the sender to other
+// apps (D96). Those two are loops of their own, not chaser tasks, so they run with the chaser off too.
+// The sender runs even with SEYAL_SEND off: queued sends then expire after 24 hours. It returns what it
+// started.
+func loops(ctx context.Context, wg *sync.WaitGroup, app db.Beginner, out io.Writer, every time.Duration, reader *notify.Reader,
+	sender *outbox.Sender) []string {
 	var started []string
 	if every > 0 {
 		c := chase.New(app, log.New(out, "", log.LstdFlags))
@@ -196,7 +205,8 @@ func loops(ctx context.Context, wg *sync.WaitGroup, app db.Beginner, out io.Writ
 		started = append(started, "chaser")
 	}
 	wg.Go(func() { reader.Run(ctx, notify.Every) })
-	return append(started, "phone-note reader")
+	wg.Go(func() { sender.Run(ctx, outbox.Every) })
+	return append(started, "phone-note reader", "sender to other apps")
 }
 
 // waitFor waits for wg until ctx ends, and reports whether wg finished in time.

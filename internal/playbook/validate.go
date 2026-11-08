@@ -398,6 +398,9 @@ func (v *validator) deadlinesAndActions() {
 			if a.IfEmpty && a.Do != "copy" {
 				v.add("%s: if_empty only goes with copy", where)
 			}
+			if (len(a.Fields) > 0 || a.Link) && a.Do != "send" {
+				v.add("%s: fields and link only go with send", where)
+			}
 			switch a.Do {
 			case "post":
 				if a.Text == "" || a.To != "" || a.From != "" {
@@ -435,12 +438,35 @@ func (v *validator) deadlinesAndActions() {
 				for _, parent := range slices.Sorted(maps.Keys(a.Copy)) {
 					v.fieldRef(a.Copy[parent], where+": tell_parent: copy")
 				}
+			case "send":
+				// Send to another app (D96): "to" names one of the business's other apps (its set-up file);
+				// whether that app exists and may receive these fields is checked when the process is
+				// switched on in a business, since the app list belongs to the business, not the process.
+				if !sendName.MatchString(a.To) || a.Text != "" || a.From != "" || a.Process != "" || a.Action != "" || len(a.Copy) > 0 {
+					v.add(`%s: send needs "to" (the other app's name from the set-up file, like sheet-one) and "fields", nothing else but "link"`, where)
+				}
+				if len(a.Fields) == 0 {
+					v.add("%s: send needs fields: the fields that go to the other app", where)
+				}
+				for i, key := range a.Fields {
+					if strings.Contains(key, ".") {
+						v.add("%s: send: %q: send the process's own fields only (not a detail of a list entry)", where, key)
+					} else {
+						v.fieldRef(key, where+": send")
+					}
+					if slices.Contains(a.Fields[:i], key) {
+						v.add("%s: send lists %s twice", where, key)
+					}
+				}
 			default:
-				v.add("%s: unknown action %q (use post, assign, copy, start or tell_parent)", where, a.Do)
+				v.add("%s: unknown action %q (use post, assign, copy, start, tell_parent or send)", where, a.Do)
 			}
 		}
 	}
 }
+
+// sendName is what an other app's name looks like (as in the business's set-up file).
+var sendName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 // ReservedMoves are Seyal's own chat words for moving work between people (D68). A new process may
 // not name a move after one of them, so a typed "take it" always means the same thing.

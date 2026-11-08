@@ -260,6 +260,28 @@ func (v *view) myWork() (*myWork, error) {
 		add(lost, "with someone no longer in the step's role", link("team", proc))
 		add(nobody, "that nobody can take", link("team", proc))
 		add(stuck, "couldn't escalate", link("team", proc))
+		// Sends to other apps that failed or expired and weren't left (D96), for the whole business: Leaves
+		// Seyal lists them, each with its item, where an admin presses Send again or Leave it. And other
+		// apps Seyal paused (too many sends in an hour, or 410): their sends wait until an admin resumes.
+		var failed, paused int
+		if err := v.tx.QueryRow(v.ctx, `SELECT
+			(SELECT count(*) FROM sends WHERE tenant_id = current_tenant()
+				AND (gave_up_at IS NOT NULL OR expired_at IS NOT NULL) AND left_at IS NULL),
+			(SELECT count(*) FROM other_app_state s JOIN other_apps a ON a.tenant_id = s.tenant_id AND a.name = s.name
+				WHERE s.tenant_id = current_tenant() AND s.paused_at IS NOT NULL AND s.why IN ('cap', 'gone'))`).
+			Scan(&failed, &paused); err != nil {
+			return nil, err
+		}
+		if failed == 1 {
+			add(1, "send failed", "settings/processes#leaves-seyal")
+		} else {
+			add(failed, "sends failed", "settings/processes#leaves-seyal")
+		}
+		if paused == 1 {
+			add(1, "other app paused by Seyal", "settings/processes#leaves-seyal")
+		} else {
+			add(paused, "other apps paused by Seyal", "settings/processes#leaves-seyal")
+		}
 		held, err := v.heldSchedules(proc)
 		if err != nil {
 			return nil, err

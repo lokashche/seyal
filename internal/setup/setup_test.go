@@ -197,3 +197,32 @@ func TestOtherAppsInTheFile(t *testing.T) {
 		t.Errorf("a problem shows the address: %v", err)
 	}
 }
+
+// TestSendsInTheFile: a process in the set-up file may send only to an other app the file lists, with
+// fields that app may receive (D96). The demo-only copy of Job evaluation fits the demo's app; with the
+// app's list cut down, or the app left out, the file is refused, naming the process and the field.
+func TestSendsInTheFile(t *testing.T) {
+	lib, err := playbook.LoadLibrary("../../examples/playbooks", "../../examples/masters")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := Load(demoPath, lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Processes = []string{"job-evaluation-send.yaml"}
+	if err := f.Check(lib); err != nil {
+		t.Fatalf("the demo with its send copy: %v", err)
+	}
+	if v := f.chosen.Playbooks["job-evaluation"].Version; v != "0.7-send" {
+		t.Errorf("job-evaluation is version %s, want the demo-only 0.7-send", v)
+	}
+	f.OtherApps[0].Fields = []string{"client"}
+	if err := f.Check(lib); err == nil || !strings.Contains(err.Error(), "process job-evaluation: on approved: send to jobs-sheet: jobs-sheet may not receive fee_agreed") {
+		t.Errorf("an app that may receive only client: %v", err)
+	}
+	f.OtherApps = nil
+	if err := f.Check(lib); err == nil || !strings.Contains(err.Error(), "lists no other app called jobs-sheet") {
+		t.Errorf("no other apps: %v", err)
+	}
+}

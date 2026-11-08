@@ -1,0 +1,160 @@
+# DEMO ONLY: the fictional demo business's own copy of the Job evaluation sample (D42, D96). It is the
+# shipped template (examples/playbooks/job-evaluation.yaml, version 0.7) plus one line under
+# "on: approved": when a job is approved, Seyal sends its main details to the demo's other app "Jobs
+# sheet (demo)" (listed under other_apps in demo.yaml). The shared template stays without it, because
+# every business on the template would otherwise queue sends to an app it doesn't have.
+#
+# Nothing is really sent unless the server has SEYAL_SEND=on and the app's host in SEYAL_SEND_HOSTS; the
+# demo's address is made up (.example names never reach anyone).
+id: job-evaluation
+version: "0.7-send"
+description: Evaluate a new piece of client work. Sales agrees the basics, Operations plans it and confirms the fee, then it is approved before work starts.
+examples:
+  - "New monthly bookkeeping job for Acme Traders, fee 12000"
+  - "Acme Traders wants annual accounts done, agreed 30000, they send data by 15th"
+numbering: "J-{yyyy}-{seq:4}"
+title: "{client} — {nature_of_work}"
+roles: [sales, ops, owner]
+
+fields:
+  - { key: client, label: Client, type: master, kind: client, required: true, ask: "Which client is this for?" }
+  - key: nature_of_work
+    label: Nature of work
+    type: master
+    kind: work_type
+    required: true
+    ask: "What kind of work is it?"
+    prefill:
+      required_documents: documents
+      timeline_days: timeline_days
+      maker: maker
+      checker: checker
+      reviewer: reviewer
+      standard_fee: standard_fee
+      est_hours: est_hours
+  - { key: reason, label: Reason for job, type: text, required: true, ask: "Why does the client need this?" }
+  - { key: required_documents, label: Documents required, type: list, of: text, ask: "Which documents do we need from the client?" }
+  - { key: resources, label: Resources, type: list, of: person, ask: "Who will work on it?" }
+  - { key: timeline_days, label: Timeline (days), type: number, ask: "How many days will it take?" }
+  - { key: maker, label: Maker, type: person, ask: "Who will do the work (maker)?" }
+  - { key: checker, label: Checker, type: person }
+  - { key: reviewer, label: Reviewer, type: person }
+  - { key: est_hours, label: Estimated hours, type: number }
+  - { key: standard_fee, label: Standard fee, type: money, readonly: true }
+  - { key: fee_agreed, label: Fee agreed, type: money, required: true, ask: "What fee do we confirm?" }
+  - { key: fee_proposed, label: Fee proposed by Sales, type: money, readonly: true }
+  - { key: advance, label: Advance, type: money, ask: "Any advance received?" }
+  - { key: client_data_due, label: Client data due, type: date, ask: "When will the client send their data?" }
+  - { key: scope_exclusions, label: Scope exclusions, type: text }
+  - { key: integrity_check, label: Integrity check, type: choice, options: [pass, fail], required: true, ask: "Did the integrity check pass?" }
+  - { key: payment_terms, label: Payment terms, type: text, ask: "What are the payment terms?" }
+  # Filled when the Requirement study reports back.
+  - { key: study_findings, label: Study findings, type: text, readonly: true }
+  # The work type the job was sent to be studied for, so a job sent again for the same work type
+  # isn't studied a second time (a different new work type is studied again).
+  - { key: studied_work_type, label: Work type studied, type: master, kind: work_type, readonly: true }
+
+states: [draft, studying, with_ops, pending_approval, approved, cancelled]
+initial: draft
+
+# Who has the job in each step, and what Seyal asks there. Sales may give a fee when they know it;
+# Operations must confirm one. Work that comes back to a step goes to whoever last had it there.
+steps:
+  draft:
+    owner: starter
+    returns_to: last
+    asks: [client, nature_of_work, reason, integrity_check]
+    needs: [client, nature_of_work, reason, integrity_check]
+  with_ops:
+    owner: "role:ops"
+    pass_to: ["role:ops"] # people in Operations, or the Operations team
+    returns_to: last
+    remind_after: 2 days # working days in this step before Seyal reminds whoever has the job
+    escalate_after: 4 days # working days before Seyal hands it on...
+    escalate_to: "role:owner" # ...to the Owner team
+    asks: [required_documents, timeline_days, maker, fee_agreed]
+    needs: [required_documents, timeline_days, maker, fee_agreed]
+  pending_approval:
+    remind_after: 1 day # remind the approvers still missing; no escalation here
+
+transitions:
+  # New work for the team is studied first, but only once for each work type; everything else goes
+  # straight to Operations.
+  - action: send_to_ops
+    from: [draft]
+    to: studying
+    when: required_filled
+    who: [holder]
+    if:
+      all:
+        - { field: nature_of_work.is_new, eq: true }
+        - { field: nature_of_work, ne: { field: studied_work_type }, if_missing: true } # not studied yet
+  - { action: send_to_ops, from: [draft], to: with_ops, when: required_filled, who: [holder] }
+  - { action: study_done, from: [studying], to: with_ops, by: seyal }
+  - { action: submit, from: [with_ops], to: pending_approval, when: required_filled, who: [holder] }
+  - { action: back_to_sales, from: [with_ops], to: draft, needs: reason, back: true, who: [holder] }
+  - action: cancel
+    from: [draft, studying, with_ops, pending_approval, approved]
+    to: cancelled
+    needs: reason
+    who: [holder, starter, "role:owner"]
+
+approvals:
+  in: pending_approval
+  on_complete: approved
+  on_reject: draft
+  on_reject_back: true # a refusal sends the job back to whoever had the draft, without the draft's on: actions
+  slots:
+    - { slot: ops, role: ops }
+    # Sales confirms again only when the fee is not the one Sales proposed (or Sales gave none).
+    - slot: sales
+      role: sales
+      required_if: { field: fee_agreed, ne: { field: fee_proposed } }
+    - slot: owner
+      role: owner
+      required_if:
+        any:
+          - { field: nature_of_work.fixed_price, ne: true }
+          - { field: fee_agreed, lt: { field: standard_fee } }
+          - { field: nature_of_work.is_new, eq: true }
+          - { field: client.is_new, eq: true, if_missing: false } # a client never marked new isn't new
+          - { field: integrity_check, eq: fail }
+
+deadlines:
+  - { due_from: client_data_due }
+
+on:
+  # The fee Sales proposed is copied each time Sales sends the job out, so it is always the fee Sales
+  # last sent. If anyone changes the fee after that, Sales is asked to approve it.
+  studying:
+    - { do: copy, from: nature_of_work, to: studied_work_type }
+    - { do: copy, from: fee_agreed, to: fee_proposed }
+    - { do: start, process: requirement-study, copy: { client: client, nature_of_work: nature_of_work, reason: reason } }
+    - { do: post, text: "This is new work for the team, so Operations will study it first. The job continues when the study is done." }
+  with_ops:
+    - { do: copy, from: fee_agreed, to: fee_proposed }
+    - { do: post, text: "Over to Operations. Please check the documents, timeline, people and fee (most are filled in from the work type), change anything that's off, then say \"submit\". Say \"back to sales because ...\" if Sales needs to look again." }
+  approved:
+    - { do: post, text: "Approved. Over to {maker}." }
+    - { do: assign, to: maker }
+    # Send to the demo's other app (the most it may receive is its "fields" in demo.yaml). The item's
+    # link is not sent (link: false).
+    - do: send
+      to: jobs-sheet
+      fields: [client, nature_of_work, fee_agreed, advance, timeline_days]
+      link: false
+
+# Ready messages for the Work Item's Share panel, after Seyal's own "Tell a colleague" (D92). Seyal fills
+# them in; the person checks the words and sends them from their own app (Seyal sends nothing). "to:
+# outside" is for someone with no login, so it never carries {link}, and only people who may change the
+# job see it. "contact:" points at the client, whose list says which details are a phone and an email.
+share:
+  - id: ask-documents
+    label: Ask the client for documents
+    to: outside
+    contact: client
+    in: [studying, with_ops]
+    text: >
+      Dear {client}, for our work on {number} ({nature_of_work}), please send:
+      {required_documents}. We need them by {client_data_due}.
+      Thank you, {me}, {business}

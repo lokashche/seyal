@@ -195,6 +195,9 @@
       <span class="r">Paused {{.PausedWhy}}. Nothing goes to it until someone presses Resume.</span>
     {{else}}<span class="pill p-ok">on</span>{{end}}
     {{with .LastTest}}<span class="r">Last test {{.}}.</span>{{end}}
+    {{with .LastSent}}<span class="r">Last sent {{.}}.</span>{{end}}
+    {{if .Waiting}}<span class="r">Waiting to go: {{.Waiting}}.</span>{{end}}
+    {{with .Failed}}<span class="r">Couldn't send ({{len .}}), open the item to press Send again or Leave it: {{range $i, $f := .}}{{if $i}}, {{end}}<a href="/t/{{$.Slug}}/items/{{$f.ID}}#sends">{{$f.Number}}</a>{{end}}.</span>{{end}}
   </div>
   <form method="post" action="/t/{{$.Slug}}/settings/other-apps/{{.Name}}#leaves-seyal" class="sform inline">
     <button class="btn ghost sm" name="do" value="test" aria-label="Send a test to {{.Label}}">Send a test</button>
@@ -202,6 +205,12 @@
     {{else}}<button class="btn ghost sm" name="do" value="pause" aria-label="Pause sending to {{.Label}}">Pause</button>{{end}}
   </form>
   </div></li>
+  {{end}}
+  {{with .Gone}}
+  <li><div class="row-head"><div>
+    <b>Apps no longer in the set-up file</b>
+    <span class="r">Couldn't send ({{len .}}), because the business's set-up file no longer lists the other app. Open the item to press Leave it: {{range $i, $f := .}}{{if $i}}, {{end}}<a href="/t/{{$.Slug}}/items/{{$f.ID}}#sends">{{$f.Number}}</a>{{end}}.</span>
+  </div></div></li>
   {{end}}
 </ul>
 {{with .Test}}

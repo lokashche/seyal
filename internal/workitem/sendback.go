@@ -35,6 +35,9 @@ type arrival struct {
 	back   bool   // a rewind: a move marked back, or a refusal with on_reject_back
 	from   string // the person who sent it there (pressed the move, or refused); "" for Seyal
 	note   string // the reason they gave
+	// by made the change that brought it there (a move's own actor; Seyal for approvals settling). A
+	// send says when Seyal, not a person's decision, moved the item into the sending state (D96).
+	by ledger.Actor
 }
 
 // dest is who gets an item that enters a step.

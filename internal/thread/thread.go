@@ -20,6 +20,7 @@ import (
 	"seyal/internal/channel"
 	"seyal/internal/engine"
 	"seyal/internal/playbook"
+	"seyal/internal/send"
 	"seyal/internal/workitem"
 )
 
@@ -86,6 +87,7 @@ type builder struct {
 	numbers map[string]string // item id → number, for links
 	before  engine.Fields     // the item's fields before the event being described
 	batches map[string]int    // batch id → how many items that press moved (see batchSize)
+	after   map[string]string // send id → its queueing's "after" (workitem.AfterSeyal), as read so far
 	entries []Entry
 }
 
@@ -269,9 +271,60 @@ func (b *builder) describe(kind string, change map[string]any, it workitem.Item)
 			return "copied " + label
 		}
 		return "handed " + label + " to the phone's share menu"
+	case workitem.KindSendQueued, workitem.KindSendDone, workitem.KindSendFailed, workitem.KindSendLeft:
+		return b.sent(kind, change, it)
 	}
 	return ""
 }
+
+// sent describes a send to another app (D96) in plain words. Honest words only: an app "answered OK",
+// never "it is in the sheet". Queueing itself says nothing (the outcome follows, and the sidebar shows
+// a send that waits); an admin's Send again does.
+func (b *builder) sent(kind string, change map[string]any, it workitem.Item) string {
+	str := func(key string) string { s, _ := change[key].(string); return s }
+	is := func(key string) bool { v, _ := change[key].(bool); return v }
+	label := "“" + cmp.Or(str("label"), str("to")) + "”"
+	reason := str("reason")
+	if b.after == nil {
+		b.after = map[string]string{}
+	}
+	switch kind {
+	case workitem.KindSendQueued:
+		if is("again") {
+			return "pressed Send again for " + label
+		}
+		b.after[str("send")] = str("after")
+		return ""
+	case workitem.KindSendDone:
+		text := fmt.Sprintf("sent %s to %s (it %s)", it.Number, label, cmp.Or(reason, send.ReasonOK))
+		if b.after[str("send")] == workitem.AfterSeyal {
+			text += ", after a move by Seyal"
+		}
+		return text
+	case workitem.KindSendLeft:
+		return "chose to leave the send to " + label + ": it won't go"
+	}
+	switch {
+	case is("too_big"):
+		return "couldn't send to " + label + ": the item's details are " + workitem.ReasonTooBig +
+			", so nothing went. An admin can press Leave it."
+	case is("expired"):
+		text := "couldn't send to " + label + " within 24 hours"
+		if reason != "" {
+			text += " (" + reason + ")"
+		}
+		return text + ". An admin can press Send again."
+	case is("gave_up"):
+		return fmt.Sprintf("gave up sending to %s after %d tries (%s). An admin can press Send again.", label,
+			int(num(change["tries"])), reason)
+	case is("gone"):
+		return "couldn't send to " + label + ": its address was switched off (" + reason + "), so Seyal paused it. An admin must fix it, then press Send again."
+	}
+	return "couldn't send to " + label + ": " + reason + ". An admin must fix it, then press Send again."
+}
+
+// num reads a JSON number, or 0.
+func num(v any) float64 { f, _ := v.(float64); return f }
 
 // shared reads an item.shared event's change. The message's label comes from the item's own process
 // version, so it reads the same however the process changes later.

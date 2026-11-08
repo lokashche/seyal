@@ -4,6 +4,8 @@ package main
 
 import (
 	"errors"
+	"net/url"
+	"strings"
 
 	"seyal/internal/send"
 )
@@ -38,4 +40,20 @@ func sending(getenv func(string) string) (bool, send.Hosts, error) {
 		return true, hosts, nil
 	}
 	return false, nil, errors.New(`SEYAL_SEND must be "on" or "off"`)
+}
+
+// publicURL reads SEYAL_PUBLIC_URL (D96): the server's own https address, "https://seyal.example",
+// used only for the item's link in a send whose process and other app both allow it (the sender runs
+// with no web request to take the address from). Empty leaves every link out. Anything but a plain
+// https address with no path stops the start.
+func publicURL(getenv func(string) string) (string, error) {
+	v := strings.TrimRight(strings.TrimSpace(getenv("SEYAL_PUBLIC_URL")), "/")
+	if v == "" {
+		return "", nil
+	}
+	u, err := url.Parse(v)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.Path != "" || u.RawQuery != "" || u.User != nil {
+		return "", errors.New("SEYAL_PUBLIC_URL must be the server's https address, like https://seyal.example, with no path")
+	}
+	return v, nil
 }

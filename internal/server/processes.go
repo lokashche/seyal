@@ -20,6 +20,7 @@ import (
 	"seyal/internal/ledger"
 	"seyal/internal/notify"
 	"seyal/internal/playbook"
+	"seyal/internal/send"
 	"seyal/internal/start"
 )
 
@@ -48,6 +49,7 @@ type leavesView struct {
 	// Other apps (D95): the server's switch, one line per other app, and a test just sent.
 	SendOn bool
 	Apps   []appLine
+	Gone   []failedSend // failed sends to apps the set-up file no longer lists
 	Test   *testView
 }
 
@@ -370,6 +372,28 @@ func (s *Server) processView(u playbook.InUse, lib *playbook.Library) *processVi
 				parts = append(parts, fmt.Sprintf("Seyal says %q", act.Text))
 			case "assign":
 				parts = append(parts, "assign to "+d.label(act.To))
+			case "copy":
+				line := "keep " + d.label(act.From) + " in " + d.label(act.To)
+				if act.IfEmpty {
+					line += " (only the first time)"
+				}
+				parts = append(parts, line)
+			case "start":
+				parts = append(parts, "start "+sentence(act.Process)+" as linked work")
+			case "tell_parent":
+				parts = append(parts, "tell the item it came from: "+human(act.Action))
+			case "send":
+				// "send Name, Amount to the other app sheet-one" (D96): the app's label and service
+				// live in the business's set-up file, Leaves Seyal below shows them.
+				labels := make([]string, len(act.Fields))
+				for i, f := range act.Fields {
+					labels[i] = d.label(f)
+				}
+				line := "send " + strings.Join(labels, ", ") + " to the other app " + act.To
+				if act.Link {
+					line += ", with the item's link"
+				}
+				parts = append(parts, line)
 			}
 		}
 		pv.OnState = append(pv.OnState, "When "+human(st)+": "+strings.Join(parts, "; "))
@@ -648,10 +672,24 @@ func (s *Server) changeProcess(w http.ResponseWriter, r *http.Request, c *call) 
 			notice = "Switched off for new work. Work already started carries on."
 			if on {
 				notice = "Switched on."
+				inUse, err := playbook.ListInUse(r.Context(), tx)
+				if err != nil {
+					return err
+				}
+				for _, u := range inUse {
+					if u.PlaybookID == id {
+						if err := checkVersionSends(r, tx, u.Current.ID); err != nil {
+							return err
+						}
+					}
+				}
 			}
 			return playbook.SetActive(r.Context(), tx, id, on, by)
 		case "use":
 			notice = "New work now starts on the chosen version."
+			if err := checkVersionSends(r, tx, r.PostFormValue("version")); err != nil {
+				return err
+			}
 			return playbook.Use(r.Context(), tx, r.PostFormValue("version"), by)
 		case "template", "template_lists":
 			t := s.lib.Playbooks[id]
@@ -748,13 +786,55 @@ func (s *Server) startedBehind(r *http.Request, tx pgx.Tx, t *playbook.Playbook)
 	return strings.Join(notes, ""), nil
 }
 
-// checkForBusiness checks a process against the business's own lists.
+// checkForBusiness checks a process against the business's own lists, and its sends against the
+// business's other apps (D96).
 func (s *Server) checkForBusiness(r *http.Request, tx pgx.Tx, p *playbook.Playbook) error {
 	lib, err := playbook.ForBusiness(r.Context(), tx, s.lib)
 	if err != nil {
 		return err
 	}
-	return lib.Check(p)
+	if err := lib.Check(p); err != nil {
+		return err
+	}
+	return checkSends(r, tx, p)
+}
+
+// checkSends refuses a process whose `do: send` goes to an other app the business's set-up file doesn't
+// list, or with fields (or the link) that app may not receive (D96): checked whenever a version is
+// switched on for new work.
+func checkSends(r *http.Request, tx pgx.Tx, p *playbook.Playbook) error {
+	if len(send.Sends(p)) == 0 {
+		return nil
+	}
+	listed, err := send.Targets(r.Context(), tx)
+	if err != nil {
+		return err
+	}
+	targets := make([]send.Target, len(listed))
+	for i, l := range listed {
+		targets[i] = l.Target
+	}
+	if problems := send.CheckProcess(targets, p); len(problems) > 0 {
+		return &playbook.ValidationError{Name: fmt.Sprintf("process %q", p.ID), Problems: problems}
+	}
+	return nil
+}
+
+// checkVersionSends is checkSends for a stored version (by its id), before it is switched on.
+func checkVersionSends(r *http.Request, tx pgx.Tx, versionID string) error {
+	var source string
+	switch err := tx.QueryRow(r.Context(), `SELECT source FROM playbook_versions WHERE tenant_id = current_tenant() AND id::text = $1`,
+		versionID).Scan(&source); {
+	case errors.Is(err, pgx.ErrNoRows):
+		return nil // not a version here: playbook.Use says so in plain words
+	case err != nil:
+		return err
+	}
+	p, err := playbook.Parse([]byte(source))
+	if err != nil {
+		return err
+	}
+	return checkSends(r, tx, p)
 }
 
 // explainListGap turns a failed check of a template version into advice, when the reason is that the
@@ -794,6 +874,9 @@ func (s *Server) leavesFor(r *http.Request, tx pgx.Tx, c *call, inUse []playbook
 	}
 	lv := leavesView{Server: s.pushKey != "", File: ns.On, Hours: ns.Hours.String(), Paused: ns.Paused(), SendOn: s.sendOn}
 	if lv.Apps, err = s.appLines(r.Context(), tx, c, inUse); err != nil {
+		return lv, err
+	}
+	if lv.Gone, err = goneApps(r.Context(), tx); err != nil {
 		return lv, err
 	}
 	if lv.Paused {

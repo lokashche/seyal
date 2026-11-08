@@ -15,6 +15,7 @@ import (
 
 	"seyal/internal/ask"
 	"seyal/internal/db"
+	"seyal/internal/ledger"
 	"seyal/internal/playbook"
 	"seyal/internal/send"
 	"seyal/internal/workitem"
@@ -39,7 +40,15 @@ type appLine struct {
 	PausedWhy                        string // "by Chitra at 11:02", or why Seyal paused it
 	HostsOff                         string // its hosts not in SEYAL_SEND_HOSTS (its own, or one it redirects to)
 	LastTest                         string // "on 8 Nov at 14:02: answered OK"
+	// Its sends (D96): the last one that went ("at 14:02: answered OK"), how many wait, and the items
+	// whose send failed or expired (an admin presses Send again on the item).
+	LastSent string
+	Waiting  int
+	Failed   []failedSend
 }
+
+// failedSend is an item whose send to an other app failed or expired.
+type failedSend struct{ ID, Number string }
 
 // testView is what a test just sent: the exact data (the body before signing) and the answer.
 type testView struct {
@@ -107,6 +116,9 @@ func (s *Server) appLines(ctx context.Context, tx pgx.Tx, c *call, inUse []playb
 				return nil, err
 			}
 			l.LastTest = when(t.State.TestedAt, c.tenant.Zone) + " by " + who + ": " + t.State.TestResult
+		}
+		if err := sendCounts(ctx, tx, c, &l); err != nil {
+			return nil, err
 		}
 		lines = append(lines, l)
 	}
@@ -231,4 +243,91 @@ func pretty(body []byte) string {
 		return string(body)
 	}
 	return b.String()
+}
+
+// sendAgain is an admin's [Send again] on an item, for a send that failed or expired (D96): the same
+// send, with the same body and id, goes again from the start (tries and its 24 hours). It is an
+// item.send_queued ledger event by the admin.
+func (s *Server) sendAgain(w http.ResponseWriter, r *http.Request, c *call) {
+	id := r.PathValue("id")
+	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
+		return workitem.SendAgain(r.Context(), tx, id, r.PostFormValue("send"), ledger.PersonActor(c.session.PersonID))
+	})
+	switch {
+	case errors.Is(err, workitem.ErrNotFound):
+		http.NotFound(w, r)
+	case errors.Is(err, workitem.ErrNotFailed):
+		s.showScreen(w, r, c, id, http.StatusConflict, "This send hasn't failed, so there is nothing to send again.")
+	case errors.Is(err, workitem.ErrCantGoAgain):
+		s.showScreen(w, r, c, id, http.StatusConflict, "Sending this again can't work: it is too long to send, or the "+
+			"business's set-up file no longer lists its other app. Press Leave it if it shouldn't go.")
+	case err != nil:
+		s.fail(w, r, err)
+	default:
+		notice := "Queued again. Seyal sends it in a moment."
+		if !s.sendOn {
+			notice = "Queued again, but sending is switched off on this server (SEYAL_SEND), so it waits."
+		}
+		s.show(w, r, c, id, http.StatusOK, "", notice)
+	}
+}
+
+// leaveSend is an admin's [Leave it] on an item, for a send that failed or expired (D96): the send won't
+// go, and it no longer counts as failed. It is an item.send_left ledger event by the admin.
+func (s *Server) leaveSend(w http.ResponseWriter, r *http.Request, c *call) {
+	id := r.PathValue("id")
+	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
+		return workitem.LeaveSend(r.Context(), tx, id, r.PostFormValue("send"), ledger.PersonActor(c.session.PersonID))
+	})
+	switch {
+	case errors.Is(err, workitem.ErrNotFound):
+		http.NotFound(w, r)
+	case errors.Is(err, workitem.ErrNotFailed):
+		s.showScreen(w, r, c, id, http.StatusConflict, "This send hasn't failed, so there is nothing to leave.")
+	case err != nil:
+		s.fail(w, r, err)
+	default:
+		s.show(w, r, c, id, http.StatusOK, "", "Left. This send won't go.")
+	}
+}
+
+// goneApps lists failed sends whose other app the set-up file no longer lists (D96), newest first (at
+// most 20), so Leaves Seyal shows every failed send My Work counts.
+func goneApps(ctx context.Context, tx pgx.Tx) ([]failedSend, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT w.id::text, w.number FROM sends s JOIN work_items w ON w.tenant_id = s.tenant_id AND w.id = s.item_id
+		WHERE s.tenant_id = current_tenant() AND (s.gave_up_at IS NOT NULL OR s.expired_at IS NOT NULL) AND s.left_at IS NULL
+			AND NOT EXISTS (SELECT 1 FROM other_apps a WHERE a.tenant_id = s.tenant_id AND a.name = s.target)
+		ORDER BY coalesce(s.gave_up_at, s.expired_at) DESC LIMIT 20`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[failedSend])
+}
+
+// sendCounts fills an other app's line with its sends (D96): the last that went, how many wait, and
+// the items whose send failed or expired, newest first (at most 20).
+func sendCounts(ctx context.Context, tx pgx.Tx, c *call, l *appLine) error {
+	var lastAt *time.Time
+	var lastReason string
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE done_at IS NULL AND gave_up_at IS NULL AND expired_at IS NULL),
+			max(done_at), coalesce((SELECT last_reason FROM sends WHERE tenant_id = current_tenant() AND target = $1
+				AND done_at IS NOT NULL ORDER BY done_at DESC LIMIT 1), '')
+		FROM sends WHERE tenant_id = current_tenant() AND target = $1`, l.Name).Scan(&l.Waiting, &lastAt, &lastReason); err != nil {
+		return err
+	}
+	if lastAt != nil {
+		l.LastSent = when(*lastAt, c.tenant.Zone) + ": " + lastReason
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT w.id::text, w.number FROM sends s JOIN work_items w ON w.tenant_id = s.tenant_id AND w.id = s.item_id
+		WHERE s.tenant_id = current_tenant() AND s.target = $1 AND (s.gave_up_at IS NOT NULL OR s.expired_at IS NOT NULL)
+			AND s.left_at IS NULL
+		ORDER BY coalesce(s.gave_up_at, s.expired_at) DESC LIMIT 20`, l.Name)
+	if err != nil {
+		return err
+	}
+	l.Failed, err = pgx.CollectRows(rows, pgx.RowToStructByPos[failedSend])
+	return err
 }

@@ -518,13 +518,14 @@ func whyNot(ctx context.Context, tx pgx.Tx, itemID string, s suggestion, except 
 }
 
 // latestChange returns the ledger number of the item's latest change: its newest event that isn't one
-// of Seyal's questions, or a share (item.shared, D91), which changes nothing on the item.
+// of Seyal's questions, a share (item.shared, D91) or a send to another app (D96), which change nothing
+// on the item.
 func latestChange(ctx context.Context, tx pgx.Tx, itemID string) (int64, error) {
 	var seq int64
 	if err := tx.QueryRow(ctx, `
 		SELECT coalesce(max(seq), 0) FROM ledger
 		WHERE tenant_id = current_tenant() AND subject_type = 'work_item' AND subject_id = $1::uuid
-			AND kind NOT IN ('item.asked', 'item.shared')`, itemID).Scan(&seq); err != nil {
+			AND kind NOT IN ('item.asked', 'item.shared', 'item.send_queued', 'item.send_done', 'item.send_failed', 'item.send_left')`, itemID).Scan(&seq); err != nil {
 		return 0, fmt.Errorf("ask: latest change: %w", err)
 	}
 	return seq, nil

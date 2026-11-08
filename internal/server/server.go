@@ -259,6 +259,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /t/{slug}/items/{id}/pass", s.authed(s.pass))
 	mux.HandleFunc("POST /t/{slug}/items/{id}/take", s.authed(s.take))
 	mux.HandleFunc("POST /t/{slug}/items/{id}/shared", s.authed(s.shared))
+	mux.HandleFunc("POST /t/{slug}/items/{id}/send-again", s.admin(s.sendAgain))
+	mux.HandleFunc("POST /t/{slug}/items/{id}/leave-send", s.admin(s.leaveSend))
 	mux.HandleFunc("GET /t/{slug}/media/{id}", s.authed(s.media))
 
 	// Settings: admins only.

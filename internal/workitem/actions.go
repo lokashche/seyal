@@ -114,7 +114,7 @@ func Start(ctx context.Context, tx pgx.Tx, in NewItem) (Item, error) {
 			return Item{}, err
 		}
 	}
-	if err := s.enter(&it, arrival{}); err != nil {
+	if err := s.enter(&it, arrival{by: in.By}); err != nil {
 		return Item{}, err
 	}
 	return it, nil
@@ -210,7 +210,7 @@ func (s session) setFields(it Item, values engine.Fields, by ledger.Actor, h *ha
 		return Item{}, err
 	}
 	if it.State != from {
-		if err := s.enter(&it, arrival{}); err != nil {
+		if err := s.enter(&it, arrival{by: by}); err != nil {
 			return Item{}, err
 		}
 	} else if kind, name := engine.Owner(s.p, it.State); kind == "field" && it.Fields[name] != nil &&
@@ -502,6 +502,7 @@ func (s session) move(it *Item, to string, change map[string]any, by ledger.Acto
 		it.Version++
 	}
 	change["from"], change["to"] = from, to
+	in.by = by
 	if err := s.update(*it); err != nil {
 		return err
 	}
@@ -565,6 +566,13 @@ func (s session) enter(it *Item, in arrival) error {
 				continue
 			}
 			if err := s.assign(it, id, "", ledger.SystemActor, handoff{How: HowRule}); err != nil {
+				return err
+			}
+		case "send":
+			// Only the outbox row and its ledger event, in this transaction: never a network call here
+			// (D96). The sender's own loop posts it later, so a slow or broken other app can't hold the
+			// ledger lock or undo this change.
+			if err := s.queueSend(it, a, in); err != nil {
 				return err
 			}
 		}
