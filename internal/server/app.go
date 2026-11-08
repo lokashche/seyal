@@ -40,7 +40,8 @@ type screen struct {
 	Current  string // id of the open item
 	Tell     *tellView
 	Item     *itemView
-	TellView bool // phones show Tell Seyal on its own, not the list (?view=tell, or after sending)
+	TellView bool         // phones show Tell Seyal on its own, not the list (?view=tell, or after sending)
+	Share    *shareInView // what the banner for something shared into Seyal needs (D93)
 }
 
 type row struct {
@@ -120,6 +121,9 @@ type entryView struct {
 	Edited bool // the person corrected the words they were given
 	// Share is a hand-over to another app (D91): the line names the app and opens to the exact words.
 	Share *thread.Shared
+	// Shared: the message was shared into Seyal from another app (D93); its words or voice may be
+	// someone else's, forwarded by the person.
+	Shared bool
 }
 
 // linkView is a linked work item: the one this item is part of, or one it started.
@@ -365,6 +369,7 @@ func (v *view) item(id string) (*itemView, error) {
 			if t := m.Transcript; t != nil && m.Text != "" {
 				ev.Spoken, ev.Tidied, ev.Edited = true, t.Tidied != "" && t.Tidied != t.Raw, t.Edited
 			}
+			ev.Shared = m.Via == channel.ViaShare
 			for _, md := range m.Media {
 				audio := strings.HasPrefix(md.ContentType, "audio/")
 				ev.Media = append(ev.Media, mediaView{URL: "/t/" + v.c.tenant.Slug + "/media/" + md.ID,
@@ -465,8 +470,10 @@ func (v *view) item(id string) (*itemView, error) {
 		}
 	}
 
-	if iv.Share, err = v.shares(it); err != nil {
-		return nil, err
+	if v.c.tenant.Sharing { // "sharing: off" in the set-up file hides Share for the whole business (D93)
+		if iv.Share, err = v.shares(it); err != nil {
+			return nil, err
+		}
 	}
 	iv.ChatLinks = v.chatLinks
 
@@ -550,6 +557,10 @@ func (v *view) when(t time.Time) string {
 // --- handlers ---
 
 func (s *Server) tellPage(w http.ResponseWriter, r *http.Request, c *call) {
+	if r.URL.Query().Get("share") == "missed" { // the Share menu's post reached the server (sharein.go)
+		s.show(w, r, c, "", http.StatusOK, "", "The share didn't come through. Open Seyal once, then share again.")
+		return
+	}
 	s.showScreen(w, r, c, "", http.StatusOK, "")
 }
 
@@ -583,6 +594,13 @@ func (s *Server) show(w http.ResponseWriter, r *http.Request, c *call, itemID st
 			sc.Tell, err = v.tell()
 			if sc.Tell != nil {
 				_, sc.Tell.CanAsk = s.ai.For(ai.Understand)
+			}
+			if err == nil {
+				// The banner for a share shows even with no process switched on: it can still go
+				// into an open item.
+				if sc.Share, err = v.shareIn(sc.Work, sc.TellView); sc.Share != nil {
+					sc.Share.New = sc.Tell != nil
+				}
 			}
 			if err == nil {
 				// The list of someone's work shows even with no process switched on for new work
@@ -663,6 +681,10 @@ func (s *Server) tell(w http.ResponseWriter, r *http.Request, c *call) {
 		return
 	}
 	in, err := s.incoming(w, r, c)
+	if err == nil && r.FormValue("via") == channel.ViaShare {
+		s.tellShared(w, r, c, in) // something shared into Seyal from another app (sharein.go, D93)
+		return
+	}
 	if err == nil && in.Text == "" && len(in.Files) == 0 && in.Spoken == nil {
 		err = errors.New("please write or record what the work is")
 	}
@@ -691,14 +713,9 @@ func (s *Server) tell(w http.ResponseWriter, r *http.Request, c *call) {
 		}
 		chosen := r.FormValue("playbook")
 		if (chosen == "" || chosen == "auto") && len(current) > 1 {
-			processes := make([]ask.Process, 0, len(current))
-			for _, pv := range current {
-				p, err := playbook.Parse([]byte(pv.Source))
-				if err != nil {
-					return err
-				}
-				processes = append(processes, ask.Process{VersionID: pv.ID, ID: p.ID, Name: sentence(p.ID),
-					Description: p.Description, Examples: p.Examples, Fallback: p.Fallback})
+			processes, err := askProcesses(current)
+			if err != nil {
+				return err
 			}
 			rt, err := ask.Route(r.Context(), tx, s.env(), processes, in)
 			routing = &rt

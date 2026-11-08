@@ -200,6 +200,19 @@ details.evt.shared > summary { cursor: pointer; list-style: none; }
 details.evt.shared > summary::-webkit-details-marker { display: none; }
 .shared-words { text-align: left; margin-top: 4px; }
 .shared-words p:first-child { white-space: pre-wrap; color: var(--ink); border-left: 2px solid var(--line); padding-left: 8px; }
+/* Share in (D93): the Tell Seyal banner for something shared into Seyal, its mark in the thread, and Me's lines. */
+.share-in { margin: 0; padding: 10px 16px; background: var(--ok-soft); font-size: 13.5px; display: grid; gap: 6px; flex: none; }
+.share-in p, .share-in .share-head { margin: 0; }
+.share-in .row { display: flex; flex-wrap: wrap; gap: 6px; }
+.share-in .share-files { margin: 0; padding-left: 18px; }
+.share-in .share-as { border: 0; margin: 0; padding: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.share-in .share-as input[list] { font: inherit; font-size: 13px; border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; background: var(--panel); color: var(--ink); min-width: 14em; }
+.share-in progress { width: 100%; }
+.share-change { display: inline; }
+.share-change > summary { display: inline; cursor: pointer; color: var(--muted); }
+.share-change[open] { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; }
+.shared-in { font-style: italic; }
+.share-in[hidden], .share-in [hidden], .card[hidden], .share-me [hidden] { display: none; }
 .side h4 { margin: 0; font-size: 12px; font-weight: 500; color: var(--muted); }
 .fields { display: grid; grid-template-columns: minmax(90px, auto) minmax(0, 1fr); gap: 8px 14px; font-size: 13px; margin: 0; }
 .fields dt { color: var(--muted); }

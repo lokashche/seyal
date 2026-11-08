@@ -92,6 +92,7 @@ func TestCheckFindsMistakes(t *testing.T) {
 		{"a holiday twice", "days_off: [sunday]", "days_off: [sunday]\n  holidays: [2026-11-09, 2026-11-09]", "holidays: 2026-11-09 is listed twice"},
 		{"bad chase line", "days_off: [sunday]", "days_off: [sunday]\n  chase: stop", `chase "stop": write "chase: paused"`},
 		{"bad phone-note switch", "notifications: on", "notifications: yes please", `notifications "yes please": write "notifications: on"`},
+		{"bad sharing switch", "notifications: on", "notifications: on\n  sharing: nope", `sharing "nope": write "sharing: off"`},
 		{"phone-note hours the wrong way round", `notify_hours: "09:00-19:00"`, `notify_hours: "19:00-09:00"`, "the start must be before the end"},
 		{"phone-note hours not times", `notify_hours: "09:00-19:00"`, `notify_hours: "9-7"`, "write it as 09:00-19:00"},
 	}

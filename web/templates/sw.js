@@ -2,9 +2,16 @@
 // and shows an "offline" page instead of a browser error. It never keeps pages with business data:
 // those always come fresh from the server. It also shows phone notes (web push) and opens Seyal
 // where a tapped one points, even when no Seyal page is open.
+//
+// What it keeps on this phone (D93): when someone shares a voice note, photo, PDF or words into Seyal
+// from another app's Share menu (Android), it keeps that one share in the browser's storage (IndexedDB,
+// sharebox.js) until the person sends it from Tell Seyal or discards it, with the login last seen on
+// this phone. It is never sent anywhere by the service worker, and is cleared after 24 hours (the next
+// time Seyal runs here), on log out, and when another login opens Seyal on this phone.
 "use strict";
 
 const VERSION = "__VERSION__"; // the static files' fingerprint, filled in by the server
+importScripts("/static/sharebox.js?v=" + VERSION);
 const CACHE = "seyal-" + VERSION;
 const OFFLINE = "/offline?v=" + VERSION;
 const PRECACHE = [
@@ -13,6 +20,7 @@ const PRECACHE = [
   "/static/fonts.css?v=" + VERSION,
   "/static/app.js?v=" + VERSION,
   "/static/links.js?v=" + VERSION,
+  "/static/sharebox.js?v=" + VERSION,
   "/static/htmx.min.js?v=" + VERSION,
   "/static/icon-192.png",
 ];
@@ -33,6 +41,11 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   const url = new URL(req.url);
+  // Something shared into Seyal from another app (the manifest's share_target): kept on this phone.
+  if (req.method === "POST" && url.origin === self.location.origin && SHARE.test(url.pathname)) {
+    event.respondWith(catchShare(req, url.pathname.slice(0, -"share".length)));
+    return;
+  }
   if (req.method !== "GET" || url.origin !== self.location.origin) return;
 
   // Pages: always from the network; if that fails, the offline page.
@@ -54,6 +67,41 @@ self.addEventListener("fetch", (event) => {
   }
   // Everything else (voice notes, uploads, forms) goes to the network as usual.
 });
+
+// --- Share in (D93) ------------------------------------------------------------------------------
+// The Share menu posts the shared things here, from no page and with no login (it can't carry one). So
+// the service worker keeps them on the phone and opens Tell Seyal; the person sends them from there,
+// logged in, with a tap. A form on any website could post the same: that is why it only fills the
+// banner ("Send it only if you just shared it"), keeps only the newest share, with caps, and nothing
+// is ever sent or filled in without the person's tap. Only the newest share is kept.
+const SHARE = /^\/t\/[a-z0-9][a-z0-9-]{1,62}\/share$/;
+
+async function catchShare(req, base) {
+  const tell = (why) => Response.redirect(new URL(base + "?view=tell&share=" + why, self.location.origin).href, 303);
+  try {
+    const form = await req.formData();
+    const files = [];
+    for (const f of form.getAll("files")) {
+      if (f && typeof f === "object" && typeof f.size === "number") files.push({ name: f.name, type: f.type, size: f.size, data: f });
+    }
+    const owner = await SeyalShareBox.lastLogin();
+    const rec = SeyalShareBox.make({ title: form.get("title"), text: form.get("text"), url: form.get("url") },
+      files, Date.now(), owner, self.crypto.randomUUID());
+    await SeyalShareBox.put(rec);
+    return tell("waiting");
+  } catch (_) {
+    return tell("missed"); // Tell Seyal says to open Seyal once and share again
+  }
+}
+
+// expire clears a share left waiting for more than a day. A phone has no timer Seyal can use, so it
+// runs whenever Seyal runs here: when the service worker starts, on a phone note, and on every page.
+function expire() {
+  return SeyalShareBox.get().then((rec) => {
+    if (rec && !(Math.abs(Date.now() - rec.at) < SeyalShareBox.LIFE)) return SeyalShareBox.clear();
+  }).catch(() => { /* nothing kept */ });
+}
+expire();
 
 // --- Phone notes -------------------------------------------------------------------------------
 // A phone note arrives locked for this browser; the browser unlocks it before this runs. Its shape:
@@ -78,9 +126,9 @@ self.addEventListener("push", (event) => {
   const title = typeof note.title === "string" && note.title ? note.title.slice(0, 60) : "Seyal";
   const body = typeof note.body === "string" && note.body ? note.body.slice(0, 200) : "Something new is waiting for you in Seyal.";
   const tag = typeof note.tag === "string" && note.tag ? note.tag.slice(0, 64) : "seyal";
-  event.waitUntil(self.registration.showNotification(title, {
+  event.waitUntil(Promise.all([expire(), self.registration.showNotification(title, {
     body, tag, icon: "/static/icon-192.png", data: { link: link(note.navigate) },
-  }));
+  })]));
 });
 
 // Tapping a note closes it. A Seyal window already on its link is brought to the front; otherwise

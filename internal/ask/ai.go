@@ -180,6 +180,7 @@ func (c *conversation) input(text, pendingKey string) (string, error) {
 		rows, _ := c.tx.Query(c.ctx, `
 			SELECT author_kind, text FROM messages
 			WHERE tenant_id = current_tenant() AND work_item_id::text = $1 AND text <> '' AND id::text <> $2
+				AND via IS NULL -- shared words are never sent to the model (D93)
 			ORDER BY sent_at DESC LIMIT 8`, it.ID, c.reply.Message.ID)
 		recent, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct{ Kind, Text string }])
 		if err != nil {
@@ -223,8 +224,8 @@ func (c *conversation) input(text, pendingKey string) (string, error) {
 // understand asks the model to read a message. It returns nil when AI is off, fails, or answers
 // something unusable; the caller then carries on without AI.
 func (c *conversation) understand(text, pendingKey string) *proposal {
-	if _, on := c.env.AI.For(ai.Understand); !on || strings.TrimSpace(text) == "" {
-		return nil
+	if _, on := c.env.AI.For(ai.Understand); !on || strings.TrimSpace(text) == "" || c.shared {
+		return nil // shared words are never sent to the model (D93)
 	}
 	instr, err := c.instructions()
 	if err != nil {

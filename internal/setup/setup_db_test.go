@@ -269,6 +269,38 @@ func TestImportDemoBusiness(t *testing.T) {
 		}
 	})
 
+	t.Run("sharing: off is stored and recorded (D93)", func(t *testing.T) {
+		sharing := func() bool {
+			var on bool
+			in(func(tx pgx.Tx) error {
+				return tx.QueryRow(ctx, `SELECT sharing FROM tenants WHERE id = current_tenant()`).Scan(&on)
+			})
+			return on
+		}
+		if !sharing() {
+			t.Fatal("the demo file (no sharing line) stored sharing off")
+		}
+		f.Business.Sharing = "off"
+		if again, err := setup.Import(ctx, owner, app, f); err != nil || again.Changes != 1 || sharing() {
+			t.Fatalf("import with sharing: off = %+v, %v, sharing %v; want 1 change and off", again, err, sharing())
+		}
+		in(func(tx pgx.Tx) error {
+			var change string
+			if err := tx.QueryRow(ctx, `SELECT body::jsonb #>> '{payload,changes}' FROM ledger
+				WHERE kind = 'business.updated' AND subject_id::text = current_tenant()::text ORDER BY seq DESC LIMIT 1`).Scan(&change); err != nil {
+				return err
+			}
+			if !strings.Contains(change, `"sharing": {"new": "off", "old": "on"}`) {
+				t.Errorf("business.updated changes = %s; want sharing off", change)
+			}
+			return nil
+		})
+		f.Business.Sharing = ""
+		if _, err := setup.Import(ctx, owner, app, f); err != nil || !sharing() {
+			t.Fatalf("sharing left out again: %v, sharing %v; want on", err, sharing())
+		}
+	})
+
 	// A writer holds the ledger head and is about to add its event, whose tenant check locks the
 	// business's row (as a foreign key check does). An import at that moment waits for the writer,
 	// instead of locking that row first and waiting in a circle (a deadlock).

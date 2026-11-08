@@ -70,6 +70,9 @@ type Business struct {
 	// them, and on days off and holidays, phone notes wait for the next working morning.
 	Notifications string `yaml:"notifications"`
 	NotifyHours   string `yaml:"notify_hours"`
+	// Sharing (D93): "off" hides the Share panel and refuses things shared into Seyal from another app,
+	// for this business only. Left out or "on": both work.
+	Sharing string `yaml:"sharing"`
 }
 
 // hours reads notify_hours, or the default when it is left out.
@@ -206,6 +209,9 @@ func (f *File) Check(lib *playbook.Library) error {
 	}
 	if _, err := b.hours(); err != nil {
 		add("%v", err)
+	}
+	if b.Sharing != "" && b.Sharing != "on" && b.Sharing != "off" {
+		add("sharing %q: write \"sharing: off\" to turn sharing off for this business, or on", b.Sharing)
 	}
 
 	roles := map[string]bool{}
@@ -346,6 +352,7 @@ func Import(ctx context.Context, owner, app *pgxpool.Pool, f *File) (Summary, er
 	holidays, _ := b.holidays()
 	paused := b.Chase == "paused"
 	notes := b.Notifications == "on"
+	sharing := b.Sharing != "off"
 	hrs, _ := b.hours()
 	err := owner.QueryRow(ctx, `SELECT id::text FROM tenants WHERE slug = $1`, b.Slug).Scan(&sum.TenantID)
 	switch {
@@ -353,13 +360,13 @@ func Import(ctx context.Context, owner, app *pgxpool.Pool, f *File) (Summary, er
 		sum.Created = true
 		err = owner.QueryRow(ctx, `
 			INSERT INTO tenants (slug, name, currency, timezone, fiscal_year_start_month, days_off, holidays, chase_paused,
-				notifications, notify_from, notify_until)
-			VALUES ($1, $2, $3, $4, $5, $6, $7::date[], $8, $9, $10, $11) RETURNING id::text`,
+				notifications, notify_from, notify_until, sharing)
+			VALUES ($1, $2, $3, $4, $5, $6, $7::date[], $8, $9, $10, $11, $12) RETURNING id::text`,
 			b.Slug, b.Name, b.Currency, b.Timezone, b.FiscalYearStartMonth, days, holidays, paused,
-			notes, hrs.FromText(), hrs.UntilText()).Scan(&sum.TenantID)
+			notes, hrs.FromText(), hrs.UntilText(), sharing).Scan(&sum.TenantID)
 	case err == nil:
 		var changed bool
-		changed, err = updateBusiness(ctx, owner, sum.TenantID, b, days, holidays, paused, notes, hrs)
+		changed, err = updateBusiness(ctx, owner, sum.TenantID, b, days, holidays, paused, notes, sharing, hrs)
 		if changed {
 			sum.Changes++
 		}
@@ -443,7 +450,7 @@ func Import(ctx context.Context, owner, app *pgxpool.Pool, f *File) (Summary, er
 // does it, because the app role may only read the tenants table. Nothing is written when nothing
 // changed.
 func updateBusiness(ctx context.Context, owner *pgxpool.Pool, tenantID string, b Business, days []int16,
-	holidays []string, paused, notes bool, hrs hours.Hours) (bool, error) {
+	holidays []string, paused, notes, sharing bool, hrs hours.Hours) (bool, error) {
 	changed := false
 	err := db.WithTenant(ctx, owner, tenantID, func(tx pgx.Tx) error {
 		// The ledger head first, as every writer does (see ledger.Lock). Locked the other way round,
@@ -454,15 +461,15 @@ func updateBusiness(ctx context.Context, owner *pgxpool.Pool, tenantID string, b
 		}
 		var was Business
 		var wasDays []int16
-		var wasPaused, wasNotes bool
+		var wasPaused, wasNotes, wasSharing bool
 		var wasFrom, wasUntil string
 		if err := tx.QueryRow(ctx, `
 			SELECT name, currency, timezone, fiscal_year_start_month, days_off,
 				ARRAY(SELECT to_char(d, 'YYYY-MM-DD') FROM unnest(holidays) d ORDER BY d), chase_paused,
-				notifications, notify_from, notify_until
+				notifications, notify_from, notify_until, sharing
 			FROM tenants WHERE id::text = $1 FOR NO KEY UPDATE`, tenantID).
 			Scan(&was.Name, &was.Currency, &was.Timezone, &was.FiscalYearStartMonth, &wasDays, &was.Holidays, &wasPaused,
-				&wasNotes, &wasFrom, &wasUntil); err != nil {
+				&wasNotes, &wasFrom, &wasUntil, &wasSharing); err != nil {
 			return err
 		}
 		changes := map[string]any{}
@@ -482,6 +489,7 @@ func updateBusiness(ctx context.Context, owner *pgxpool.Pool, tenantID string, b
 		note("notifications", onOff(wasNotes), onOff(notes), wasNotes == notes)
 		wasHours := wasFrom + "-" + wasUntil
 		note("notify_hours", wasHours, hrs.String(), wasHours == hrs.String())
+		note("sharing", onOff(wasSharing), onOff(sharing), wasSharing == sharing)
 		if len(changes) == 0 {
 			return nil
 		}
@@ -489,10 +497,10 @@ func updateBusiness(ctx context.Context, owner *pgxpool.Pool, tenantID string, b
 		if _, err := tx.Exec(ctx, `
 			UPDATE tenants SET name = $2, currency = $3, timezone = $4, fiscal_year_start_month = $5,
 				days_off = $6, holidays = $7::date[], chase_paused = $8,
-				notifications = $9, notify_from = $10, notify_until = $11
+				notifications = $9, notify_from = $10, notify_until = $11, sharing = $12
 			WHERE id::text = $1`,
 			tenantID, b.Name, b.Currency, b.Timezone, b.FiscalYearStartMonth, days, holidays, paused,
-			notes, hrs.FromText(), hrs.UntilText()); err != nil {
+			notes, hrs.FromText(), hrs.UntilText(), sharing); err != nil {
 			return err
 		}
 		_, err := ledger.Append(ctx, tx, ledger.Event{Kind: "business.updated", SubjectType: "business",

@@ -69,3 +69,30 @@ func TestAllowed(t *testing.T) {
 		}
 	}
 }
+
+// TestSniffOggVoiceNote: a WhatsApp voice note shared from Android may come as
+// application/octet-stream or audio/opus; its first bytes (OggS) make it audio/ogg (D93). Nothing
+// else changes type by its bytes.
+func TestSniffOggVoiceNote(t *testing.T) {
+	ogg := []byte("OggS\x00\x02pretend opus")
+	for _, tt := range []struct {
+		typ  string
+		data []byte
+		want string
+	}{
+		{"application/octet-stream", ogg, "audio/ogg"},
+		{"audio/opus", ogg, "audio/ogg"},
+		{"", ogg, "audio/ogg"},
+		{"application/octet-stream", []byte("%PDF-1.7"), "application/octet-stream"}, // not Ogg: still refused
+		{"text/html", ogg, "text/html"},                                              // a stated type is never overruled
+		{"image/png", ogg, "image/png"},                                              // nor a kept one
+		{"application/octet-stream", []byte("Og"), "application/octet-stream"},
+	} {
+		if got := Sniff(tt.typ, tt.data); got != tt.want {
+			t.Errorf("Sniff(%q, %q) = %q, want %q", tt.typ, tt.data, got, tt.want)
+		}
+	}
+	if !Allowed(Sniff("application/octet-stream", ogg)) {
+		t.Error("a sniffed voice note isn't allowed")
+	}
+}

@@ -71,6 +71,12 @@
     {{if .Key}}<p class="why">If a phone note doesn't show, check the phone's settings for Chrome (or Seyal) notifications, and the battery saver.</p>{{end}}
   </section>
   {{end}}
+  {{/* Sharing into Seyal (D93): shown by app.js on Android only, from this phone's own state. */}}
+  <section class="card share-me" data-share-me aria-label="Sharing into Seyal" hidden>
+    <span class="ctl-label">Sharing into Seyal</span>
+    <p data-share-me-install hidden>Seyal in the share menu: install Seyal (browser menu, then Install app).</p>
+    <p data-share-me-waiting hidden>1 share waiting on this phone · <button type="button" class="btn ghost sm" data-share-in-do="discard">Discard</button></p>
+  </section>
   <section class="card login-actions" aria-label="Your login">
     <a class="btn ghost" href="/t/{{.Slug}}/password">{{icon "key"}}Change password</a>
     <form method="post" action="/t/{{.Slug}}/logout"><button class="btn ghost">{{icon "logout"}}Log out</button></form>

@@ -20,6 +20,8 @@ business:
   # next working morning.
   notifications: on
   notify_hours: "09:00-19:00"
+  # Sharing (D91-D93): the Share button on an item, and sharing into Seyal from another app's Share
+  # menu (Android). Left out: on. "sharing: off" turns both off for this business only.
 
 # The processes this business uses: sample templates by id, or your own files ("my-process.yaml",
 # relative to this file). The lists they need (clients, work types) come with them. Use "lists:" to

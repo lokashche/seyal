@@ -54,7 +54,10 @@ func Begin(ctx context.Context, tx pgx.Tx, env Env, playbookVersionID string, in
 	if err != nil {
 		return Reply{}, err
 	}
-	if !isNew && msg.ThreadID != "" { // the channel delivered the same message again
+	if !isNew { // the channel delivered the same message again: it is never read twice (D93)
+		if msg.ThreadID == "" {
+			return Reply{Message: msg}, nil
+		}
 		it, err := workitem.Get(ctx, tx, msg.ThreadID)
 		return Reply{Message: msg, Item: it}, err
 	}
@@ -62,6 +65,11 @@ func Begin(ctx context.Context, tx pgx.Tx, env Env, playbookVersionID string, in
 	c, err := newConversation(ctx, tx, env, playbookVersionID, workitem.Item{}, msg)
 	if err != nil {
 		return Reply{}, err
+	}
+	if c.shared {
+		// Shared into Seyal (D93): the person picked the process; it starts as new work, with no AI
+		// reading, no greeting and no question about the work.
+		return c.start(nil)
 	}
 	text := strings.TrimSpace(msg.Text)
 	pr := c.understand(text, "")
@@ -120,6 +128,18 @@ func Converse(ctx context.Context, tx pgx.Tx, env Env, itemID string, in channel
 	c, err := newConversation(ctx, tx, env, it.PlaybookVersionID, it, msg)
 	if err != nil {
 		return Reply{}, err
+	}
+	if c.shared {
+		// Shared words never act (D93, shared.go): no Yes or No, no move, no hand-over, no AI.
+		if err := c.sharedWords(strings.TrimSpace(msg.Text)); err != nil {
+			return Reply{}, err
+		}
+		if !c.suggested {
+			if err := c.askNext(false); err != nil {
+				return Reply{}, err
+			}
+		}
+		return c.reply, nil
 	}
 	if n, ok := strings.CutPrefix(in.Button, "suggestion:"); ok {
 		c.button, _ = strconv.ParseInt(n, 10, 64)
@@ -284,6 +304,9 @@ type conversation struct {
 	suggested bool
 	// askFirst: the AI model read the hand-over, so it becomes a suggestion, like spoken words (see act).
 	askFirst bool
+	// shared: the message was shared into Seyal from another app (channel.ViaShare). Its words never act
+	// and the AI never reads them (shared.go, D93).
+	shared bool
 }
 
 // voiceGuard is Seyal's reply when words from a voice note read as approving or refusing. Speech
@@ -306,7 +329,7 @@ func newConversation(ctx context.Context, tx pgx.Tx, env Env, versionID string, 
 		return nil, err
 	}
 	return &conversation{ctx: ctx, tx: tx, env: env, versionID: versionID, p: p, person: msg.PersonID, today: time.Now().In(loc),
-		reply: Reply{Message: msg, Item: it}, spoken: msg.Transcript != nil}, nil
+		reply: Reply{Message: msg, Item: it}, spoken: msg.Transcript != nil, shared: msg.Via == channel.ViaShare}, nil
 }
 
 // pending returns the field Seyal last asked about, if it is still empty, and the offer to add a new

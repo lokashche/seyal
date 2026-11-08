@@ -46,6 +46,9 @@ type Message struct {
 	Text       string    `json:"text"`
 	Media      []Media   `json:"media,omitempty"`
 	SentAt     time.Time `json:"sent_at"`
+	// Via is "share" when the message was shared into Seyal from another app (D93): its words or voice
+	// may be someone else's, so they never act and are kept away from the AI. "" for everything else.
+	Via string `json:"via,omitempty"`
 	// Transcript is set when the text came from a voice note (speak instead of type): the words the
 	// speech service heard (and the AI tidy-up's, if used), next to the final text the person sent
 	// (voice.go).
@@ -77,7 +80,12 @@ type Incoming struct {
 	// chat's Yes and No under a suggestion say which suggestion). It is "" for typed words. It isn't
 	// stored: the message's text says what was pressed.
 	Button string
+	// Via is ViaShare when the person shared this from another app (D93), else "".
+	Via string
 }
+
+// ViaShare marks a message shared into Seyal from another app (D93).
+const ViaShare = "share"
 
 // File is a file sent with a message.
 type File struct {
@@ -92,6 +100,9 @@ var (
 	ErrUnknownSender = errors.New("unknown sender")
 	ErrEmpty         = errors.New("a message needs text or a file")
 	ErrAlreadyFiled  = errors.New("the message is already in a thread")
+	// ErrRepeatElsewhere: a message with this ExternalID was already received, but from another person
+	// or into another place (D93). It is refused, not taken as a repeat.
+	ErrRepeatElsewhere = errors.New("this was already sent, to another place")
 )
 
 // Receive stores an incoming message and its files and records message.received. A message the
@@ -108,10 +119,16 @@ func Receive(ctx context.Context, tx pgx.Tx, store media.Store, in Incoming) (m 
 	if utf8.RuneCountInString(in.Text) > MaxText {
 		return Message{}, false, fmt.Errorf("a message can have at most %d characters", MaxText)
 	}
+	if in.Via != "" && in.Via != ViaShare {
+		return Message{}, false, fmt.Errorf("channel: unknown via %q", in.Via)
+	}
 	if in.ExternalID != "" {
 		m, err := load(ctx, tx, "channel = $1 AND external_id = $2", in.Channel, in.ExternalID)
 		switch {
 		case err == nil:
+			if err := samePlace(ctx, tx, m, in); err != nil {
+				return Message{}, false, err
+			}
 			return m, false, nil
 		case !errors.Is(err, pgx.ErrNoRows):
 			return Message{}, false, err
@@ -124,7 +141,7 @@ func Receive(ctx context.Context, tx pgx.Tx, store media.Store, in Incoming) (m 
 
 	m = Message{
 		ThreadID: in.ThreadID, AuthorKind: "person", PersonID: personID, Channel: in.Channel,
-		ExternalID: in.ExternalID, Text: in.Text, SentAt: in.SentAt,
+		ExternalID: in.ExternalID, Text: in.Text, SentAt: in.SentAt, Via: in.Via,
 	}
 	if m.SentAt.IsZero() {
 		m.SentAt = time.Now()
@@ -236,6 +253,27 @@ func List(ctx context.Context, tx pgx.Tx) ([]Message, error) {
 	return out, nil
 }
 
+// samePlace checks that an earlier message with the same ExternalID is really this one sent again: from
+// the same person (on the web chat), and into the same place: the same item's thread, or Tell Seyal
+// (where it may since have started an item of its own). Anything else is refused (D93).
+func samePlace(ctx context.Context, tx pgx.Tx, m Message, in Incoming) error {
+	if in.PersonID != "" && m.PersonID != in.PersonID {
+		return ErrRepeatElsewhere
+	}
+	started := false // the earlier message was sent on Tell Seyal and started its item
+	if m.ThreadID != "" {
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (SELECT 1 FROM work_items
+				WHERE tenant_id = current_tenant() AND id::text = $1 AND started_ref = $2)`, m.ThreadID, m.ID).Scan(&started); err != nil {
+			return fmt.Errorf("channel: repeat: %w", err)
+		}
+	}
+	if in.ThreadID != "" && (m.ThreadID != in.ThreadID || started) || in.ThreadID == "" && m.ThreadID != "" && !started {
+		return ErrRepeatElsewhere
+	}
+	return nil
+}
+
 func sender(ctx context.Context, tx pgx.Tx, in Incoming) (personID, identityID string, err error) {
 	if in.PersonID != "" {
 		var ok bool
@@ -260,7 +298,7 @@ func sender(ctx context.Context, tx pgx.Tx, in Incoming) (personID, identityID s
 }
 
 func saveFile(ctx context.Context, tx pgx.Tx, store media.Store, personID string, f File) (Media, error) {
-	contentType, ok := media.Clean(f.ContentType)
+	contentType, ok := media.Clean(media.Sniff(f.ContentType, f.Data))
 	switch {
 	case len(f.Data) == 0:
 		return Media{}, errors.New("an attached file is empty")
@@ -295,11 +333,11 @@ func saveFile(ctx context.Context, tx pgx.Tx, store media.Store, personID string
 func insert(ctx context.Context, tx pgx.Tx, m *Message, identityID string) error {
 	err := tx.QueryRow(ctx, `
 		INSERT INTO messages (tenant_id, work_item_id, author_kind, author_person_id, channel,
-			channel_identity_id, external_id, text, sent_at, transcript_id)
+			channel_identity_id, external_id, text, sent_at, transcript_id, via)
 		VALUES (current_tenant(), nullif($1::text, '')::uuid, $2, nullif($3::text, '')::uuid, $4,
-			nullif($5::text, '')::uuid, nullif($6::text, ''), $7, $8, nullif($9::text, '')::uuid)
+			nullif($5::text, '')::uuid, nullif($6::text, ''), $7, $8, nullif($9::text, '')::uuid, nullif($10::text, ''))
 		RETURNING id::text`,
-		m.ThreadID, m.AuthorKind, m.PersonID, m.Channel, identityID, m.ExternalID, m.Text, m.SentAt, transcriptID(m)).Scan(&m.ID)
+		m.ThreadID, m.AuthorKind, m.PersonID, m.Channel, identityID, m.ExternalID, m.Text, m.SentAt, transcriptID(m), m.Via).Scan(&m.ID)
 	if err != nil {
 		return fmt.Errorf("channel: save message: %w", err)
 	}
@@ -322,14 +360,14 @@ func transcriptID(m *Message) string {
 
 const selectMessage = `
 	SELECT id::text, coalesce(work_item_id::text, ''), author_kind, coalesce(author_person_id::text, ''),
-		channel, coalesce(external_id, ''), text, sent_at, coalesce(transcript_id::text, '')
+		channel, coalesce(external_id, ''), text, sent_at, coalesce(transcript_id::text, ''), coalesce(via, '')
 	FROM messages WHERE tenant_id = current_tenant() AND `
 
 func load(ctx context.Context, tx pgx.Tx, where string, args ...any) (Message, error) {
 	var m Message
 	var transcript string
 	err := tx.QueryRow(ctx, selectMessage+where, args...).
-		Scan(&m.ID, &m.ThreadID, &m.AuthorKind, &m.PersonID, &m.Channel, &m.ExternalID, &m.Text, &m.SentAt, &transcript)
+		Scan(&m.ID, &m.ThreadID, &m.AuthorKind, &m.PersonID, &m.Channel, &m.ExternalID, &m.Text, &m.SentAt, &transcript, &m.Via)
 	if err != nil {
 		return Message{}, err
 	}

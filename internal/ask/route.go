@@ -44,15 +44,26 @@ type Routing struct {
 // tx must come from db.WithTenant.
 func Route(ctx context.Context, tx pgx.Tx, env Env, processes []Process, in channel.Incoming) (Routing, error) {
 	in.ThreadID = ""
-	msg, _, err := channel.Receive(ctx, tx, env.Store, in)
+	msg, isNew, err := channel.Receive(ctx, tx, env.Store, in)
 	if err != nil {
 		return Routing{}, err
 	}
 	r := Routing{Message: msg}
+	if !isNew && msg.ThreadID != "" {
+		return r, nil // sent again after it started an item: the caller opens that item (D93)
+	}
 	text := strings.TrimSpace(msg.Text)
-	kind, suggested, reply := routeWithAI(ctx, tx, env, processes, msg.PersonID, text)
-	if kind == "" { // AI off or no usable answer
+	var kind, suggested, reply string
+	// A message sent again is never read again (no second AI call, no second reply), and shared words
+	// never go to the model: for both, only the process is suggested, from the words (D93).
+	again := !isNew || msg.Via == channel.ViaShare
+	if !again {
+		kind, suggested, reply = routeWithAI(ctx, tx, env, processes, msg.PersonID, text)
+	}
+	if kind == "" { // AI off, no usable answer, or not read again
 		switch {
+		case again:
+			kind, suggested = "work", routeByWords(processes, text)
 		case isGreeting(text):
 			kind, reply = "greeting", greetingReply
 		case looksLikeQuestion(text) && wordsOnly(msg): // a clear question: Seyal can't answer it now

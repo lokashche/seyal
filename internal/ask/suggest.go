@@ -15,6 +15,7 @@ import (
 
 	"seyal/internal/engine"
 	"seyal/internal/ledger"
+	"seyal/internal/playbook"
 	"seyal/internal/workitem"
 )
 
@@ -29,7 +30,7 @@ import (
 //  1. the suggestion is for this item, and the person tapping is the one it was made for;
 //  2. no event has used it yet (named it as its "suggestion"), so a Yes never works twice;
 //  3. that person hasn't written in the thread since: their own next message drops it (other people's
-//     messages don't);
+//     messages don't, nor something the person shared from another app, D93);
 //  4. the item hasn't changed since: its latest change is still the one the suggestion recorded.
 // On Yes, the change runs as the person (human), with every check again, and each event names the
 // suggestion (workitem.Confirming).
@@ -281,8 +282,13 @@ func (c *conversation) question(pr propose, k kin) (string, error) {
 	var parts []string
 	for _, key := range slices.Sorted(maps.Keys(pr.Fields)) {
 		label := key
-		if f := c.field(key); f != nil {
+		f := c.field(key)
+		if f != nil {
 			label = Label(*f)
+		}
+		if f != nil && f.Type != "person" { // an answer from shared words (D93): the value itself
+			parts = append(parts, fmt.Sprintf("%q to %q", label, c.plain(*f, pr.Fields[key])))
+			continue
 		}
 		who := "nobody"
 		if id, _ := pr.Fields[key].(string); id != "" {
@@ -291,6 +297,39 @@ func (c *conversation) question(pr propose, k kin) (string, error) {
 		parts = append(parts, fmt.Sprintf("%q to %s", label, who))
 	}
 	return fmt.Sprintf("Set %s on %s?", strings.Join(parts, " and "), it.Number), nil
+}
+
+// plain writes a value of field f as people read it, for a suggestion's question: a list entry by its
+// name, money in normal units, a list joined with commas.
+func (c *conversation) plain(f playbook.Field, v any) string {
+	switch x := v.(type) {
+	case []any:
+		parts := make([]string, len(x))
+		for i, one := range x {
+			parts[i] = c.plain(playbook.Field{Key: f.Key, Type: f.Of, Kind: f.Kind}, one)
+		}
+		return strings.Join(parts, ", ")
+	case bool:
+		if x {
+			return "yes"
+		}
+		return "no"
+	case float64:
+		if f.Type == "money" {
+			return strconv.FormatFloat(x/100, 'f', 2, 64)
+		}
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case string:
+		if f.Type == "master" {
+			var name string
+			if err := c.tx.QueryRow(c.ctx, `SELECT name FROM master_items WHERE tenant_id = current_tenant() AND kind = $1 AND key = $2`,
+				f.Kind, x).Scan(&name); err == nil {
+				return name
+			}
+		}
+		return x
+	}
+	return fmt.Sprint(v)
 }
 
 // quoted is `, with the note "…"`, or "" when there is no note.
@@ -540,7 +579,8 @@ func wrote(ctx context.Context, tx pgx.Tx, itemID, person, after, except string)
 	if err := tx.QueryRow(ctx, `
 		SELECT EXISTS (SELECT 1 FROM messages m JOIN messages q ON q.tenant_id = m.tenant_id AND q.id::text = $3
 			WHERE m.tenant_id = current_tenant() AND m.work_item_id::text = $1 AND m.author_kind = 'person'
-				AND m.author_person_id::text = $2 AND m.sent_at > q.sent_at AND m.id::text <> $4)`,
+				AND m.author_person_id::text = $2 AND m.sent_at > q.sent_at AND m.id::text <> $4
+				AND m.via IS NULL)`, // something they shared isn't their own words (D93)
 		itemID, person, after, except).Scan(&since); err != nil {
 		return false, fmt.Errorf("ask: written since: %w", err)
 	}

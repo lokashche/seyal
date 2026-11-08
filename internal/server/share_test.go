@@ -93,3 +93,38 @@ func TestSharePageScript(t *testing.T) {
 		t.Error("sw.js doesn't keep links.js")
 	}
 }
+
+// TestShareInScript: the page's script and the service worker keep share in's promises (D93): the
+// service worker keeps sharebox.js and catches the Share menu's post on the phone (never sending it on);
+// pages load sharebox.js before app.js; a share is sent only by the person's Send, as via=share with its
+// id, and cleared only when sharebox.afterSend says the server took it; log out clears it.
+func TestShareInScript(t *testing.T) {
+	read := func(name string) string {
+		b, err := fs.ReadFile(web.Files, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	sw, js, layout := read("templates/sw.js"), read("static/app.js"), read("templates/layout.html")
+	for _, want := range []string{`importScripts("/static/sharebox.js?v=" + VERSION)`, `"/static/sharebox.js?v=" + VERSION,`,
+		`req.method === "POST" && url.origin === self.location.origin && SHARE.test(url.pathname)`, `SeyalShareBox.put(rec)`,
+		`return tell("waiting")`, `expire()`} {
+		if !strings.Contains(sw, want) {
+			t.Errorf("sw.js no longer has %q", want)
+		}
+	}
+	if strings.Contains(sw[strings.Index(sw, "async function catchShare"):strings.Index(sw, "function expire")], "fetch(") {
+		t.Error("sw.js sends a caught share somewhere; it must only keep it on the phone")
+	}
+	for _, want := range []string{`data.set("via", "share")`, `data.set("share_id", share.id)`,
+		`SB.afterSend(xhr.status, to.pathname) !== "clear"`, `box ? box.clear() : null`, `SB.decide(rec, login, Date.now())`,
+		`if (xhr.status !== 409) SB.tried(share, "")`} {
+		if !strings.Contains(js, want) {
+			t.Errorf("app.js no longer has %q", want)
+		}
+	}
+	if a, b := strings.Index(layout, "/static/sharebox.js"), strings.Index(layout, "/static/app.js"); a < 0 || a > b {
+		t.Error("layout.html doesn't load sharebox.js before app.js")
+	}
+}

@@ -42,6 +42,22 @@ func Clean(contentType string) (string, bool) {
 	return base, true
 }
 
+// Sniff fixes the type of an Ogg recording that came without a usable one. A chat app's voice note
+// (.opus) shared from an Android phone may arrive as "application/octet-stream", or as "audio/opus",
+// which isn't on the list (D93). When the file's first bytes are an Ogg file's ("OggS"), its type is
+// "audio/ogg", a type Seyal already keeps and measures. Any other type is returned unchanged, so
+// Clean still decides.
+func Sniff(contentType string, data []byte) string {
+	base, _, _ := mime.ParseMediaType(contentType)
+	switch base {
+	case "", "application/octet-stream", "audio/opus":
+		if len(data) >= 4 && string(data[:4]) == "OggS" {
+			return "audio/ogg"
+		}
+	}
+	return contentType
+}
+
 // Allowed reports whether a file of this type may be stored.
 func Allowed(contentType string) bool {
 	_, ok := Clean(contentType)

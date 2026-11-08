@@ -479,6 +479,8 @@
     var stopHere = function () { e.preventDefault(); e.stopPropagation(); };
     if (offline) { hold(e); stopHere(); return; }
     if (form.dataset.sending) { stopHere(); return; }
+    // With a share waiting in the banner, Send sends it, with the words in the box (D93).
+    if (shareIn && form.id === "tell-form" && !shareIn.box.hasAttribute("data-off")) { stopHere(); shareInSend(shareIn.box); return; }
     if (form.dataset.transcribing) {
       stopHere();
       status(form, "One moment: Seyal is still turning your voice note into words.");
@@ -698,7 +700,8 @@
     var logout = /\/logout(-everywhere)?$/.test(form.getAttribute("action") || "");
     if (!logout || form.dataset.unsubscribed) return;
     var waiting = shareQueue().length > 0;
-    if (!pushOK && !waiting) return;
+    var box = window.SeyalShareBox; // a share waiting to come into Seyal is cleared too (D93)
+    if (!pushOK && !waiting && !box) return;
     e.preventDefault();
     e.stopImmediatePropagation();
     form.dataset.unsubscribed = "1";
@@ -716,6 +719,8 @@
     setTimeout(go, 2000);
     Promise.all([
       waiting ? sendShares() : null,
+      box ? box.clear() : null,
+      box ? box.forget() : null, // and the login: a share made after this is the next login's
       pushOK ? pushSub().then(function (sub) { return sub && sub.unsubscribe(); }).catch(function () { /* logged out anyway */ }) : null
     ]).then(go, go);
   }, true);
@@ -971,6 +976,178 @@
         });
         break;
     }
+  });
+
+  // --- Share in (D93) -------------------------------------------------------------------------------
+  // Something shared into Seyal from another app's Share menu (Android) waits on this phone
+  // (sharebox.js; the service worker put it there). Every page checks it for the login on the page: a
+  // share older than a day, or another login's, is cleared; one nobody owned yet becomes this login's.
+  // Tell Seyal shows it in a banner; it is sent only when the person presses Send, as an ordinary
+  // logged-in message marked via=share, and cleared only after the server's OK. Me says when one waits
+  // and whether Seyal is in the Share menu; the offline page says when one waits.
+  var shareIn = null; // the share the banner shows: {rec, box}
+
+  function shareInStatus(box, text) {
+    var el = box.querySelector("[data-share-in-status]");
+    if (el) el.textContent = text;
+  }
+  function megabytes(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB"; }
+  // shareInLeft says which files Seyal left out, and why.
+  function shareInLeft(left) {
+    var why = { type: "Seyal can't keep this kind of file yet", count: "More than 5 files, so this one is left out", size: "Over 25 MB in all, so this one is left out" };
+    return left.map(function (l) { return (why[l.why] || "Left out") + ": " + l.name; }).join(". ") + ".";
+  }
+  function shareInFill(box, rec) {
+    var list = box.querySelector("[data-share-in-files]");
+    if (list) {
+      list.textContent = "";
+      rec.files.forEach(function (f) {
+        var li = document.createElement("li");
+        li.textContent = f.name + " (" + megabytes(f.size) + ")";
+        if (f.type.indexOf("audio/") === 0) {
+          var play = document.createElement("button");
+          play.type = "button";
+          play.className = "play";
+          play.textContent = "▶";
+          play.setAttribute("aria-label", "Play " + f.name);
+          play.setAttribute("data-play", URL.createObjectURL(f.data));
+          li.append(" ", play);
+        }
+        list.appendChild(li);
+      });
+    }
+    var left = box.querySelector("[data-share-in-left]");
+    if (left) { left.hidden = !rec.left.length; left.textContent = rec.left.length ? shareInLeft(rec.left) : ""; }
+    var cut = box.querySelector("[data-share-in-cut]");
+    if (cut) cut.hidden = !rec.cut;
+    var msg = document.getElementById("msg");
+    if (msg && !box.hasAttribute("data-off") && !msg.value.trim() && rec.text) msg.value = rec.text;
+  }
+  // shareInShow shows the waiting share rec (null: none) where this page has a place for it. waits: a
+  // share waits on this phone, though maybe for a login still to come (the offline and login pages).
+  function shareInShow(rec, waits) {
+    shareIn = null;
+    var off = document.querySelector("[data-share-offline]");
+    if (off) off.hidden = !waits;
+    var me = document.querySelector("[data-share-me]");
+    if (me) {
+      var install = me.querySelector("[data-share-me-install]"), waiting = me.querySelector("[data-share-me-waiting]");
+      install.hidden = !/Android/i.test(navigator.userAgent) || standalone();
+      waiting.hidden = !rec;
+      me.hidden = install.hidden && waiting.hidden;
+    }
+    var box = document.querySelector("[data-share-in-box]");
+    if (!box) return;
+    box.hidden = !rec;
+    if (!rec) return;
+    shareIn = { rec: rec, box: box };
+    shareInFill(box, rec);
+  }
+  function shareInLoad() {
+    var SB = window.SeyalShareBox;
+    if (!SB) return;
+    var login = document.body.getAttribute("data-sharer") || "";
+    SB.get().then(function (rec) {
+      var what = SB.decide(rec, login, Date.now());
+      var next = what === "clear" ? SB.clear().then(function () { return null; })
+        : what === "claim" ? SB.claim(rec, login).then(function () { return rec; }, function () { return rec; })
+        : Promise.resolve(what === "show" ? rec : null);
+      return next.then(function (shown) {
+        if (login) SB.noteLogin(login); // the next share made on this phone is this login's
+        shareInShow(shown, !!shown || what === "keep");
+      });
+    });
+  }
+  function shareInDiscard() {
+    var rec = shareIn && shareIn.rec, msg = document.getElementById("msg");
+    if (rec && msg && msg.value === rec.text) msg.value = "";
+    window.SeyalShareBox.clear().then(function () { shareInShow(null, false); });
+  }
+  // shareInSend sends the share with the Tell Seyal form (its words and the chosen process), as new
+  // work or into the item the person named. Only the server's OK clears it from the phone; a refusal,
+  // no answer or a login page keeps it, to try again. With no process switched on there is no form:
+  // the share's own words go with it, into an item. A Send with no answer may have reached its business,
+  // so until that business answers, the share goes only there (SeyalShareBox.mayTry).
+  function shareInSend(box) {
+    var form = document.getElementById("tell-form"), SB = window.SeyalShareBox;
+    if (!shareIn || box.dataset.sending) return;
+    var share = shareIn.rec, to0 = box.getAttribute("data-share-in-to"), place = box.getAttribute("data-share-in-place") || "";
+    if (offline) { shareInStatus(box, "No connection. The share is still on this phone; send it when the connection is back."); return; }
+    if (rec && form && rec.form === form) { shareInStatus(box, "Send or discard the voice note first."); return; }
+    if (!SB.mayTry(share, place)) {
+      shareInStatus(box, "A Send to another business got no answer, so the share may be there already. Open that business with “change” and send it there, or discard it.");
+      return;
+    }
+    var own = form && form.querySelector('input[type="file"][name="file"]');
+    if (own && own.files.length) {
+      own.value = ""; // the person's own files are not sent as shared (D93)
+      shareInStatus(box, "Your attached file was taken off: a share is sent on its own. Send the share, then attach your file again in a new message.");
+      return;
+    }
+    var asItem = (box.querySelector('input[name="share-as"]:checked') || {}).value === "item";
+    var item = box.querySelector("[data-share-in-item]").value.trim();
+    if (asItem && !item) { shareInStatus(box, "Type the item's number or name, or pick it from the list."); return; }
+    var data = form ? new FormData(form) : new FormData();
+    ["file", "voice", "voice_token"].forEach(function (k) { data.delete(k); });
+    if (!form) data.set("text", share.text || "");
+    data.set("via", "share");
+    data.set("share_id", share.id);
+    if (asItem) data.set("item", item);
+    share.files.forEach(function (f) { data.append("file", new Blob([f.data], { type: f.type }), f.name); });
+    box.dataset.sending = "1";
+    var bar = box.querySelector("[data-share-in-progress]");
+    var xhr = new XMLHttpRequest();
+    var kept = function (why) {
+      delete box.dataset.sending;
+      bar.hidden = true;
+      shareInStatus(box, why || "Not sent. It is still on this phone. Try again.");
+    };
+    xhr.open("POST", to0);
+    xhr.timeout = 115000; // the server gives one request 2 minutes
+    xhr.upload.onprogress = function (e) {
+      if (!e.lengthComputable || e.total < 1048576) return; // a progress bar only for big files
+      bar.hidden = false;
+      bar.value = Math.round(100 * e.loaded / e.total);
+    };
+    xhr.onload = function () {
+      var to = new URL(xhr.responseURL || to0, location.href);
+      if (SB.afterSend(xhr.status, to.pathname) !== "clear") {
+        // The business answered: unless it says the share may be there already (409: sent before, or saved
+        // but not started), it holds none of it. Ordinary refusals (closed item, sharing off) are not 409.
+        if (xhr.status !== 409) SB.tried(share, "");
+        if (/\/(login|password)$/.test(to.pathname) || to.pathname === "/") { location.href = to.href; return; } // log in first; it waits
+        var doc = new DOMParser().parseFromString(xhr.responseText, "text/html");
+        var why = doc.querySelector(".banner.error");
+        kept((why ? why.textContent.trim() + " " : "") + "Not sent. It is still on this phone.");
+        return;
+      }
+      SB.clear().then(function () {
+        shareIn = null;
+        if (to.pathname !== new URL(to0, location.href).pathname) { location.href = to.href; return; }
+        var doc = new DOMParser().parseFromString(xhr.responseText, "text/html");
+        document.body.replaceWith(doc.body); // e.g. Seyal asks which process it is for
+        if (window.htmx) htmx.process(document.body);
+        settle();
+      });
+    };
+    xhr.onerror = function () { kept(); goneOffline(); };
+    xhr.ontimeout = function () { kept("This is too slow to send on this connection. Try on Wi-Fi. It is still on this phone."); };
+    shareInStatus(box, "Sending…");
+    SB.tried(share, place).then(function () { xhr.send(data); });
+  }
+  // Typing or picking an item chooses "add to an item".
+  document.addEventListener("input", function (e) {
+    if (!e.target.matches || !e.target.matches("[data-share-in-item]")) return;
+    var radio = e.target.closest("[data-share-in-box]").querySelector('input[name="share-as"][value="item"]');
+    if (radio && e.target.value.trim()) radio.checked = true;
+  });
+  document.addEventListener("DOMContentLoaded", shareInLoad);
+  document.addEventListener("htmx:afterSettle", shareInLoad);
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-share-in-do]");
+    if (!b) return;
+    if (b.getAttribute("data-share-in-do") === "discard") shareInDiscard();
+    else if (shareIn) shareInSend(shareIn.box);
   });
 
   document.addEventListener("click", function (e) {

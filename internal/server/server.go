@@ -229,6 +229,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /t/{slug}/password", s.authed(s.changePassword))
 	mux.HandleFunc("GET /t/{slug}/{$}", s.authed(s.tellPage))
 	mux.HandleFunc("POST /t/{slug}/tell", s.authed(s.tell))
+	mux.HandleFunc("POST /t/{slug}/share", s.shareFallback)
 	mux.HandleFunc("POST /t/{slug}/voice", s.authed(s.voice))
 	mux.HandleFunc("POST /t/{slug}/move", s.authed(s.move))
 	mux.HandleFunc("GET /t/{slug}/items/{id}", s.authed(s.itemPage))
@@ -302,6 +303,7 @@ type tenant struct {
 	ID, Slug, Name, Currency string
 	Zone                     *time.Location
 	Calendar                 chase.Calendar // its working days, for the days on Seyal's card hints (D77)
+	Sharing                  bool           // its set-up file doesn't say "sharing: off" (D93)
 }
 
 var errNoTenant = errors.New("no such business")
@@ -311,9 +313,10 @@ func (s *Server) tenant(r *http.Request) (tenant, error) {
 	var zone string
 	var daysOff []int16
 	err := s.app.QueryRow(r.Context(), `
-		SELECT id::text, name, currency, timezone, days_off, ARRAY(SELECT to_char(d, 'YYYY-MM-DD') FROM unnest(holidays) d ORDER BY d)
+		SELECT id::text, name, currency, timezone, days_off, ARRAY(SELECT to_char(d, 'YYYY-MM-DD') FROM unnest(holidays) d ORDER BY d),
+			sharing
 		FROM tenants WHERE slug = $1`, t.Slug).
-		Scan(&t.ID, &t.Name, &t.Currency, &zone, &daysOff, &t.Calendar.Holidays)
+		Scan(&t.ID, &t.Name, &t.Currency, &zone, &daysOff, &t.Calendar.Holidays, &t.Sharing)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return t, errNoTenant
 	}
@@ -483,7 +486,10 @@ var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
 
 // manifest describes the installable app for one business address. Like the login page, it is
 // the same for every address and never names the business (D29). Browsers fetch it without the
-// login cookie, so it can't require a login.
+// login cookie, so it can't require a login. Its share target puts Seyal in an Android phone's Share
+// menu (D93): the phone posts the shared things to /t/<slug>/share, where the service worker keeps
+// them on the phone (sw.js). It is the same for every business and every setting, so it still answers
+// the same for real and made-up addresses; "sharing: off" is applied after the login.
 func (s *Server) manifest(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	if !slugPattern.MatchString(slug) {
@@ -499,6 +505,15 @@ func (s *Server) manifest(w http.ResponseWriter, r *http.Request) {
 			{"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png"},
 			{"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"},
 			{"src": "/static/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+		},
+		"share_target": map[string]any{
+			"action": base + "share", "method": "POST", "enctype": "multipart/form-data",
+			"params": map[string]any{
+				"title": "title", "text": "text", "url": "url",
+				// Voice notes (a chat app's are often .opus), photos and PDFs: what Seyal keeps (internal/media).
+				// No video, so Android doesn't offer Seyal for one (design decision 27).
+				"files": []map[string]any{{"name": "files", "accept": []string{"audio/*", ".opus", ".ogg", "image/*", "application/pdf", ".pdf"}}},
+			},
 		},
 	}
 	w.Header().Set("Content-Type", "application/manifest+json")

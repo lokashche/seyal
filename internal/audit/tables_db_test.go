@@ -13,10 +13,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"seyal/internal/audit"
+	"seyal/internal/channel"
 	"seyal/internal/db"
 	"seyal/internal/engine"
 	"seyal/internal/ledger"
 	"seyal/internal/master"
+	"seyal/internal/media"
 	"seyal/internal/playbook"
 	"seyal/internal/testdb"
 	"seyal/internal/workitem"
@@ -174,6 +176,54 @@ func TestTamperingWithTablesIsFound(t *testing.T) {
 				}
 			}
 			t.Errorf("problems = %v, want one in %s mentioning %q", b.check(t), tt.table, tt.want)
+		})
+	}
+}
+
+// TestSharedMarkIsChecked: `seyal verify` compares how a message came in (messages.via, D93) with its
+// message.received event: the "shared from another app" mark can't be taken off, or put on, quietly.
+func TestSharedMarkIsChecked(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		via    string
+		tamper string
+		want   string
+	}{
+		{"mark taken off", channel.ViaShare, "UPDATE messages SET via = NULL WHERE id = $1", `how it came in is "", but the ledger says "share"`},
+		{"mark put on", "", "UPDATE messages SET via = 'share' WHERE id = $1", `how it came in is "share", but the ledger says ""`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newBusiness(t)
+			ctx := context.Background()
+			var msg string
+			err := db.WithTenant(ctx, b.app, b.tenant, func(tx pgx.Tx) error {
+				var sam string
+				if err := tx.QueryRow(ctx, "SELECT id::text FROM persons LIMIT 1").Scan(&sam); err != nil {
+					return err
+				}
+				m, _, err := channel.Receive(ctx, tx, media.Disk{Dir: t.TempDir()}, channel.Incoming{Channel: "web", PersonID: sam,
+					ThreadID: b.item, Text: "We will send the statements tomorrow", Via: tt.via})
+				msg = m.ID
+				return err
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if problems := b.check(t); len(problems) != 0 {
+				t.Fatalf("before tampering: %v", problems)
+			}
+			if err := db.WithTenant(ctx, b.owner, b.tenant, func(tx pgx.Tx) error {
+				_, err := tx.Exec(ctx, tt.tamper, msg)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			for _, p := range b.check(t) {
+				if p.Table == "messages" && strings.Contains(p.Reason, tt.want) {
+					return
+				}
+			}
+			t.Errorf("problems = %v, want one in messages mentioning %q", b.check(t), tt.want)
 		})
 	}
 }

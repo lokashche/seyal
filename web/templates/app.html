@@ -45,6 +45,38 @@
 <section class="pane main-pane" aria-label="Tell Seyal">
   <div class="pane-h"><b>Tell Seyal</b></div>
   {{template "banners" .}}
+  {{with .Data.Share}}
+  {{/* Something shared into Seyal from another app (D93). The share waits on this phone (sharebox.js);
+       app.js shows this banner only when one waits for this login, and sends it only on Send. */}}
+  <div class="share-in" data-share-in-box data-share-in-to="/t/{{$.Slug}}/tell" data-share-in-place="{{$.Slug}}"{{if not .On}} data-off{{end}} hidden>
+    <div class="share-head"><b>Something was shared into Seyal · {{$.Business}}</b>{{with .Others}}
+      <details class="share-change"><summary>change</summary><span class="why">The share waits on this phone; open it in:</span>
+        {{range .}}<a class="btn ghost sm" href="/t/{{.Slug}}/?view=tell" hx-boost="false">{{.Name}}</a>{{end}}</details>{{end}}</div>
+    {{if .On}}
+    <p class="why miss">Send it only if you just shared it.</p>
+    <ul class="share-files" data-share-in-files></ul>
+    <p class="why" data-share-in-left hidden></p>
+    <p class="why" data-share-in-cut hidden>The words were longer than 10,000 letters, so the end was cut.</p>
+    <p class="why">It stays on this phone until you press Send. Up to 5 files, 25 MB in all, about 2 minutes to send.</p>
+    <fieldset class="share-as">
+      <legend class="ctl-label">Send as</legend>
+      {{if .New}}<label><input type="radio" name="share-as" value="new" checked> new work</label>{{end}}
+      <label><input type="radio" name="share-as" value="item"{{if not .New}} checked{{end}}> add to an item:</label>
+      <input list="share-items" data-share-in-item placeholder="Type a number or name, or pick" aria-label="The item to add it to">
+      <datalist id="share-items">{{range .Items}}<option value="{{.Label}}"></option>{{end}}</datalist>
+    </fieldset>
+    <progress data-share-in-progress max="100" value="0" hidden></progress>
+    <p class="why" data-share-in-status aria-live="polite"></p>
+    <div class="row">
+      <button type="button" class="btn" data-share-in-do="send">Send</button>
+      <button type="button" class="btn ghost" data-share-in-do="discard">Discard</button>
+    </div>
+    {{else}}
+    <p>Sharing into Seyal is off for this business.</p>
+    <div class="row"><button type="button" class="btn ghost" data-share-in-do="discard">Discard</button></div>
+    {{end}}
+  </div>
+  {{end}}
   <div class="thread" id="thread">
     {{with .Data.Tell}}{{with .Move}}
     {{with .Said}}<div class="msg me"><span class="who">{{$.Session.Name}}</span><p>{{.}}</p></div>{{end}}
@@ -197,7 +229,7 @@
       {{end}}
       {{else}}
       <div class="msg {{.Kind}}">
-        <span class="who">{{.Who}} · {{.Time}}</span>
+        <span class="who">{{.Who}}{{if .Shared}} · <span class="shared-in">shared from another app</span>{{end}} · {{.Time}}</span>
         {{with .Text}}<p>{{.}}</p>{{end}}
         {{$e := .}}
         {{range .Media}}

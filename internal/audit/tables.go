@@ -469,6 +469,8 @@ func (c *checker) messages() error {
 		case w.AuthorKind != g.AuthorKind || w.PersonID != g.PersonID || w.Channel != g.Channel ||
 			w.ExternalID != g.ExternalID || !w.SentAt.Equal(g.SentAt):
 			c.add("messages", g.ID, "sender, channel or time differs from the ledger")
+		case w.Via != g.Via:
+			c.add("messages", g.ID, "how it came in is %q, but the ledger says %q", g.Via, w.Via)
 		case !slices.Equal(w.Media, g.Media):
 			c.add("messages", g.ID, "attached files differ from the ledger")
 		case (w.Transcript == nil) != (g.Transcript == nil) || w.Transcript != nil && *w.Transcript != *g.Transcript:
