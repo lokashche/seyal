@@ -8,23 +8,56 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
+	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"seyal/internal/config"
 	"seyal/internal/db"
 	"seyal/internal/playbook"
+	"seyal/internal/send"
 	"seyal/internal/setup"
 )
 
-// runImport creates or updates a business from a set-up file.
+// runImport creates or updates a business from a set-up file. --new-secret <name> (before or after
+// the file, and more than once) gives that other app a new signing secret (D95).
 func runImport(args []string, out io.Writer) error {
-	if len(args) != 1 {
-		return errors.New("usage: seyal import <set-up file>")
+	path, newSecrets, err := importArgs(args)
+	if err != nil {
+		return err
 	}
-	_, err := importFile(args[0], out)
+	_, err = importFile(path, out, newSecrets...)
 	return err
+}
+
+// importArgs reads "import <file> [--new-secret <name>]...", with the flag before or after the file.
+func importArgs(args []string) (path string, newSecrets []string, err error) {
+	usage := errors.New("usage: seyal import <set-up file> [--new-secret <other app>]")
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--new-secret" || a == "-new-secret":
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return "", nil, usage
+			}
+			i++
+			newSecrets = append(newSecrets, args[i])
+		case strings.HasPrefix(a, "--new-secret="):
+			newSecrets = append(newSecrets, strings.TrimPrefix(a, "--new-secret="))
+		case strings.HasPrefix(a, "-") || path != "":
+			return "", nil, usage
+		default:
+			path = a
+		}
+	}
+	if path == "" {
+		return "", nil, usage
+	}
+	return path, newSecrets, nil
 }
 
 // runSeed loads the fictional demo business and gives every demo person's login a fresh password,
@@ -130,7 +163,7 @@ func runSetPassword(args []string, out io.Writer) error {
 	return nil
 }
 
-func importFile(path string, out io.Writer) (*setup.File, error) {
+func importFile(path string, out io.Writer, newSecrets ...string) (*setup.File, error) {
 	playbooksDir, mastersDir := libraryDirs()
 	lib, err := playbook.LoadLibrary(playbooksDir, mastersDir)
 	if err != nil {
@@ -139,6 +172,12 @@ func importFile(path string, out io.Writer) (*setup.File, error) {
 	f, err := setup.Load(path, lib)
 	if err != nil {
 		return nil, err
+	}
+	if len(newSecrets) > 0 {
+		f.NewSecrets = newSecrets
+		if err := f.Check(lib); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
 	}
 	ctx := context.Background()
 	owner, app, err := pools(ctx)
@@ -156,7 +195,39 @@ func importFile(path string, out io.Writer) (*setup.File, error) {
 		what = "created"
 	}
 	fmt.Fprintf(out, "%s %q (%s): %d changes\n", what, f.Business.Name, f.Business.Slug, sum.Changes)
+	otherAppsSaid(out, f, sum.Secrets, sum.RemovedApps, os.Getenv("SEYAL_SEND"), os.Getenv("SEYAL_SEND_HOSTS"))
 	return f, nil
+}
+
+// otherAppsSaid prints, once, the signing secret of each other app that got one on this import, and
+// says which other apps were removed (with their secrets) and which can't receive anything yet on
+// this server (D95). Only here is a secret ever shown: copy it into the other app now.
+func otherAppsSaid(out io.Writer, f *setup.File, secrets map[string]string, removed []string, sendSwitch, hostList string) {
+	for _, name := range slices.Sorted(maps.Keys(secrets)) {
+		fmt.Fprintf(out, "Signing secret for other app %s (shown only now; copy it into that app):\n  %s\n", name, secrets[name])
+	}
+	for _, name := range removed {
+		fmt.Fprintf(out, "Other app %s is no longer in the file, so it was removed and its signing secret thrown away. "+
+			"If you list it again, it gets a new secret to copy into that app.\n", name)
+	}
+	if len(f.OtherApps) == 0 {
+		return
+	}
+	if sendSwitch != "on" {
+		fmt.Fprintln(out, "Sending to other apps is off on this server (SEYAL_SEND), so nothing goes to them yet.")
+	}
+	hosts, err := send.ParseHosts(hostList)
+	if err != nil {
+		fmt.Fprintf(out, "SEYAL_SEND_HOSTS: %v\n", err)
+		return
+	}
+	for _, o := range f.OtherApps {
+		off := send.Target{URL: o.URL, RedirectTo: o.RedirectTo}.Clean().HostsOff(hosts)
+		if len(off) > 0 {
+			fmt.Fprintf(out, "Other app %s: %s isn't in SEYAL_SEND_HOSTS, so nothing goes to it until you add it.\n",
+				o.Name, strings.Join(off, ", "))
+		}
+	}
 }
 
 // pools opens the owner and app connections from the settings.

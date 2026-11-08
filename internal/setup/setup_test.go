@@ -168,3 +168,32 @@ func TestStartedProcessesComeAlong(t *testing.T) {
 		t.Errorf("chosen = %v, want requirement-study brought along by job-evaluation", slices.Sorted(maps.Keys(f.chosen.Playbooks)))
 	}
 }
+
+// TestOtherAppsInTheFile: the demo's other app is read and stored as written, a bad one or a repeated
+// name is refused, --new-secret must name a listed app, and nothing about other apps goes into the
+// Business part (business.created records that whole, and an address must never reach the ledger).
+func TestOtherAppsInTheFile(t *testing.T) {
+	lib := library(t)
+	f, err := Load(demoPath, lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.OtherApps) != 1 || f.OtherApps[0].Name != "jobs-sheet" || len(f.OtherApps[0].Fields) != 5 {
+		t.Fatalf("demo other apps = %+v", f.OtherApps)
+	}
+	if tg := f.OtherApps[0].target(); tg.Expect != "2xx" || tg.Host() != "sheet.kaveri-demo.example" {
+		t.Errorf("demo target = %+v", tg)
+	}
+	f.OtherApps = append(f.OtherApps, f.OtherApps[0], OtherApp{Name: "Bad Name", URL: "http://x.example/MARKER"})
+	f.NewSecrets = []string{"no-such-app"}
+	err = f.Check(lib)
+	for _, want := range []string{`other app "jobs-sheet" is listed twice`, `other app "Bad Name": a name is lowercase`,
+		`other app "Bad Name": label is required`, `other app "Bad Name": url: not https`, `--new-secret "no-such-app"`} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("no %q in %v", want, err)
+		}
+	}
+	if err != nil && strings.Contains(err.Error(), "MARKER") {
+		t.Errorf("a problem shows the address: %v", err)
+	}
+}

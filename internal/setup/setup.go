@@ -31,6 +31,7 @@ import (
 	"seyal/internal/master"
 	"seyal/internal/people"
 	"seyal/internal/playbook"
+	"seyal/internal/send"
 )
 
 // File is a business's set-up file.
@@ -46,6 +47,13 @@ type File struct {
 	Lists []string `yaml:"lists"`
 	// Master items by kind. Money is in normal units (12000 = 12,000.00); "@key" is a person.
 	Master map[string][]Item `yaml:"master"`
+	// Other apps Seyal may send to (D95): a Google Sheet's script, n8n, Make. Each address is a secret,
+	// so this file must stay private. Kept out of Business on purpose: business.created records that
+	// whole, and the address and secret never go into the ledger.
+	OtherApps []OtherApp `yaml:"other_apps"`
+	// NewSecrets names the other apps that get a new signing secret on this import (seyal import
+	// --new-secret <name>). Not read from the file.
+	NewSecrets []string `yaml:"-"`
 
 	dir    string            // the file's folder, for relative paths
 	chosen *playbook.Library // the processes and lists above, read and checked
@@ -129,6 +137,25 @@ func (b Business) holidays() ([]string, []string) {
 	return out, problems
 }
 
+// OtherApp is one other app in the set-up file (design 2.3).
+type OtherApp struct {
+	Name       string   `yaml:"name"`
+	Label      string   `yaml:"label"`
+	Service    string   `yaml:"service"`
+	URL        string   `yaml:"url"`
+	RedirectTo []string `yaml:"redirect_to"`
+	Expect     string   `yaml:"expect"`
+	Fields     []string `yaml:"fields"`
+	Link       bool     `yaml:"link"`
+	Paused     bool     `yaml:"paused"`
+}
+
+// target is the other app as it is stored, without its secret.
+func (o OtherApp) target() send.Target {
+	return send.Target{Name: o.Name, Label: o.Label, Service: o.Service, URL: o.URL, RedirectTo: o.RedirectTo,
+		Expect: o.Expect, Fields: o.Fields, Link: o.Link, Paused: o.Paused}.Clean()
+}
+
 type Role struct {
 	Key  string `yaml:"key"`
 	Name string `yaml:"name"`
@@ -153,6 +180,12 @@ type Summary struct {
 	Created  bool              // the business is new
 	Changes  int               // roles, people, grants, master items and playbooks added or changed
 	People   map[string]string // file key → person id
+	// Secrets are the signing secrets made on this import, by other app: new ones, and those
+	// --new-secret replaced. They are shown once, by the command, and kept nowhere else in clear.
+	Secrets map[string]string
+	// RemovedApps are the other apps this import removed (left out of the file). Their signing secrets
+	// are gone: listed again later, an app gets a new one.
+	RemovedApps []string
 }
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
@@ -237,6 +270,19 @@ func (f *File) Check(lib *playbook.Library) error {
 			if !roles[r] {
 				add("person %s: role %q is not listed under roles", p.Key, r)
 			}
+		}
+	}
+	apps := map[string]bool{}
+	for _, o := range f.OtherApps {
+		problems = append(problems, o.target().Check()...)
+		if apps[o.Name] {
+			add("other app %q is listed twice", o.Name)
+		}
+		apps[o.Name] = true
+	}
+	for _, name := range f.NewSecrets {
+		if !apps[name] {
+			add("--new-secret %q: the file lists no other app by that name", name)
 		}
 	}
 	for _, kind := range slices.Sorted(maps.Keys(f.Master)) {
@@ -344,7 +390,7 @@ func (f *File) choose(templates *playbook.Library) []string {
 // Lists and processes the business already has keep their current definitions (those are changed in
 // Settings); new ones are added.
 func Import(ctx context.Context, owner, app *pgxpool.Pool, f *File) (Summary, error) {
-	sum := Summary{People: map[string]string{}}
+	sum := Summary{People: map[string]string{}, Secrets: map[string]string{}}
 	by := ledger.SystemActor
 	b := f.Business
 
@@ -442,7 +488,113 @@ func Import(ctx context.Context, owner, app *pgxpool.Pool, f *File) (Summary, er
 		}
 		return nil
 	})
+	if err != nil {
+		return sum, err
+	}
+	n, err := saveOtherApps(ctx, owner, sum.TenantID, f, sum.Secrets, &sum.RemovedApps)
+	sum.Changes += n
 	return sum, err
+}
+
+// saveOtherApps makes the business's other apps match the file: it adds, changes and removes rows of
+// other_apps, with one business.updated event for all of them in the same transaction (system actor).
+// The event holds each app's summary and SHA-256, never its address or secret. A new app gets a new
+// signing secret; an existing one keeps its secret unless f.NewSecrets names it. New secrets are put
+// in secrets, to be shown once; the names of removed apps (their secrets are gone for good) in removed.
+// An existing app whose row no longer matches the ledger (changed outside Seyal) is refused unless
+// f.NewSecrets names it. The owner pool writes, because the app role may only read the table.
+func saveOtherApps(ctx context.Context, owner *pgxpool.Pool, tenantID string, f *File, secrets map[string]string,
+	removed *[]string) (int, error) {
+	changes := map[string]any{}
+	err := db.WithTenant(ctx, owner, tenantID, func(tx pgx.Tx) error {
+		if err := ledger.Lock(ctx, tx); err != nil {
+			return err
+		}
+		listed, err := send.Targets(ctx, tx)
+		if err != nil {
+			return err
+		}
+		was := map[string]send.Target{}
+		for _, l := range listed {
+			was[l.Name] = l.Target
+		}
+		for _, o := range f.OtherApps {
+			t := o.target()
+			old, ok := was[t.Name]
+			delete(was, t.Name)
+			note := "kept"
+			switch {
+			case !ok:
+				note = "new"
+			case slices.Contains(f.NewSecrets, t.Name):
+				note = "replaced"
+			default:
+				// Keep the secret only if the row is still the one the ledger last recorded. Otherwise
+				// someone changed it outside Seyal, and keeping it would record a secret Seyal never made
+				// as "kept" (and hide the change from verify).
+				recorded, err := send.RecordedHash(ctx, tx, t.Name)
+				if err != nil {
+					return err
+				}
+				if recorded != old.Hash() {
+					return fmt.Errorf("other app %s was changed outside Seyal; run seyal verify, or import again with --new-secret %s", t.Name, t.Name)
+				}
+				t.Secret = old.Secret
+			}
+			if note != "kept" {
+				if t.Secret, err = send.NewSecret(); err != nil {
+					return err
+				}
+			}
+			if ok && old.Hash() == t.Hash() {
+				continue
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO other_apps (tenant_id, name, label, service, url, redirect_to, expect, fields, link, secret, paused)
+				VALUES (current_tenant(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+				ON CONFLICT (tenant_id, name) DO UPDATE SET label = excluded.label, service = excluded.service,
+					url = excluded.url, redirect_to = excluded.redirect_to, expect = excluded.expect,
+					fields = excluded.fields, link = excluded.link, secret = excluded.secret, paused = excluded.paused`,
+				t.Name, t.Label, t.Service, t.URL, t.RedirectTo, t.Expect, t.Fields, t.Link, t.Secret, t.Paused); err != nil {
+				return fmt.Errorf("other app %s: %w", t.Name, err)
+			}
+			var before any
+			if ok {
+				before = old.Summary("")
+				if old.URL != t.URL || !slices.Equal(old.RedirectTo, t.RedirectTo) || old.Secret != t.Secret {
+					if err := send.ForgetTest(ctx, tx, t.Name); err != nil { // it tested what is gone
+						return err
+					}
+				}
+			}
+			changes[send.ChangeKey+t.Name] = map[string]any{"old": before, "new": t.Summary(note)}
+			if note != "kept" {
+				secrets[t.Name] = t.Secret
+			}
+		}
+		for _, name := range slices.Sorted(maps.Keys(was)) { // no longer in the file
+			if _, err := tx.Exec(ctx, `DELETE FROM other_apps WHERE tenant_id = current_tenant() AND name = $1`, name); err != nil {
+				return fmt.Errorf("other app %s: %w", name, err)
+			}
+			if err := send.ForgetTest(ctx, tx, name); err != nil {
+				return err
+			}
+			changes[send.ChangeKey+name] = map[string]any{"old": was[name].Summary(""), "new": nil}
+			*removed = append(*removed, name)
+		}
+		if len(changes) == 0 {
+			return nil
+		}
+		_, err = ledger.Append(ctx, tx, ledger.Event{Kind: "business.updated", SubjectType: "business",
+			SubjectID: tenantID, Payload: map[string]any{"changes": changes}}.By(ledger.SystemActor))
+		return err
+	})
+	if err != nil {
+		clear(secrets) // nothing was saved: a secret shown now would match nothing
+		*removed = nil
+		return 0, fmt.Errorf("setup: other apps: %w", err)
+	}
+	return len(changes), nil
 }
 
 // updateBusiness writes the file's business settings to an existing business, and a business.updated

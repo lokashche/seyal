@@ -118,3 +118,15 @@ master:
         est_hours: 3
         is_new: true
         fixed_price: true
+
+# Other apps Seyal may send to (D95, Phase 4 part 4c). A real business lists its own here, in its
+# PRIVATE set-up file: the address works like a password. `seyal import` makes each one a signing
+# secret and prints it once. Nothing is sent unless the server has SEYAL_SEND=on and the host is in
+# SEYAL_SEND_HOSTS. This demo address is made up (.example names never reach anyone), so a test send
+# to it can only answer "could not connect".
+other_apps:
+  - name: jobs-sheet
+    label: Jobs sheet (demo)
+    service: Google (demo)
+    url: https://sheet.kaveri-demo.example/macros/s/AAAA0000/exec
+    fields: [client, nature_of_work, fee_agreed, advance, timeline_days]

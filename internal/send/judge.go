@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -32,20 +33,35 @@ type Hosts map[string]bool
 // ParseHosts reads a comma-separated list of host names ("script.google.com, hook.eu1.make.com").
 // Each must be a plain name with a dot in it, not an IP address and not a port; case is ignored.
 // An empty list allows nothing.
+//
+// A wrong entry's error never repeats the entry: an operator may paste a whole webhook address, and
+// its path is often a secret. It names the entry by its place and, for a full address, its host only.
 func ParseHosts(list string) (Hosts, error) {
 	h := Hosts{}
+	place := 0
 	for _, part := range strings.Split(list, ",") {
 		name := strings.ToLower(strings.TrimSpace(part))
 		if name == "" {
 			continue
 		}
-		if !plainName(name) || !strings.Contains(name, ".") ||
-			strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".") || isNumeric(name) {
-			return nil, errors.New("send: " + strconv.Quote(name) + " is not a host name (write names like hook.example.com, with no https:// and no port)")
+		place++
+		if !hostName(name) {
+			hint := ""
+			if u, err := url.Parse(name); err == nil && u.Scheme != "" && hostName(u.Hostname()) {
+				hint = " It looks like a full address: write only its host, " + u.Hostname() + "."
+			}
+			return nil, errors.New("send: entry " + strconv.Itoa(place) + " of the list is not a host name " +
+				"(write names like hook.example.com, with no https://, no path and no port)." + hint)
 		}
 		h[name] = true
 	}
 	return h, nil
+}
+
+// hostName reports whether name (lower case) is a plain host name with a dot, not an IP address.
+func hostName(name string) bool {
+	return plainName(name) && strings.Contains(name, ".") &&
+		!strings.HasPrefix(name, ".") && !strings.HasSuffix(name, ".") && !isNumeric(name)
 }
 
 // isNumeric reports whether name is made only of digits and dots (an IPv4 address, or close to one).

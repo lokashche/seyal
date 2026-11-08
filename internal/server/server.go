@@ -35,6 +35,7 @@ import (
 	"seyal/internal/media"
 	"seyal/internal/playbook"
 	"seyal/internal/seal"
+	"seyal/internal/send"
 	"seyal/web"
 )
 
@@ -85,6 +86,12 @@ type Server struct {
 	poke func(tenantID string)
 	// chatLinks shows the Share panel's chat link button (Config.ChatLinks).
 	chatLinks bool
+	// sendOn, sendHosts and sender are for other apps (Config.SendOn, SendHosts, Sender; D95).
+	sendOn    bool
+	sendHosts send.Hosts
+	sender    send.Poster
+	// testRate limits the admins' Send a test presses, per business (otherapps.go).
+	testRate *limiter
 }
 
 // RequestLimit is how long the web server gives one request to be read and answered: cmd/seyal sets
@@ -117,6 +124,12 @@ type Config struct {
 	// default: when such a link opens in a browser, the chat app's web server sees the words in the
 	// address. Email, Copy and More… need no switch.
 	ChatLinks bool
+	// SendOn lets Seyal send to the other apps a business's set-up file lists (SEYAL_SEND=on, D95),
+	// and only to hosts in SendHosts (SEYAL_SEND_HOSTS). Off by default. Sender makes the calls; nil
+	// means Seyal's safe outgoing caller for those hosts. Only tests pass a fake.
+	SendOn    bool
+	SendHosts send.Hosts
+	Sender    send.Poster
 }
 
 // New prepares the web app.
@@ -127,7 +140,11 @@ func New(cfg Config) (*Server, error) {
 		audioUsed: newAudioUse(), voiceKey: seal.NewKey(),
 		askRate: newLimiter(questionsPerMinute, time.Minute), limit: cmp.Or(cfg.RequestLimit, RequestLimit),
 		pushKey: cfg.PushKey, turnOnRate: newLimiter(turnOnsPerHour, time.Hour), helloRate: newLimiter(hellosPerMinute, time.Minute),
-		shareRate: newLimiter(sharesPerMinute, time.Minute), shareKey: seal.NewKey(), poke: cfg.Poke, chatLinks: cfg.ChatLinks}
+		shareRate: newLimiter(sharesPerMinute, time.Minute), shareKey: seal.NewKey(), poke: cfg.Poke, chatLinks: cfg.ChatLinks,
+		sendOn: cfg.SendOn, sendHosts: cfg.SendHosts, sender: cfg.Sender, testRate: newLimiter(testsPerMinute, time.Minute)}
+	if s.sender == nil {
+		s.sender = send.NewAppCaller(s.sendHosts)
+	}
 	if s.ai == nil {
 		s.ai = &ai.Setup{USDtoINR: 88}
 	}
@@ -261,6 +278,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /t/{slug}/settings/processes/{id}", s.admin(s.processPage))
 	mux.HandleFunc("POST /t/{slug}/settings/processes/{id}", s.admin(s.changeProcess))
 	mux.HandleFunc("POST /t/{slug}/settings/phone-notes", s.admin(s.pausePhoneNotes))
+	mux.HandleFunc("POST /t/{slug}/settings/other-apps/{name}", s.admin(s.otherApp))
 	mux.HandleFunc("GET /t/{slug}/settings/lists", s.admin(s.listsPage))
 	mux.HandleFunc("POST /t/{slug}/settings/lists", s.admin(s.addList))
 	mux.HandleFunc("GET /t/{slug}/settings/lists/{kind}", s.admin(s.listPage))

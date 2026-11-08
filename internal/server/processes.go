@@ -45,6 +45,10 @@ type leavesView struct {
 	Paused   bool
 	PausedBy string // the admin's name
 	PausedAt string // "at 11:02", or "on 5 Nov at 11:02"
+	// Other apps (D95): the server's switch, one line per other app, and a test just sent.
+	SendOn bool
+	Apps   []appLine
+	Test   *testView
 }
 
 // addGap is the advice when a template needs details the business's lists don't have (D75, R), for
@@ -117,12 +121,13 @@ func (s *Server) processPage(w http.ResponseWriter, r *http.Request, c *call) {
 // showProcesses renders the list (id == "") or one process, with an optional notice or problem.
 // draft, when given, is shown in the editor instead of the saved definition (after a failed save).
 func (s *Server) showProcesses(w http.ResponseWriter, r *http.Request, c *call, id string, status int, notice, problem string, draft ...string) {
-	s.showProcessesWith(w, r, c, id, status, notice, problem, nil, draft...)
+	s.showProcessesWith(w, r, c, id, status, notice, problem, nil, nil, draft...)
 }
 
-// showProcessesWith is showProcesses, with advice about a template's missing list details on the list.
+// showProcessesWith is showProcesses, with advice about a template's missing list details on the list,
+// or with what a test to another app just sent (D95).
 func (s *Server) showProcessesWith(w http.ResponseWriter, r *http.Request, c *call, id string, status int, notice, problem string,
-	gap *addGap, draft ...string) {
+	gap *addGap, test *testView, draft ...string) {
 	sv := settingsView{Tab: "processes", Tabs: s.tabs(c, "processes")}
 	err := db.WithTenant(r.Context(), s.app, c.tenant.ID, func(tx pgx.Tx) error {
 		inUse, err := playbook.ListInUse(r.Context(), tx)
@@ -132,7 +137,8 @@ func (s *Server) showProcessesWith(w http.ResponseWriter, r *http.Request, c *ca
 		if id == "" {
 			sv.Processes = s.processList(inUse)
 			sv.Processes.Gap = gap
-			sv.Processes.Leaves, err = s.leavesFor(r, tx, c)
+			sv.Processes.Leaves, err = s.leavesFor(r, tx, c, inUse)
+			sv.Processes.Leaves.Test = test
 			return err
 		}
 		i := slices.IndexFunc(inUse, func(u playbook.InUse) bool { return u.PlaybookID == id })
@@ -616,7 +622,7 @@ func (s *Server) addProcess(w http.ResponseWriter, r *http.Request, c *call) {
 	if errors.Is(err, errListGap) {
 		// The banner at the top says so too: the advice itself is further down, perhaps out of sight.
 		s.showProcessesWith(w, r, c, "", http.StatusUnprocessableEntity, "",
-			gap.Name+" needs details your lists don't have yet. See below to add them.", gap)
+			gap.Name+" needs details your lists don't have yet. See below to add them.", gap, nil)
 		return
 	}
 	if err != nil {
@@ -780,13 +786,16 @@ func (s *Server) explainListGap(r *http.Request, tx pgx.Tx, t *playbook.Playbook
 		t.Version, strings.Join(gaps, ", "), strings.Join(lists, ", "))
 }
 
-// leavesFor reads the "Leaves Seyal" part.
-func (s *Server) leavesFor(r *http.Request, tx pgx.Tx, c *call) (leavesView, error) {
+// leavesFor reads the "Leaves Seyal" part. inUse are the business's processes, for the fields' labels.
+func (s *Server) leavesFor(r *http.Request, tx pgx.Tx, c *call, inUse []playbook.InUse) (leavesView, error) {
 	ns, err := notify.LoadSettings(r.Context(), tx)
 	if err != nil {
 		return leavesView{}, err
 	}
-	lv := leavesView{Server: s.pushKey != "", File: ns.On, Hours: ns.Hours.String(), Paused: ns.Paused()}
+	lv := leavesView{Server: s.pushKey != "", File: ns.On, Hours: ns.Hours.String(), Paused: ns.Paused(), SendOn: s.sendOn}
+	if lv.Apps, err = s.appLines(r.Context(), tx, c, inUse); err != nil {
+		return lv, err
+	}
 	if lv.Paused {
 		if err := tx.QueryRow(r.Context(), `SELECT display_name FROM persons WHERE tenant_id = current_tenant() AND id::text = $1`,
 			ns.PausedBy).Scan(&lv.PausedBy); err != nil {

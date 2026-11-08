@@ -69,3 +69,23 @@ func TestParseHosts(t *testing.T) {
 		}
 	}
 }
+
+// A whole webhook address pasted into the list must not come back in the error (its path is often a
+// secret, and the error goes to the server log and the import output).
+func TestParseHostsHidesTheEntry(t *testing.T) {
+	_, err := ParseHosts("script.google.com, https://hook.eu1.make.com/markerword123")
+	if err == nil {
+		t.Fatal("a full address was taken")
+	}
+	msg := err.Error()
+	if strings.Contains(strings.ToLower(msg), "markerword123") || strings.Contains(msg, "https://hook") {
+		t.Errorf("the error repeats the address: %s", msg)
+	}
+	if !strings.Contains(msg, "entry 2") || !strings.Contains(msg, "hook.eu1.make.com") {
+		t.Errorf("the error should name entry 2 and its host only: %s", msg)
+	}
+	_, err = ParseHosts("hook.example.com/markerword123")
+	if err == nil || strings.Contains(err.Error(), "markerword123") {
+		t.Errorf("a host with a path: %v", err)
+	}
+}

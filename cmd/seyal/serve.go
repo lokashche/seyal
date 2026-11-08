@@ -108,6 +108,10 @@ func runServe(out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	sendOn, sendHosts, err := sending(os.Getenv)
+	if err != nil {
+		return err
+	}
 	reader := newReader(app, out, pusher)
 	srv, err := server.New(server.Config{
 		App: app, Store: media.Disk{Dir: mediaDir}, Library: lib, AI: aiSetup,
@@ -116,6 +120,8 @@ func runServe(out io.Writer) error {
 		PushKey:       pushPublic,
 		Poke:          reader.Poke,
 		ChatLinks:     chat,
+		SendOn:        sendOn,
+		SendHosts:     sendHosts,
 	})
 	if err != nil {
 		return err
@@ -152,6 +158,11 @@ func runServe(out io.Writer) error {
 		fmt.Fprintln(out, "  Phone notes are off (SEYAL_PUSH).")
 	} else {
 		fmt.Fprintln(out, "  Phone notes are on (SEYAL_PUSH=on): each person turns them on for their phone, on Me.")
+	}
+	if !sendOn {
+		fmt.Fprintln(out, "  Sending to other apps is off (SEYAL_SEND).")
+	} else {
+		fmt.Fprintf(out, "  Sending to other apps is on (SEYAL_SEND=on), to %d allowed hosts (SEYAL_SEND_HOSTS).\n", len(sendHosts))
 	}
 	if err := hs.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		stop() // the chaser stops too, before the database is closed

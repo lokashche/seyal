@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // Package audit checks that the tables Seyal keeps for screens (work items, approvals, links,
-// master items, lists, playbook versions, messages and voice transcripts) match what the ledger says happened. The ledger is the
+// master items, lists, playbook versions, messages, voice transcripts and other apps) match what the ledger says happened. The ledger is the
 // record; the tables are a convenient copy. Anyone who edits a table directly, bypassing Seyal,
 // is caught here.
 package audit
@@ -20,6 +20,7 @@ import (
 
 	"seyal/internal/channel"
 	"seyal/internal/engine"
+	"seyal/internal/send"
 	"seyal/internal/workitem"
 )
 
@@ -41,7 +42,7 @@ func CheckTables(ctx context.Context, tx pgx.Tx) ([]Problem, error) {
 		return nil, err
 	}
 	c := &checker{ctx: ctx, tx: tx, want: want}
-	for _, check := range []func() error{c.items, c.approvals, c.links, c.masters, c.kinds, c.playbooks, c.messages, c.transcripts} {
+	for _, check := range []func() error{c.items, c.approvals, c.links, c.masters, c.kinds, c.playbooks, c.messages, c.transcripts, c.otherApps} {
 		if err := check(); err != nil {
 			return nil, err
 		}
@@ -60,6 +61,8 @@ type expected struct {
 	messages  map[string]channel.Message
 	// transcripts are the voice notes' words that messages in the ledger were sent with, by id
 	transcripts map[string]bool
+	// otherApps are the SHA-256 of each other app's row (send.Target.Hash), by name (D95)
+	otherApps map[string]string
 }
 
 type approval struct {
@@ -96,6 +99,7 @@ func replay(ctx context.Context, tx pgx.Tx) (expected, error) {
 		playbooks:   map[string]string{},
 		messages:    map[string]channel.Message{},
 		transcripts: map[string]bool{},
+		otherApps:   map[string]string{},
 	}
 	rows, err := tx.Query(ctx, `SELECT body FROM ledger WHERE tenant_id = current_tenant() ORDER BY seq`)
 	if err != nil {
@@ -155,6 +159,35 @@ func (w expected) apply(kind, subject, actor string, payload json.RawMessage) er
 			return err
 		}
 		w.playbooks[subject] = p.SHA256
+		return nil
+	case "business.updated":
+		// The set-up import's changes to other apps (D95); the business's other settings are on the
+		// tenants table, which isn't checked here.
+		var p struct {
+			Changes map[string]json.RawMessage `json:"changes"`
+		}
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return err
+		}
+		for key, raw := range p.Changes {
+			name, ok := strings.CutPrefix(key, send.ChangeKey)
+			if !ok {
+				continue
+			}
+			var ch struct {
+				New *struct {
+					SHA256 string `json:"sha256"`
+				} `json:"new"`
+			}
+			if err := json.Unmarshal(raw, &ch); err != nil {
+				return err
+			}
+			if ch.New == nil {
+				delete(w.otherApps, name)
+			} else {
+				w.otherApps[name] = ch.New.SHA256
+			}
+		}
 		return nil
 	case "message.received", "message.sent", "message.filed":
 		var p struct {
@@ -494,5 +527,27 @@ func (c *checker) transcripts() error {
 			c.add("transcripts", id, "not in the ledger (added outside Seyal)")
 		}
 	}
+	return nil
+}
+
+// otherApps checks each other app's row against the SHA-256 its last set-up import recorded (D95), so
+// an address, a secret or a field list changed outside Seyal is found. A problem names only the app,
+// never its address or secret. tx must come from db.WithTenant.
+func (c *checker) otherApps() error {
+	got, err := send.Targets(c.ctx, c.tx)
+	if err != nil {
+		return err
+	}
+	for _, g := range got {
+		w, ok := c.want.otherApps[g.Name]
+		delete(c.want.otherApps, g.Name)
+		switch {
+		case !ok:
+			c.add("other_apps", g.Name, "not in the ledger (added outside Seyal)")
+		case g.Hash() != w:
+			c.add("other_apps", g.Name, "differs from its last set-up import (changed outside Seyal)")
+		}
+	}
+	leftovers(c, "other_apps", c.want.otherApps)
 	return nil
 }

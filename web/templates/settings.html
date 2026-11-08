@@ -182,7 +182,35 @@
     {{else}}<input type="hidden" name="do" value="pause"><button class="btn ghost sm" aria-label="Pause phone notes for this business">Pause</button>{{end}}
   </form>
   </div></li>
+  {{$sendOn := .SendOn}}{{range .Apps}}
+  <li><div class="row-head"><div>
+    <b>{{.Label}}</b> <span class="r">{{.Service}} · {{.Host}}{{with .Ends}} · address ends {{.}}{{end}} · may receive: {{if .Fields}}{{.Fields}}{{else}}only the number and state{{end}}</span>
+    {{if not $sendOn}}<span class="pill p-closed">off on this server</span>
+      <span class="r">This Seyal server doesn't send to other apps (SEYAL_SEND is off). Nothing leaves Seyal.</span>
+    {{else if .HostsOff}}<span class="pill p-closed">not allowed on this server</span>
+      <span class="r">{{.HostsOff}} isn't in this server's SEYAL_SEND_HOSTS, so nothing goes to it.</span>
+    {{else if .FilePaused}}<span class="pill p-closed">paused in the set-up file</span>
+      <span class="r">Only the set-up file can undo this (paused: false, then import it again).</span>
+    {{else if .Paused}}<span class="pill p-closed">paused</span>
+      <span class="r">Paused {{.PausedWhy}}. Nothing goes to it until someone presses Resume.</span>
+    {{else}}<span class="pill p-ok">on</span>{{end}}
+    {{with .LastTest}}<span class="r">Last test {{.}}.</span>{{end}}
+  </div>
+  <form method="post" action="/t/{{$.Slug}}/settings/other-apps/{{.Name}}#leaves-seyal" class="sform inline">
+    <button class="btn ghost sm" name="do" value="test" aria-label="Send a test to {{.Label}}">Send a test</button>
+    {{if .Paused}}<button class="btn sm" name="do" value="resume" aria-label="Resume sending to {{.Label}}">Resume</button>
+    {{else}}<button class="btn ghost sm" name="do" value="pause" aria-label="Pause sending to {{.Label}}">Pause</button>{{end}}
+  </form>
+  </div></li>
+  {{end}}
 </ul>
+{{with .Test}}
+<div class="callout{{if not .OK}} warn{{end}}" role="status">
+  <p><b>Test sent to {{.Label}}: {{.Answer}}.</b> What went (fictional values): {{.Line}}</p>
+  <details><summary>The exact data</summary><pre class="why">{{.Body}}</pre></details>
+  <p class="why">The signature that went with it isn't shown. A sheet made from Seyal's sample script puts test rows on its own "Seyal test" tab.</p>
+</div>
+{{end}}
 {{end}}
 {{end}}{{end}}
 

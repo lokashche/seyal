@@ -266,6 +266,7 @@ details.evt.shared > summary::-webkit-details-marker { display: none; }
 .panel h2 { font-size: 20px; }
 .callout { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
 .callout p { margin: 0; }
+.callout pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 .callout.warn { border-color: var(--warn); background: var(--warn-soft); color: var(--warn); }
 .invite { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .invite .who { font-weight: 600; min-width: 8em; }

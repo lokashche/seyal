@@ -205,7 +205,8 @@ func TestImportDemoBusiness(t *testing.T) {
 			var n int
 			var change string
 			if err := tx.QueryRow(ctx, `SELECT count(*), coalesce(max(body::jsonb #>> '{payload,changes}'), '') FROM ledger
-				WHERE kind = 'business.updated' AND actor_kind = 'system' AND subject_id::text = current_tenant()::text`).Scan(&n, &change); err != nil {
+				WHERE kind = 'business.updated' AND actor_kind = 'system' AND subject_id::text = current_tenant()::text
+					AND NOT body::jsonb #> '{payload,changes}' ? 'other_app:jobs-sheet'`).Scan(&n, &change); err != nil { // the first import's other app (D95)
 				return err
 			}
 			for _, want := range []string{`"days_off": {"new": ["sunday", "saturday"], "old": ["sunday"]}`,

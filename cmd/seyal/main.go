@@ -85,6 +85,7 @@ Commands:
   verify         check every ledger for tampering (--full: from the start)
   check          verify the integrity of the playbooks and master data
   import FILE    create or update a business from a set-up file
+                 (--new-secret NAME: a new signing secret for that other app, shown once)
   seed           load the fictional demo business and print its logins
   set-password   give a login a new password (--email EMAIL [--business SLUG])
   link           add an existing login to a business (--email EMAIL --business SLUG)
