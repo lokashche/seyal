@@ -189,6 +189,17 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-
 .sec > summary::after { content: ""; width: 6px; height: 6px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(45deg); margin: 0 4px 3px 0; }
 .sec:not([open]) > summary::after { transform: rotate(-45deg); margin-bottom: 0; }
 .sec:not([open]) > summary { margin-bottom: 0; }
+/* Share (D91): pick a message, check the words, hand them to an app. A recorded hand-over in the thread
+   opens to the exact words. */
+.share-pick { border: 0; margin: 0 0 8px; padding: 0; display: grid; gap: 4px; font-size: 13px; }
+.share textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; background: var(--panel); color: var(--ink); resize: vertical; }
+.share .row { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+/* .btn sets display, which beats the browser's own [hidden] rule: hidden share buttons must stay hidden. */
+.share [hidden], [data-share][hidden] { display: none; }
+details.evt.shared > summary { cursor: pointer; list-style: none; }
+details.evt.shared > summary::-webkit-details-marker { display: none; }
+.shared-words { text-align: left; margin-top: 4px; }
+.shared-words p:first-child { white-space: pre-wrap; color: var(--ink); border-left: 2px solid var(--line); padding-left: 8px; }
 .side h4 { margin: 0; font-size: 12px; font-weight: 500; color: var(--muted); }
 .fields { display: grid; grid-template-columns: minmax(90px, auto) minmax(0, 1fr); gap: 8px 14px; font-size: 13px; margin: 0; }
 .fields dt { color: var(--muted); }

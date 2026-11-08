@@ -185,7 +185,16 @@
   <div class="thread" id="thread">
     {{range .Thread}}
       {{if eq .Kind "evt"}}
+      {{$ev := .}}
+      {{with .Share}}
+      {{/* A hand-over to another app (D91). Go names only the route; the app's name is written here. */}}
+      <details class="evt shared">
+        <summary>· {{$ev.Who}} {{if eq .Route "chat_link"}}opened a WhatsApp link with ‘{{.Label}}’{{else}}{{$ev.Text}}{{end}} · {{$ev.Time}} ·</summary>
+        <div class="shared-words"><p>{{.Text}}</p><p class="why">Recorded from {{$ev.Who}}’s browser{{if .Edited}}, with their own changes to Seyal’s words{{else if .Differs}}, in words that differ from Seyal’s words for the item when it was noted{{end}}. Seyal can’t see whether it was sent{{if eq .To "outside"}} or who received it{{end}}.</p></div>
+      </details>
+      {{else}}
       <div class="evt">· {{.Who}}: {{.Text}} ·</div>
+      {{end}}
       {{else}}
       <div class="msg {{.Kind}}">
         <span class="who">{{.Who}} · {{.Time}}</span>
@@ -282,6 +291,33 @@
       {{end}}
     </dl>
     </details>
+
+    {{with .Share}}
+    {{/* Share (D91): the person checks the words and hands them to an app on their own device. Seyal
+         sends nothing; the page reports the hand-over afterwards (app.js). Hidden until app.js runs. */}}
+    <details class="sec share" data-share-panel data-shared="/t/{{$.Slug}}/items/{{$.Data.Item.Item.ID}}/shared" data-number="{{$.Data.Item.Item.Number}}" hidden>
+      <summary>Share</summary>
+      <fieldset class="share-pick">
+        <legend class="ctl-label">Message</legend>
+        {{range $i, $m := .}}
+        <label><input type="radio" name="share-msg" value="{{.ID}}" data-to="{{.To}}" data-label="{{.Label}}" data-text="{{.Text}}" data-offer="{{.Offer}}" data-empty="{{len .Empty}}"{{if eq $i 0}} checked{{end}}> {{.Label}}{{if eq .To "outside"}} <span class="why">(outside)</span>{{end}}</label>
+        {{end}}
+      </fieldset>
+      <label class="ctl-label" for="share-box">The words (you can change them)</label>
+      <textarea id="share-box" rows="6" maxlength="4000" data-share-box></textarea>
+      <p class="why miss" data-share-empty hidden></p>
+      <p class="why" data-share-for="colleague">This text leaves Seyal. Anyone it is forwarded to can read it.</p>
+      <p class="why" data-share-for="outside" hidden>This text leaves Seyal. Whoever you send it to can read all of it.</p>
+      <div class="row">
+        <button type="button" class="btn sm" data-share-route="email">Email</button>
+        <button type="button" class="btn sm" data-share-route="copy">Copy</button>
+        <button type="button" class="btn ghost sm" data-share-route="menu" hidden>More…</button>
+      </div>
+      <p class="why" data-share-long hidden>Too long for an email link: use More… or Copy.</p>
+      <p class="why miss" data-share-over hidden>Too long: shorten it to 4,000 letters.</p>
+      <p class="why" data-share-status aria-live="polite"></p>
+    </details>
+    {{end}}
 
     {{with .Slots}}
     <details class="sec first-on-phones" open><summary>Approvals</summary>

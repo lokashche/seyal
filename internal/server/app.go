@@ -104,6 +104,7 @@ type itemView struct {
 	Fields   []fieldView
 	Slots    []slotView
 	Actions  []actionView
+	Share    []shareView // the Share panel's messages (D91): "Tell a colleague" first
 }
 
 type entryView struct {
@@ -115,6 +116,8 @@ type entryView struct {
 	Spoken bool // the text came from a voice note in Media (the one marked Spoken)
 	Tidied bool // the AI tidy-up changed the words heard (removed "umm"s, repeats)
 	Edited bool // the person corrected the words they were given
+	// Share is a hand-over to another app (D91): the line names the app and opens to the exact words.
+	Share *thread.Shared
 }
 
 // linkView is a linked work item: the one this item is part of, or one it started.
@@ -193,11 +196,15 @@ type view struct {
 	lost      map[string][]string // person id → roles they lost, once read (see stranded)
 	opened    string              // the item open on this page: it is being seen now, so its card isn't New
 	flags     map[string]string   // item id → why an admin must step in (flagGone, flagRole, flagNobody, flagEscalate), set by next
+	origin    string              // the address the browser used (https://host), for an item's link in a share text
+	shareKey  []byte              // signs the Share panel's offers (Server.shareKey)
 }
 
 func (s *Server) newView(r *http.Request, tx pgx.Tx, c *call) (*view, error) {
 	v := &view{ctx: r.Context(), tx: tx, c: c, today: time.Now().In(c.tenant.Zone).Format(time.DateOnly),
 		playbooks: map[string]*playbook.Playbook{}, q: r.URL.Query(), flags: map[string]string{}}
+	v.origin, _ = s.origin(r)
+	v.shareKey = s.shareKey
 	var err error
 	if v.names, err = pairs(v, "SELECT id::text, display_name FROM persons WHERE tenant_id = current_tenant()"); err != nil {
 		return nil, err
@@ -342,7 +349,7 @@ func (v *view) item(id string) (*itemView, error) {
 		return nil, err
 	}
 	for _, e := range entries {
-		ev := entryView{Kind: "evt", Who: e.Who, Text: e.Text, Time: v.when(e.At)}
+		ev := entryView{Kind: "evt", Who: e.Who, Text: e.Text, Time: v.when(e.At), Share: e.Share}
 		if m := e.Message; m != nil {
 			switch {
 			case m.AuthorKind == "seyal":
@@ -453,6 +460,10 @@ func (v *view) item(id string) (*itemView, error) {
 			}
 			iv.Actions = append(iv.Actions, a)
 		}
+	}
+
+	if iv.Share, err = v.shares(it); err != nil {
+		return nil, err
 	}
 
 	if p.Approvals != nil {

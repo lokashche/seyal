@@ -31,6 +31,21 @@ type Entry struct {
 	Text    string           // what happened or what was said, in plain words
 	Message *channel.Message // the message itself, with its files (messages only)
 	Seq     int64            // ledger position (events only)
+	Share   *Shared          // a hand-over to another app (item.shared only)
+}
+
+// Shared is a hand-over from the item to an app on the person's device (item.shared, D91), as their
+// browser reported it. The page names the app for RouteChatLink; Go knows only the route's key.
+type Shared struct {
+	Label  string // the message picked, e.g. "Tell a colleague"
+	To     string // playbook.ShareColleague or playbook.ShareOutside
+	Route  string // workitem.RouteChatLink, RouteEmail, RouteCopy or RouteMenu
+	Text   string // the exact words handed over
+	Edited bool   // the person changed the words Seyal offered them first
+	// Differs is set instead of Edited when Seyal couldn't check which words it had offered (the server
+	// restarted since the page was drawn): the words differ from Seyal's words for the item when the
+	// record arrived, which may be only because the item changed since.
+	Differs bool
 }
 
 // For returns the thread of one work item, oldest first. tx must come from db.WithTenant.
@@ -140,6 +155,9 @@ func (b *builder) addEvents(itemID string) error {
 		e.Who = b.who(actorKind, actor, behalf)
 		pl := parsed.Payload
 		e.Text = b.describe(e.Kind, pl.Change, pl.Item)
+		if e.Kind == "item.shared" {
+			e.Share = b.shared(pl.Change)
+		}
 		b.before = pl.Item.Fields
 		if e.Text != "" {
 			b.entries = append(b.entries, e)
@@ -239,8 +257,38 @@ func (b *builder) describe(kind string, change map[string]any, it workitem.Item)
 		return str("text")
 	case "item.assigned":
 		return b.handOver(str)
+	case "item.shared":
+		// Honest words only: Seyal saw the hand-over, never whether it was sent (D91).
+		label := "‘" + b.shared(change).Label + "’"
+		switch str("route") {
+		case workitem.RouteChatLink:
+			return "opened a chat link with " + label
+		case workitem.RouteEmail:
+			return "opened an email with " + label
+		case workitem.RouteCopy:
+			return "copied " + label
+		}
+		return "handed " + label + " to the phone's share menu"
 	}
 	return ""
+}
+
+// shared reads an item.shared event's change. The message's label comes from the item's own process
+// version, so it reads the same however the process changes later.
+func (b *builder) shared(change map[string]any) *Shared {
+	str := func(key string) string { s, _ := change[key].(string); return s }
+	sh := &Shared{Label: str("share"), To: str("to"), Route: str("route"), Text: str("text")}
+	sh.Edited, _ = change["edited"].(bool)
+	sh.Differs, _ = change["differs"].(bool)
+	if sh.Label == playbook.BuiltinShare {
+		sh.Label = workitem.ColleagueLabel
+	}
+	for _, m := range b.p.Share {
+		if m.ID == str("share") {
+			sh.Label = strings.TrimSpace(m.Label)
+		}
+	}
+	return sh
 }
 
 // handOver describes an item.assigned event by how it changed hands (D70). Events written before D70

@@ -16,8 +16,10 @@
   <script src="/static/htmx.min.js?v={{.Asset}}" defer></script>
   <script src="/static/app.js?v={{.Asset}}" defer></script>
 </head>
-{{/* data-hello: the page tells Seyal it was opened in this browser, for phone notes (app.js). */}}
-<body hx-boost="true"{{if and .Session .Slug}} data-hello="/t/{{.Slug}}/push/hello" data-login="{{.Session.ExpiresAt.Unix}}"{{end}}>
+{{/* data-hello: the page tells Seyal it was opened in this browser, for phone notes (app.js).
+     data-sharer: the same for every session of one login, so a share record waiting on this device
+     is sent by that login's next session too (app.js, D91). */}}
+<body hx-boost="true"{{if and .Session .Slug}} data-hello="/t/{{.Slug}}/push/hello" data-login="{{.Session.ExpiresAt.Unix}}" data-sharer="{{.Session.Tag}}"{{end}}>
 {{template "content" .}}
 </body>
 </html>

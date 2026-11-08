@@ -537,7 +537,7 @@ func endings(ctx context.Context, tx pgx.Tx, ids []string) (map[string]time.Time
 		if e.Kind == "item.state_changed" {
 			at[e.Item], by[e.Item] = e.At, cmp.Or(e.Person, last[e.Item])
 		}
-		if e.Person != "" {
+		if e.Person != "" && e.Kind != "item.shared" { // a share changes nothing on the item (D91)
 			last[e.Item] = e.Person
 		}
 	}

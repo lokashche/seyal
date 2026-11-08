@@ -691,10 +691,14 @@
   document.addEventListener("DOMContentLoaded", function () { hello(false); pushBlock(); });
   document.addEventListener("htmx:afterSettle", pushBlock);
   // Logging out also unsubscribes this browser, so a shared phone keeps nothing of this person (the
-  // server ends the device either way). The form is sent after that, or after 2 seconds at most.
+  // server ends the device either way). A share record still waiting here is sent first, then cleared:
+  // it isn't kept past a log out (D91). The form is sent after that, or after 2 seconds at most.
   document.addEventListener("submit", function (e) {
     var form = e.target;
-    if (!pushOK || form.dataset.unsubscribed || !/\/logout(-everywhere)?$/.test(form.getAttribute("action") || "")) return;
+    var logout = /\/logout(-everywhere)?$/.test(form.getAttribute("action") || "");
+    if (!logout || form.dataset.unsubscribed) return;
+    var waiting = shareQueue().length > 0;
+    if (!pushOK && !waiting) return;
     e.preventDefault();
     e.stopImmediatePropagation();
     form.dataset.unsubscribed = "1";
@@ -702,12 +706,18 @@
     var go = function () {
       if (sent) return;
       sent = true;
-      keep(DEVICE, "");
-      keep("seyal-push-hello", "");
+      keep(SHARES, "");
+      if (pushOK) {
+        keep(DEVICE, "");
+        keep("seyal-push-hello", "");
+      }
       HTMLFormElement.prototype.submit.call(form);
     };
     setTimeout(go, 2000);
-    pushSub().then(function (sub) { return sub && sub.unsubscribe(); }).catch(function () { /* logged out anyway */ }).then(go);
+    Promise.all([
+      waiting ? sendShares() : null,
+      pushOK ? pushSub().then(function (sub) { return sub && sub.unsubscribe(); }).catch(function () { /* logged out anyway */ }) : null
+    ]).then(go, go);
   }, true);
 
   // --- Sending a set-your-password link -------------------------------------------------------
@@ -721,14 +731,17 @@
   document.addEventListener("DOMContentLoaded", showShare);
   document.addEventListener("htmx:afterSettle", showShare);
 
-  function copied(button, ok) {
+  // copied shows on the button whether it worked; failed is what to do instead (default: the link).
+  function copied(button, ok, failed) {
     var label = button.textContent;
-    button.textContent = ok ? "Copied ✓" : "Select the link and copy it";
+    button.textContent = ok ? "Copied ✓" : (failed || "Select the link and copy it");
     setTimeout(function () { button.textContent = label; }, 2500);
   }
-  function copyText(text, button) {
+  // copyText copies text and shows it on button; done, if given, hears whether it worked.
+  function copyText(text, button, done, failed) {
+    var after = function (ok) { copied(button, ok, failed); if (done) done(ok); };
     if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(text).then(function () { copied(button, true); }, function () { copied(button, false); });
+      navigator.clipboard.writeText(text).then(function () { after(true); }, function () { after(false); });
       return;
     }
     // Plain http (e.g. trying it on the local network): the older way.
@@ -742,7 +755,7 @@
     var ok = false;
     try { ok = document.execCommand("copy"); } catch (_) { /* not allowed */ }
     area.remove();
-    copied(button, ok);
+    after(ok);
   }
   document.addEventListener("click", function (e) {
     var copy = e.target.closest("[data-copy]");
@@ -751,6 +764,175 @@
     if (share && navigator.share) navigator.share({ text: share.getAttribute("data-share") }).catch(function () { /* closed */ });
     var box = e.target.closest("[data-select]");
     if (box) box.select();
+  });
+
+  // --- Share (D91) ----------------------------------------------------------------------------------
+  // The Work Item's Share panel: pick a message, check (or change) the words, then hand them to an app
+  // on this device: an email, the clipboard, or the phone's own share menu (More…). Seyal's server sends
+  // nothing. After the hand-over the page reports it (POST …/shared), so the thread can say "Asha copied
+  // ‘Tell a colleague’". The report carries the message's signed offer (data-offer), so Seyal judges it
+  // by what it offered when the page was drawn, even if the item has moved on since. The report is kept
+  // on this device first (localStorage) and sent with keepalive, which survives the page changing; if the
+  // phone is offline or Seyal is down, it goes the next time a page of the same business opens here, for
+  // the same login only (data-sharer, the same in all its sessions), for 7 days at most. Each different
+  // hand-over in one opening of the panel (message, way, words) has its own attempt id, so a double tap
+  // is recorded once.
+
+  var SHARES = "seyal-share-records";
+  var EMAIL_MAX = 2000; // some email apps (Outlook on Windows) cut longer mailto: links
+  var SHARE_MAX = 4000; // the most letters a share may hold (workitem.MaxShareText)
+  var SHARE_LIFE = 7 * 24 * 3600 * 1000; // a record waits no longer (server/share.go offerLife)
+
+  function uuid() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    var b = crypto.getRandomValues(new Uint8Array(16)); // plain http has no randomUUID
+    b[6] = (b[6] & 15) | 64;
+    b[8] = (b[8] & 63) | 128;
+    var h = Array.prototype.map.call(b, function (x) { return (x + 256).toString(16).slice(1); }).join("");
+    return h.slice(0, 8) + "-" + h.slice(8, 12) + "-" + h.slice(12, 16) + "-" + h.slice(16, 20) + "-" + h.slice(20);
+  }
+  // shareQueue is the records waiting on this device, less any older than SHARE_LIFE.
+  function shareQueue() {
+    var list;
+    try { list = JSON.parse(kept(SHARES) || "[]") || []; } catch (_) { return []; }
+    return list.filter(function (r) { return r && r.at && Date.now() - r.at < SHARE_LIFE; });
+  }
+  function keepShares(list) { keep(SHARES, list.length ? JSON.stringify(list) : ""); }
+  function dropShare(attempt) { keepShares(shareQueue().filter(function (r) { return r.attempt !== attempt; })); }
+  // shareHere is the start of this business's addresses ("/t/acme/"), from the page; "" on a page
+  // outside a business.
+  function shareHere() {
+    var m = /^\/t\/[^/]+\//.exec(document.body.getAttribute("data-hello") || "");
+    return m ? m[0] : "";
+  }
+  // letters counts as the server does (one per character, not per UTF-16 unit).
+  function letters(text) { return Array.from(text).length; }
+
+  function sharePicked(panel) { return panel.querySelector('input[name="share-msg"]:checked'); }
+  function shareWords(panel) { return panel.querySelector("[data-share-box]").value; }
+  function shareStatus(panel, text) { panel.querySelector("[data-share-status]").textContent = text; }
+  function mailto(panel) {
+    var subject = sharePicked(panel).getAttribute("data-label") + " · " + panel.getAttribute("data-number");
+    return "mailto:?subject=" + encodeURIComponent(subject) + "&body=" + encodeURIComponent(shareWords(panel));
+  }
+  // shareLength hides Email when the finished link, counted after encoding, is too long, and says so
+  // when the words are over 4,000 letters (a long detail can make even Seyal's own words that long).
+  function shareLength(panel) {
+    var over = letters(shareWords(panel)) > SHARE_MAX;
+    var long = !over && mailto(panel).length > EMAIL_MAX;
+    panel.querySelector('[data-share-route="email"]').hidden = long || over;
+    panel.querySelector("[data-share-long]").hidden = !long;
+    panel.querySelector("[data-share-over]").hidden = !over;
+  }
+  // shareFill puts the picked message's words in the box, with its hints: the words the person already
+  // changed for that message in this panel, or else Seyal's.
+  function shareFill(panel) {
+    var m = sharePicked(panel);
+    if (!m) return;
+    var changed = Object.prototype.hasOwnProperty.call(panel.edits, m.value);
+    panel.querySelector("[data-share-box]").value = changed ? panel.edits[m.value] : m.getAttribute("data-text");
+    var n = +m.getAttribute("data-empty"), empty = panel.querySelector("[data-share-empty]");
+    empty.textContent = n === 1 ? "1 detail is empty." : n + " details are empty.";
+    empty.hidden = !n;
+    panel.querySelectorAll("[data-share-for]").forEach(function (p) { p.hidden = p.getAttribute("data-share-for") !== m.getAttribute("data-to"); });
+    shareStatus(panel, "");
+    shareLength(panel);
+  }
+  function sharePanels() {
+    document.querySelectorAll("[data-share-panel]").forEach(function (panel) {
+      if (panel.dataset.ready) return;
+      panel.dataset.ready = "1";
+      panel.hidden = false;
+      panel.querySelector('[data-share-route="menu"]').hidden = !navigator.share;
+      panel.attempts = {};
+      panel.edits = {}; // message id → the words the person changed, kept when they pick another message
+      shareFill(panel);
+    });
+  }
+  // sendShares sends the records waiting on this device (and extra, the one just made, even when the
+  // browser keeps no storage). A record goes only with the login that made it: on a shared phone it is
+  // never sent as someone else, and another login's records are dropped. It goes only from a page of
+  // its own business, so sending it never opens that business behind the person's back. Seyal's answer
+  // is final for a refusal or a bad record (dropped); with no answer, a server error or "too many", it
+  // waits. It returns a promise that settles when every answer is in.
+  function sendShares(extra, panel) {
+    var sharer = document.body.getAttribute("data-sharer");
+    var list = shareQueue();
+    keepShares(list); // records too old to count go
+    if (!sharer) return Promise.resolve(); // the login page: wait for the login
+    if (extra && !list.some(function (r) { return r.attempt === extra.attempt; })) list.push(extra);
+    var mine = list.filter(function (r) { return r.sharer === sharer; });
+    if (mine.length !== list.length) keepShares(mine);
+    var here = shareHere();
+    return Promise.all(mine.filter(function (r) { return here && r.url.indexOf(here) === 0; }).map(function (r) {
+      var own = panel && extra && r.attempt === extra.attempt;
+      return fetch(r.url, { method: "POST", credentials: "same-origin", keepalive: true,
+        body: new URLSearchParams({ share: r.share, route: r.route, text: r.text, attempt: r.attempt, offer: r.offer || "" }) })
+        .then(function (resp) {
+          var json = !resp.redirected && /^application\/json(;|$)/.test(resp.headers.get("Content-Type") || "");
+          if (!json || resp.status >= 500 || resp.status === 429) {
+            if (own) shareStatus(panel, "Not noted yet: Seyal notes it the next time it opens here.");
+            return;
+          }
+          dropShare(r.attempt);
+          if (!own) return;
+          if (resp.ok) shareStatus(panel, "Noted in this item's thread.");
+          else resp.json().then(function (j) { shareStatus(panel, j.error || "Seyal couldn't note it."); }, function () { /* no words */ });
+        })
+        .catch(function () { if (own) shareStatus(panel, "Not noted yet: Seyal notes it the next time it opens here."); });
+    }));
+  }
+  function recordShare(panel, m, route, text) {
+    var key = m.value + "|" + route + "|" + text;
+    var attempt = panel.attempts[key] || (panel.attempts[key] = uuid());
+    var rec = { url: panel.getAttribute("data-shared"), share: m.value, route: route, text: text, attempt: attempt,
+      offer: m.getAttribute("data-offer") || "", sharer: document.body.getAttribute("data-sharer") || "", at: Date.now() };
+    keepShares(shareQueue().filter(function (r) { return r.attempt !== attempt; }).concat([rec]).slice(-20));
+    sendShares(rec, panel);
+  }
+  document.addEventListener("DOMContentLoaded", function () { sharePanels(); sendShares(); });
+  document.addEventListener("htmx:afterSettle", function () { sharePanels(); sendShares(); });
+  // Each opening of the panel starts new attempts ("toggle" doesn't bubble, so it is caught on the way down).
+  document.addEventListener("toggle", function (e) {
+    var t = e.target;
+    if (t.matches && t.matches("[data-share-panel]") && t.open) t.attempts = {};
+  }, true);
+  document.addEventListener("change", function (e) {
+    var panel = e.target.closest && e.target.closest("[data-share-panel]");
+    if (panel && e.target.name === "share-msg") shareFill(panel);
+  });
+  document.addEventListener("input", function (e) {
+    var panel = e.target.closest && e.target.closest("[data-share-panel]");
+    if (!panel || !e.target.hasAttribute("data-share-box")) return;
+    var m = sharePicked(panel);
+    if (m) panel.edits[m.value] = e.target.value;
+    shareLength(panel);
+  });
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-share-route]");
+    var panel = b && b.closest("[data-share-panel]");
+    if (!panel) return;
+    var m = sharePicked(panel), text = shareWords(panel), route = b.getAttribute("data-share-route");
+    if (!m || !text.trim()) { shareStatus(panel, "Write the message first."); return; }
+    // Nothing leaves that Seyal couldn't note: the server takes 4,000 letters at most.
+    if (letters(text) > SHARE_MAX) { shareStatus(panel, "Too long: shorten it to 4,000 letters."); return; }
+    var done = function () { recordShare(panel, m, route, text); };
+    switch (route) {
+      case "copy": // recorded once it is on the clipboard
+        copyText(text, b, function (ok) { if (ok) done(); }, "Select the words and copy them");
+        break;
+      case "email": // recorded on the tap: Seyal can't see the email app
+        if (mailto(panel).length > EMAIL_MAX) { shareStatus(panel, "Too long for an email link: use More… or Copy."); return; }
+        done();
+        location.href = mailto(panel);
+        break;
+      case "menu": // recorded when the menu says an app took it; closing the menu records nothing
+        if (!navigator.share) { shareStatus(panel, "This browser has no share menu. Use Copy instead."); return; }
+        navigator.share({ text: text }).then(done, function (err) {
+          if (!err || err.name !== "AbortError") shareStatus(panel, "The share menu didn't open here. Use Copy instead.");
+        });
+        break;
+    }
   });
 
   document.addEventListener("click", function (e) {

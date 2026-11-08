@@ -476,6 +476,7 @@ func (p *Playbook) CheckNew() error {
 	// model or a voice note gives it needs the person's Yes first (D74).
 	problems = append(problems, p.timingProblems()...)
 	problems = append(problems, p.scheduleProblems()...)
+	problems = append(problems, p.shareProblems()...)
 	if len(problems) == 0 {
 		return nil
 	}

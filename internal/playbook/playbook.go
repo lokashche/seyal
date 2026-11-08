@@ -39,6 +39,9 @@ type Playbook struct {
 	// Schedule starts work on its own, every period, one item for each ticked list entry (D75, R).
 	// nil: the process starts only from a message or from linked work.
 	Schedule *Schedule `yaml:"schedule"`
+	// Share lists the process's own ready messages a person may hand on from an item (D91), after
+	// Seyal's own "Tell a colleague" (BuiltinShare).
+	Share []ShareMessage `yaml:"share"`
 
 	Source     []byte      `yaml:"-"` // the exact file contents
 	Hash       [32]byte    `yaml:"-"` // sha256 of Source, used to spot changed files

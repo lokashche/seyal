@@ -76,6 +76,11 @@ type Server struct {
 	pushKey string
 	// turnOnRate and helloRate limit the phone-note routes each login may call (phonenotes.go).
 	turnOnRate, helloRate *limiter
+	// shareRate limits the hand-overs each person may record (share.go).
+	shareRate *limiter
+	// shareKey signs the messages the Share panel offers, so a hand-over reported later is judged by
+	// what was offered (share.go). Like voiceKey it is made anew at every start and never stored.
+	shareKey []byte
 	// poke tells the phone-note reader a business changed (Config.Poke); nil: nothing is told.
 	poke func(tenantID string)
 }
@@ -116,7 +121,7 @@ func New(cfg Config) (*Server, error) {
 		audioUsed: newAudioUse(), voiceKey: seal.NewKey(),
 		askRate: newLimiter(questionsPerMinute, time.Minute), limit: cmp.Or(cfg.RequestLimit, RequestLimit),
 		pushKey: cfg.PushKey, turnOnRate: newLimiter(turnOnsPerHour, time.Hour), helloRate: newLimiter(hellosPerMinute, time.Minute),
-		poke: cfg.Poke}
+		shareRate: newLimiter(sharesPerMinute, time.Minute), shareKey: seal.NewKey(), poke: cfg.Poke}
 	if s.ai == nil {
 		s.ai = &ai.Setup{USDtoINR: 88}
 	}
@@ -229,6 +234,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /t/{slug}/items/{id}/decide", s.authed(s.decide))
 	mux.HandleFunc("POST /t/{slug}/items/{id}/pass", s.authed(s.pass))
 	mux.HandleFunc("POST /t/{slug}/items/{id}/take", s.authed(s.take))
+	mux.HandleFunc("POST /t/{slug}/items/{id}/shared", s.authed(s.shared))
 	mux.HandleFunc("GET /t/{slug}/media/{id}", s.authed(s.media))
 
 	// Settings: admins only.
@@ -688,7 +694,7 @@ func securityHeaders(https bool, next http.Handler) http.Handler {
 			"style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "same-origin")
-		h.Set("Permissions-Policy", "camera=(), geolocation=(), microphone=(self)")
+		h.Set("Permissions-Policy", "camera=(), geolocation=(), microphone=(self), web-share=(self)")
 		next.ServeHTTP(w, r)
 	})
 }

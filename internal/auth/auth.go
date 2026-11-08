@@ -49,6 +49,17 @@ type Session struct {
 	Email     string
 }
 
+// Tag is a mark for the login (the account) that stays the same in all its sessions and businesses,
+// and says nothing about it: a fingerprint of its id. The page keeps a share record waiting on the
+// device under it, so the same login's next session still sends it, and another login's drops it.
+func (s Session) Tag() string {
+	if s.AccountID == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte("seyal-login-tag:" + s.AccountID))
+	return hex.EncodeToString(sum[:12])
+}
+
 // ErrWrongPassword means the current password given to change it was wrong.
 var ErrWrongPassword = errors.New("the current password is wrong")
 
