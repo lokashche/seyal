@@ -69,6 +69,7 @@ type processView struct {
 	Approvals         []string
 	OnState           []string
 	Deadlines         []string
+	Share             []string // the process's own share messages in plain words (D92)
 	Versions          []playbook.VersionInfo
 	CurrentID         string
 	Source            string        // the definition, for advanced editing
@@ -367,7 +368,43 @@ func (s *Server) processView(u playbook.InUse, lib *playbook.Library) *processVi
 		}
 		pv.OnState = append(pv.OnState, "When "+human(st)+": "+strings.Join(parts, "; "))
 	}
+	for _, m := range p.Share {
+		pv.Share = append(pv.Share, d.share(m))
+	}
 	return pv
+}
+
+// share describes one of the process's share messages (D92), with its words as written, for example
+// "Ask for the papers (for outside; in studying, with ops; phone and email from Supplier): “Dear
+// {supplier}, …”". Every part is in it, so a change shows under a draft's "What changes".
+func (d describer) share(m playbook.ShareMessage) string {
+	parts := []string{"for " + m.To}
+	if len(m.In) > 0 {
+		steps := make([]string, len(m.In))
+		for i, st := range m.In {
+			steps[i] = human(st)
+		}
+		parts = append(parts, "in "+strings.Join(steps, ", "))
+	}
+	if m.Contact != "" {
+		var list *playbook.MasterKind
+		if f := d.field(m.Contact); f != nil && d.lib != nil {
+			list = d.lib.Masters[f.Kind]
+		}
+		if list == nil || list.Contact == nil {
+			parts = append(parts, "the "+d.label(m.Contact)+" list names no phone or email yet (Settings → Lists), so the chat link and Email ask whom to send to")
+		} else {
+			var has []string
+			if list.Contact.Phone != "" {
+				has = append(has, "phone")
+			}
+			if list.Contact.Email != "" {
+				has = append(has, "email")
+			}
+			parts = append(parts, strings.Join(has, " and ")+" from "+d.label(m.Contact))
+		}
+	}
+	return fmt.Sprintf("%s (%s): “%s”", strings.TrimSpace(m.Label), strings.Join(parts, "; "), strings.TrimSpace(m.Text))
 }
 
 // describer turns playbook parts into plain words, using field labels.

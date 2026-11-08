@@ -6,10 +6,12 @@
 # the step ("returns_to: last"). A job for new work is studied only once for each work type, and the
 # fee Sales proposed is the one Sales last sent. Version 0.6 adds timing (D75, M6): after 2 working
 # days in Operations Seyal reminds whoever has the job, after 4 it hands the job to the Owner team, and
-# approvers still missing are reminded after 1 working day.
+# approvers still missing are reminded after 1 working day. Version 0.7 adds a ready message for the
+# Share panel (Phase 4, D92): "Ask the client for documents", which a person checks and sends from their
+# own app, to the client's phone or email from the client list.
 # Generic example only. Real playbooks live in each business's own set-up.
 id: job-evaluation
-version: "0.6"
+version: "0.7"
 description: Evaluate a new piece of client work. Sales agrees the basics, Operations plans it and confirms the fee, then it is approved before work starts.
 examples:
   - "New monthly bookkeeping job for Acme Traders, fee 12000"
@@ -139,3 +141,18 @@ on:
   approved:
     - { do: post, text: "Approved. Over to {maker}." }
     - { do: assign, to: maker }
+
+# Ready messages for the Work Item's Share panel, after Seyal's own "Tell a colleague" (D92). Seyal fills
+# them in; the person checks the words and sends them from their own app (Seyal sends nothing). "to:
+# outside" is for someone with no login, so it never carries {link}, and only people who may change the
+# job see it. "contact:" points at the client, whose list says which details are a phone and an email.
+share:
+  - id: ask-documents
+    label: Ask the client for documents
+    to: outside
+    contact: client
+    in: [studying, with_ops]
+    text: >
+      Dear {client}, for our work on {number} ({nature_of_work}), please send:
+      {required_documents}. We need them by {client_data_due}.
+      Thank you, {me}, {business}

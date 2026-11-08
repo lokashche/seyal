@@ -20,6 +20,7 @@ import (
 
 	"seyal/internal/engine"
 	"seyal/internal/ledger"
+	"seyal/internal/master"
 	"seyal/internal/playbook"
 )
 
@@ -71,6 +72,11 @@ type ShareText struct {
 	To        string   // playbook.ShareColleague or playbook.ShareOutside
 	Text      string   // the ready words
 	Empty     []string // the details still empty, shown in the text as "[Label: empty]"
+	// Phone and Email are the contact details of the list entry the message names (its contact:), for
+	// the chat link and Email buttons (part 4b-2, D92): the phone as digits only (ChatDigits), the email
+	// only when it is a plain address (PlainEmail). "" when there is none: the button then asks whom to
+	// send to.
+	Phone, Email string
 }
 
 // ShareRecord is a hand-over as the browser reports it.
@@ -163,9 +169,75 @@ func (s session) shares(it Item, by ledger.Actor, env ShareEnv) ([]ShareText, er
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, ShareText{ID: m.ID, Label: strings.TrimSpace(m.Label), To: m.To, Text: text, Empty: empty})
+		phone, email, err := s.contact(m, it)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ShareText{ID: m.ID, Label: strings.TrimSpace(m.Label), To: m.To, Text: text, Empty: empty,
+			Phone: phone, Email: email})
 	}
 	return out, nil
+}
+
+// contact is the phone (as digits) and plain email of the list entry the message's contact: field
+// points at on this item, read with the business's own list definition (its contact:). Each is "" when
+// the message names no contact, the field is empty, the entry or its list has none, or the value can't
+// be used safely in a link. Only an outside message has one (the process check refuses contact: on a
+// colleague message; this is the second guard): a colleague message reaches everyone who can see the
+// item and may carry its link.
+func (s session) contact(m playbook.ShareMessage, it Item) (phone, email string, err error) {
+	f := s.field(m.Contact)
+	key, _ := it.Fields[m.Contact].(string)
+	if m.To != playbook.ShareOutside || m.Contact == "" || f == nil || f.Type != "master" || key == "" {
+		return "", "", nil
+	}
+	list, err := playbook.Kind(s.ctx, s.tx, f.Kind)
+	if err != nil || list == nil || list.Contact == nil {
+		return "", "", err
+	}
+	entry, err := master.Get(s.ctx, s.tx, f.Kind, key)
+	if errors.Is(err, master.ErrNotFound) {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	p, _ := entry.Fields[list.Contact.Phone].(string)
+	e, _ := entry.Fields[list.Contact.Email].(string)
+	return ChatDigits(p), PlainEmail(e), nil
+}
+
+var (
+	phoneChars = regexp.MustCompile(`^\+[0-9\-(). ]*$`)
+	nonDigits  = regexp.MustCompile(`[^0-9]`)
+	// plainEmail is an address with nothing that could add to a mailto: link: no ?, &, %, comma, space,
+	// line break or second @ (a value like "a@b.example?bcc=x@y.example" would add hidden receivers).
+	plainEmail = regexp.MustCompile(`^[A-Za-z0-9._+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$`)
+)
+
+// ChatDigits turns a phone number as people write it into the digits a chat link wants:
+// "+91 00000 00000" → "910000000000". The number must start with + and its country code: a chat link
+// reads the first digits as the country, so "00000 00000" written without it could open a stranger's
+// chat in another country. It returns "" (the chat link then asks which contact) for a number without
+// the +, with anything but digits, spaces, -, brackets and dots after it, or not 8 to 15 digits long.
+func ChatDigits(phone string) string {
+	if !phoneChars.MatchString(strings.TrimSpace(phone)) {
+		return ""
+	}
+	digits := nonDigits.ReplaceAllString(phone, "")
+	if len(digits) < 8 || len(digits) > 15 {
+		return ""
+	}
+	return digits
+}
+
+// PlainEmail returns the address when it is a plain one (see plainEmail), else "": the Email button
+// then opens with no address, never with one that adds receivers.
+func PlainEmail(email string) string {
+	if email = strings.TrimSpace(email); len(email) > 254 || !plainEmail.MatchString(email) {
+		return ""
+	}
+	return email
 }
 
 // colleagueText is "Tell a colleague": the number, title, step and due date, and the item's link

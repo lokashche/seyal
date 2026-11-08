@@ -59,7 +59,10 @@ func TestSharePageScript(t *testing.T) {
 	}
 	for _, want := range []string{`offer: r.offer || ""`, `getAttribute("data-offer")`, `r.sharer === sharer`,
 		`r.url.indexOf(here) === 0`, `letters(text) > SHARE_MAX`, `panel.edits[m.value] = e.target.value`,
-		`waiting ? sendShares() : null`, `Date.now() - r.at < SHARE_LIFE`} {
+		`waiting ? sendShares() : null`, `Date.now() - r.at < SHARE_LIFE`,
+		// D92: the WhatsApp and Email links come from links.js, counted after encoding; WhatsApp only when
+		// the server switched it on, the app's own address first on a phone.
+		`SeyalLinks.buttons(`, `panel.hasAttribute("data-chat-links")`, `location.href = c.app`, `case "chat_link":`} {
 		if !strings.Contains(string(js), want) {
 			t.Errorf("app.js no longer has %q", want)
 		}
@@ -77,5 +80,16 @@ func TestSharePageScript(t *testing.T) {
 	}
 	if !strings.Contains(string(layout), `data-sharer="{{.Session.Tag}}"`) {
 		t.Error("layout.html no longer marks the page with the login's tag")
+	}
+	// links.js runs before app.js, and the service worker keeps it for the offline start.
+	if a, b := strings.Index(string(layout), "/static/links.js"), strings.Index(string(layout), "/static/app.js"); a < 0 || a > b {
+		t.Error("layout.html doesn't load links.js before app.js")
+	}
+	sw, err := fs.ReadFile(web.Files, "templates/sw.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(sw), `"/static/links.js?v=" + VERSION`) {
+		t.Error("sw.js doesn't keep links.js")
 	}
 }

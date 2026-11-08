@@ -292,15 +292,16 @@
     </dl>
     </details>
 
+    {{$chat := .ChatLinks}}
     {{with .Share}}
     {{/* Share (D91): the person checks the words and hands them to an app on their own device. Seyal
          sends nothing; the page reports the hand-over afterwards (app.js). Hidden until app.js runs. */}}
-    <details class="sec share" data-share-panel data-shared="/t/{{$.Slug}}/items/{{$.Data.Item.Item.ID}}/shared" data-number="{{$.Data.Item.Item.Number}}" hidden>
+    <details class="sec share" data-share-panel data-shared="/t/{{$.Slug}}/items/{{$.Data.Item.Item.ID}}/shared" data-number="{{$.Data.Item.Item.Number}}"{{if $chat}} data-chat-links{{end}} hidden>
       <summary>Share</summary>
       <fieldset class="share-pick">
         <legend class="ctl-label">Message</legend>
         {{range $i, $m := .}}
-        <label><input type="radio" name="share-msg" value="{{.ID}}" data-to="{{.To}}" data-label="{{.Label}}" data-text="{{.Text}}" data-offer="{{.Offer}}" data-empty="{{len .Empty}}"{{if eq $i 0}} checked{{end}}> {{.Label}}{{if eq .To "outside"}} <span class="why">(outside)</span>{{end}}</label>
+        <label><input type="radio" name="share-msg" value="{{.ID}}" data-to="{{.To}}" data-label="{{.Label}}" data-text="{{.Text}}" data-offer="{{.Offer}}" data-empty="{{len .Empty}}"{{if $chat}}{{with .Phone}} data-phone="{{.}}"{{end}}{{end}}{{with .Email}} data-email="{{.}}"{{end}}{{if eq $i 0}} checked{{end}}> {{.Label}}{{if eq .To "outside"}} <span class="why">(outside)</span>{{end}}</label>
         {{end}}
       </fieldset>
       <label class="ctl-label" for="share-box">The words (you can change them)</label>
@@ -309,10 +310,15 @@
       <p class="why" data-share-for="colleague">This text leaves Seyal. Anyone it is forwarded to can read it.</p>
       <p class="why" data-share-for="outside" hidden>This text leaves Seyal. Whoever you send it to can read all of it.</p>
       <div class="row">
+        {{/* The chat link (D92): only with SEYAL_SHARE_CHAT_LINKS=on; the plain word, no logo. */}}
+        {{if $chat}}<button type="button" class="btn sm" data-share-route="chat_link">WhatsApp</button>{{end}}
         <button type="button" class="btn sm" data-share-route="email">Email</button>
         <button type="button" class="btn sm" data-share-route="copy">Copy</button>
         <button type="button" class="btn ghost sm" data-share-route="menu" hidden>More…</button>
       </div>
+      <p class="why" data-share-chat-note hidden>WhatsApp may open whatsapp.com, which sees the text.</p>
+      {{if $chat}}<p class="why" data-share-chat-web hidden>WhatsApp didn't open? <a href="#" target="_blank" rel="noopener noreferrer" data-share-chat-web-link>Open it on whatsapp.com</a> (whatsapp.com sees the text).</p>{{end}}
+      <p class="why" data-share-chat-long hidden>Too long for a WhatsApp link: use More… or Copy.</p>
       <p class="why" data-share-long hidden>Too long for an email link: use More… or Copy.</p>
       <p class="why miss" data-share-over hidden>Too long: shorten it to 4,000 letters.</p>
       <p class="why" data-share-status aria-live="polite"></p>

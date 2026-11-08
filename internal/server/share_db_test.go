@@ -8,7 +8,9 @@ import (
 	"context"
 	"encoding/json"
 	"html"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"slices"
@@ -21,13 +23,15 @@ import (
 	"seyal/internal/db"
 	"seyal/internal/engine"
 	"seyal/internal/ledger"
+	"seyal/internal/master"
 	"seyal/internal/playbook"
+	"seyal/internal/server"
 	"seyal/internal/setup"
 	"seyal/internal/workitem"
 )
 
-// shareMessages is a share message for outside, added to the shipped Job evaluation for these tests
-// (Phase 4, 4b-1, D91). The shipped samples get theirs in part 4b-2.
+// shareMessages is a share message for outside, put in place of the shipped Job evaluation's own for
+// these tests (Phase 4, 4b-1, D91). TestShareSamples tries the shipped one (part 4b-2, D92).
 const shareMessages = `
 share:
   - id: ask-documents
@@ -50,14 +54,7 @@ type shareSite struct {
 
 func newShareSite(t *testing.T) *shareSite {
 	t.Helper()
-	ss := &shareSite{site: newSiteWith(t, "../../examples/playbooks"), ctx: context.Background(), browsers: map[string]*http.Client{}}
-	for _, key := range []string{"asha", "ben", "dev", "chitra", "elan"} {
-		var err error
-		if ss.passwords[key], err = setup.NewPassword(ss.ctx, ss.app, ss.mail(key), ss.tenant); err != nil {
-			t.Fatal(err)
-		}
-		ss.browsers[key] = ss.logIn(key)
-	}
+	ss := newShippedShareSite(t)
 	ss.in(func(tx pgx.Tx) error {
 		var source string
 		if err := tx.QueryRow(ss.ctx, `SELECT v.source FROM tenant_playbooks t JOIN playbook_versions v
@@ -65,10 +62,11 @@ func newShareSite(t *testing.T) *shareSite {
 			WHERE t.tenant_id = current_tenant() AND t.playbook_id = 'job-evaluation'`).Scan(&source); err != nil {
 			return err
 		}
-		if !strings.Contains(source, `version: "0.6"`) {
-			t.Fatal("the shipped Job evaluation isn't version 0.6 any more; update this test")
+		own := strings.Index(source, "\nshare:\n")
+		if !strings.Contains(source, `version: "0.7"`) || own < 0 {
+			t.Fatal("the shipped Job evaluation isn't version 0.7 with share messages at the end any more; update this test")
 		}
-		p, err := playbook.Parse([]byte(strings.Replace(source, `version: "0.6"`, `version: "0.6-share"`, 1) + shareMessages))
+		p, err := playbook.Parse([]byte(strings.Replace(source[:own], `version: "0.7"`, `version: "0.7-share"`, 1) + shareMessages))
 		if err != nil {
 			return err
 		}
@@ -81,6 +79,21 @@ func newShareSite(t *testing.T) *shareSite {
 		}
 		return playbook.Use(ss.ctx, tx, id, ss.by("chitra"))
 	})
+	return ss
+}
+
+// newShippedShareSite is the demo business with Asha, Ben, Dev, Chitra and Elan logged in, on the
+// shipped samples.
+func newShippedShareSite(t *testing.T) *shareSite {
+	t.Helper()
+	ss := &shareSite{site: newSiteWith(t, "../../examples/playbooks"), ctx: context.Background(), browsers: map[string]*http.Client{}}
+	for _, key := range []string{"asha", "ben", "dev", "chitra", "elan"} {
+		var err error
+		if ss.passwords[key], err = setup.NewPassword(ss.ctx, ss.app, ss.mail(key), ss.tenant); err != nil {
+			t.Fatal(err)
+		}
+		ss.browsers[key] = ss.logIn(key)
+	}
 	return ss
 }
 
@@ -512,4 +525,102 @@ func TestSharedLinkNeedsLogin(t *testing.T) {
 			t.Errorf("the login page a link preview gets contains %q", leak)
 		}
 	}
+}
+
+// TestShareSamples follows part 4b-2 (D92) on the shipped Job evaluation 0.7: Ben (who has the job
+// with Operations) is offered "Ask the client for documents", filled in from the job, with the empty
+// detail marked; Sundaram Textiles' phone (as digits) and email come from the client list's contact:;
+// the WhatsApp button shows only with SEYAL_SHARE_CHAT_LINKS on; an email that would add receivers
+// ("?bcc=") is never offered; Settings → Processes says it in plain words.
+func TestShareSamples(t *testing.T) {
+	ss := newShippedShareSite(t)
+	job := ss.start("annual-accounts")
+	page := "/t/" + ss.slug + "/items/" + job.ID
+
+	ben := ss.shares("ben", job.ID)
+	if len(ben) != 2 || ben[1].ID != "ask-documents" || ben[1].Label != "Ask the client for documents" || ben[1].To != "outside" {
+		t.Fatalf("Ben's messages = %+v; want Tell a colleague, then Ask the client for documents", ben)
+	}
+	ask := ben[1]
+	want := "Dear Sundaram Textiles, for our work on " + job.Number + " (Annual accounts), please send: Trial balance, " +
+		"Bank statements, Fixed asset register, Loan statements. We need them by [Client data due: empty]. " +
+		"Thank you, Ben, Kaveri Associates (demo)"
+	if ask.Text != want || !slices.Equal(ask.Empty, []string{"Client data due"}) {
+		t.Errorf("Ask the client for documents = %q, empty %v\nwant %q", ask.Text, ask.Empty, want)
+	}
+	if ask.Phone != "910000000001" || ask.Email != "accounts@sundaram.example" {
+		t.Errorf("the contact = %q, %q; want Sundaram's phone as digits and email", ask.Phone, ask.Email)
+	}
+	if ben[0].Phone != "" || ben[0].Email != "" {
+		t.Errorf("Tell a colleague carries a contact: %+v", ben[0])
+	}
+
+	// The date filled in: no empty detail left, the date with the month's name.
+	ss.in(func(tx pgx.Tx) error {
+		_, err := workitem.SetFields(ss.ctx, tx, job.ID, engine.Fields{"client_data_due": "2026-11-12"}, ss.by("ben"))
+		return err
+	})
+	if ask = ss.shares("ben", job.ID)[1]; !strings.Contains(ask.Text, "We need them by 12 Nov 2026.") || len(ask.Empty) != 0 {
+		t.Errorf("with the date filled: %q, empty %v", ask.Text, ask.Empty)
+	}
+
+	// The page: the contact's email on the message, and no WhatsApp button while the switch is off.
+	// Nor the phone: only the WhatsApp button uses it, so with the switch off it stays out of the page.
+	_, benPage, _ := ss.get(ss.browsers["ben"], page)
+	if !strings.Contains(benPage, `data-email="accounts@sundaram.example"`) {
+		t.Error("Ben's page doesn't carry Sundaram's email on the message")
+	}
+	if strings.Contains(benPage, "data-phone") || strings.Contains(benPage, "910000000001") {
+		t.Error("Sundaram's phone is in the page with SEYAL_SHARE_CHAT_LINKS off")
+	}
+	if strings.Contains(benPage, `data-share-route="chat_link"`) || strings.Contains(benPage, "data-chat-links") ||
+		strings.Contains(benPage, "data-share-chat-web") {
+		t.Error("the WhatsApp button shows with SEYAL_SHARE_CHAT_LINKS off")
+	}
+	srv, err := server.New(server.Config{App: ss.app, Store: ss.store, Library: ss.lib, AI: ss.ai, ChatLinks: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	on := httptest.NewServer(srv.Handler())
+	defer on.Close()
+	resp, err := ss.browsers["ben"].Get(on.URL + page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), `data-share-route="chat_link">WhatsApp</button>`) || !strings.Contains(string(body), "data-chat-links") ||
+		!strings.Contains(string(body), "WhatsApp may open whatsapp.com, which sees the text.") ||
+		!strings.Contains(string(body), `data-phone="910000000001" data-email="accounts@sundaram.example"`) ||
+		!strings.Contains(string(body), "data-share-chat-web hidden") {
+		t.Errorf("with SEYAL_SHARE_CHAT_LINKS on (%d), the page has no WhatsApp button, note, contact and \"didn't open?\" link", resp.StatusCode)
+	}
+
+	// Someone writes an email that would add a hidden receiver: the Email button gets no address.
+	ss.in(func(tx pgx.Tx) error {
+		kind, err := playbook.Kind(ss.ctx, tx, "client")
+		if err != nil {
+			return err
+		}
+		it, err := master.Get(ss.ctx, tx, "client", "sundaram-textiles")
+		if err != nil {
+			return err
+		}
+		it.Fields["email"] = "accounts@sundaram.example?bcc=someone@elsewhere.example"
+		_, _, err = master.Save(ss.ctx, tx, kind, it.Key, it.Name, it.Fields, ss.by("chitra"))
+		return err
+	})
+	if ask = ss.shares("ben", job.ID)[1]; ask.Email != "" || ask.Phone != "910000000001" {
+		t.Errorf("with a ?bcc= email: phone %q, email %q; want the phone and no email", ask.Phone, ask.Email)
+	}
+	if _, benPage, _ = ss.get(ss.browsers["ben"], page); strings.Contains(benPage, "data-email=") || strings.Contains(benPage, "bcc") {
+		t.Error("Ben's page offers the ?bcc= email")
+	}
+
+	// Settings → Processes says it in plain words.
+	_, settings, _ := ss.get(ss.browsers["chitra"], "/t/"+ss.slug+"/settings/processes/job-evaluation")
+	if !strings.Contains(html.UnescapeString(settings), "Ask the client for documents (for outside; in studying, with ops; phone and email from Client)") {
+		t.Error("Settings → Processes doesn't describe the share message in plain words")
+	}
+	ss.tablesMatchLedger(t)
 }

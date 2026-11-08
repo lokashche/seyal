@@ -105,6 +105,8 @@ type itemView struct {
 	Slots    []slotView
 	Actions  []actionView
 	Share    []shareView // the Share panel's messages (D91): "Tell a colleague" first
+	// ChatLinks shows the Share panel's chat link button (SEYAL_SHARE_CHAT_LINKS, D92).
+	ChatLinks bool
 }
 
 type entryView struct {
@@ -198,13 +200,14 @@ type view struct {
 	flags     map[string]string   // item id → why an admin must step in (flagGone, flagRole, flagNobody, flagEscalate), set by next
 	origin    string              // the address the browser used (https://host), for an item's link in a share text
 	shareKey  []byte              // signs the Share panel's offers (Server.shareKey)
+	chatLinks bool                // the Share panel offers a chat link (Server.chatLinks)
 }
 
 func (s *Server) newView(r *http.Request, tx pgx.Tx, c *call) (*view, error) {
 	v := &view{ctx: r.Context(), tx: tx, c: c, today: time.Now().In(c.tenant.Zone).Format(time.DateOnly),
 		playbooks: map[string]*playbook.Playbook{}, q: r.URL.Query(), flags: map[string]string{}}
 	v.origin, _ = s.origin(r)
-	v.shareKey = s.shareKey
+	v.shareKey, v.chatLinks = s.shareKey, s.chatLinks
 	var err error
 	if v.names, err = pairs(v, "SELECT id::text, display_name FROM persons WHERE tenant_id = current_tenant()"); err != nil {
 		return nil, err
@@ -465,6 +468,7 @@ func (v *view) item(id string) (*itemView, error) {
 	if iv.Share, err = v.shares(it); err != nil {
 		return nil, err
 	}
+	iv.ChatLinks = v.chatLinks
 
 	if p.Approvals != nil {
 		st, err := workitem.Approvals(v.ctx, v.tx, id)

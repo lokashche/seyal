@@ -249,6 +249,7 @@
 {{with .Approvals}}<h3>Approvals</h3><ul class="rows plain">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
 {{with .OnState}}<h3>What Seyal does by itself</h3><ul class="rows plain">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
 {{with .Deadlines}}<h3>Deadlines</h3><ul class="rows plain">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
+{{with .Share}}<h3>Share messages</h3><p class="why">Offered in the Work Item's Share panel after “Tell a colleague”. A person checks the words and sends them from their own app; Seyal sends nothing.</p><ul class="rows plain">{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}
 {{with .ScheduleRule}}<h3>Starts on its own</h3><p class="why">{{.}}</p>{{end}}
 {{end}}
 

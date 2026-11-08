@@ -104,6 +104,10 @@ func runServe(out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	chat, err := chatLinks(os.Getenv)
+	if err != nil {
+		return err
+	}
 	reader := newReader(app, out, pusher)
 	srv, err := server.New(server.Config{
 		App: app, Store: media.Disk{Dir: mediaDir}, Library: lib, AI: aiSetup,
@@ -111,6 +115,7 @@ func runServe(out io.Writer) error {
 		BehindProxy:   os.Getenv("SEYAL_BEHIND_PROXY") == "true",
 		PushKey:       pushPublic,
 		Poke:          reader.Poke,
+		ChatLinks:     chat,
 	})
 	if err != nil {
 		return err

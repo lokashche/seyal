@@ -12,6 +12,7 @@ const PRECACHE = [
   "/static/app.css?v=" + VERSION,
   "/static/fonts.css?v=" + VERSION,
   "/static/app.js?v=" + VERSION,
+  "/static/links.js?v=" + VERSION,
   "/static/htmx.min.js?v=" + VERSION,
   "/static/icon-192.png",
 ];

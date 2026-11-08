@@ -4,6 +4,10 @@ label: Client
 # Someone who adds a client from the chat makes a new, unchecked client: the owner approves its first job,
 # and an admin switches "New" off in Settings once the client is checked.
 new_entries: { is_new: true }
+# Which details are a client's phone and email, for the WhatsApp and Email buttons of a share message
+# (D92). Write the phone with + and the country code ("+91 00000 00000"); Seyal keeps only the digits.
+# A phone without them isn't used: the WhatsApp button then asks which contact.
+contact: { phone: phone, email: email }
 fields:
   - { key: contact_person, label: Contact person, type: text }
   - { key: email, label: Email, type: text }

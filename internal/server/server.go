@@ -83,6 +83,8 @@ type Server struct {
 	shareKey []byte
 	// poke tells the phone-note reader a business changed (Config.Poke); nil: nothing is told.
 	poke func(tenantID string)
+	// chatLinks shows the Share panel's chat link button (Config.ChatLinks).
+	chatLinks bool
 }
 
 // RequestLimit is how long the web server gives one request to be read and answered: cmd/seyal sets
@@ -111,6 +113,10 @@ type Config struct {
 	// hand-over, a decision, a new item...): the phone-note reader then looks within seconds instead
 	// of within the minute (D90). It must never block. nil: nothing is poked.
 	Poke func(tenantID string)
+	// ChatLinks shows the Share panel's chat link button (SEYAL_SHARE_CHAT_LINKS=on, D92). Off by
+	// default: when such a link opens in a browser, the chat app's web server sees the words in the
+	// address. Email, Copy and More… need no switch.
+	ChatLinks bool
 }
 
 // New prepares the web app.
@@ -121,7 +127,7 @@ func New(cfg Config) (*Server, error) {
 		audioUsed: newAudioUse(), voiceKey: seal.NewKey(),
 		askRate: newLimiter(questionsPerMinute, time.Minute), limit: cmp.Or(cfg.RequestLimit, RequestLimit),
 		pushKey: cfg.PushKey, turnOnRate: newLimiter(turnOnsPerHour, time.Hour), helloRate: newLimiter(hellosPerMinute, time.Minute),
-		shareRate: newLimiter(sharesPerMinute, time.Minute), shareKey: seal.NewKey(), poke: cfg.Poke}
+		shareRate: newLimiter(sharesPerMinute, time.Minute), shareKey: seal.NewKey(), poke: cfg.Poke, chatLinks: cfg.ChatLinks}
 	if s.ai == nil {
 		s.ai = &ai.Setup{USDtoINR: 88}
 	}

@@ -19,6 +19,10 @@ type ShareMessage struct {
 	To    string   `yaml:"to"`    // ShareColleague or ShareOutside
 	In    []string `yaml:"in"`    // the steps where it is offered; empty means every step
 	Text  string   `yaml:"text"`  // with placeholders: field keys and the ShareBuiltins
+	// Contact names a master field of the process whose list says which of its details are a phone and
+	// an email (MasterKind.Contact, part 4b-2, D92). The panel then offers that entry's phone to a chat
+	// link and its email to the Email button; without it, those buttons ask whom to send to.
+	Contact string `yaml:"contact"`
 }
 
 // Who a share message is for.
@@ -59,9 +63,9 @@ func (p *Playbook) shareProblems() []string {
 	}
 	var problems []string
 	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
-	fields := map[string]bool{}
+	fields, masters := map[string]bool{}, map[string]bool{}
 	for _, f := range p.Fields {
-		fields[f.Key] = true
+		fields[f.Key], masters[f.Key] = true, f.Type == "master"
 		if slices.Contains(ShareBuiltins, f.Key) {
 			add("field %s: a process with share messages can't have a field called %q, because {%s} in a share text already means Seyal's own %s (rename the field)",
 				f.Key, f.Key, f.Key, f.Key)
@@ -92,6 +96,14 @@ func (p *Playbook) shareProblems() []string {
 			if !slices.Contains(p.States, st) {
 				add("%s: in: unknown state %q", where, st)
 			}
+		}
+		switch {
+		case m.Contact != "" && m.To != ShareOutside:
+			// A colleague message is offered to everyone who can see the item and may carry {link}: it
+			// must never be addressed to someone outside, nor show a viewer an entry's phone and email.
+			add("%s: contact is only for an outside message (to: %s)", where, ShareOutside)
+		case m.Contact != "" && !masters[m.Contact]:
+			add("%s: contact %q must name a master field of this process (a list whose entries have a phone or an email)", where, m.Contact)
 		}
 		if strings.TrimSpace(m.Text) == "" || utf8.RuneCountInString(m.Text) > MaxShareText {
 			add("%s: text must be 1 to %d letters", where, MaxShareText)

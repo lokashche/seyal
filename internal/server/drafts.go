@@ -213,7 +213,7 @@ func plainLines(pv *processView) []string {
 	for _, group := range []struct {
 		name  string
 		lines []string
-	}{{"Action", pv.Actions}, {"Approval", pv.Approvals}, {"Automatic", pv.OnState}, {"Deadline", pv.Deadlines}} {
+	}{{"Action", pv.Actions}, {"Approval", pv.Approvals}, {"Automatic", pv.OnState}, {"Deadline", pv.Deadlines}, {"Share message", pv.Share}} {
 		for _, l := range group.lines {
 			lines = append(lines, group.name+": "+strings.TrimSpace(l))
 		}

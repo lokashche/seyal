@@ -30,11 +30,17 @@ func TestLoadLibraryExamples(t *testing.T) {
 	}
 	// The samples written for moving work between people (D68) use every new key.
 	job, study := lib.Playbooks["job-evaluation"], lib.Playbooks["requirement-study"]
-	if job.Version != "0.6" || study == nil || study.Version != "0.2" || !job.Approvals.OnRejectBack ||
+	if job.Version != "0.7" || study == nil || study.Version != "0.2" || !job.Approvals.OnRejectBack ||
 		job.Steps["draft"].ReturnsTo != "last" || len(job.Steps["with_ops"].PassTo) == 0 {
 		t.Errorf("samples: job evaluation %s, requirement study %+v", job.Version, study)
 	}
-	// Job evaluation 0.6 has the timing of the Phase 2 design (D75, M6).
+	// Job evaluation 0.7 asks the client for documents from the Share panel, to the phone and email the
+	// client list names (Phase 4, D92).
+	if len(job.Share) != 1 || job.Share[0].To != ShareOutside || job.Share[0].Contact != "client" ||
+		lib.Masters["client"].Contact == nil || *lib.Masters["client"].Contact != (Contact{Phone: "phone", Email: "email"}) {
+		t.Errorf("job evaluation's share messages %+v; client list's contact %+v", job.Share, lib.Masters["client"].Contact)
+	}
+	// Job evaluation 0.6 (and later) has the timing of the Phase 2 design (D75, M6).
 	if r, e := job.Steps["with_ops"].Timing(); r != 2 || e != 4 || job.Steps["with_ops"].EscalateTo != "role:owner" {
 		t.Errorf("with_ops timing: remind %d, escalate %d to %q; want 2, 4, role:owner", r, e, job.Steps["with_ops"].EscalateTo)
 	}

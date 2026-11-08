@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -271,7 +272,19 @@ func MissingDetails(m, template *MasterKind) []Field {
 // (Seyal's own layout, one field per line; comments of the old text are not kept).
 func (m *MasterKind) WithDetails(extra []Field) (*MasterKind, error) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "kind: %s\nlabel: %s\nfields:\n", m.Kind, strconv.Quote(m.Label))
+	fmt.Fprintf(&b, "kind: %s\nlabel: %s\n", m.Kind, strconv.Quote(m.Label))
+	if c := m.Contact; c != nil { // a process's share messages read it (D92); above the fields, which may grow
+		fmt.Fprintf(&b, "contact: { phone: %s, email: %s }\n", strconv.Quote(c.Phone), strconv.Quote(c.Email))
+	}
+	if len(m.NewEntries) > 0 { // e.g. { is_new: true }: the rules that treat a new entry as new need it
+		// JSON is YAML: a flow map with the keys in order and each value typed as it was.
+		ne, err := json.Marshal(m.NewEntries)
+		if err != nil {
+			return nil, fmt.Errorf("new_entries: %w", err)
+		}
+		fmt.Fprintf(&b, "new_entries: %s\n", ne)
+	}
+	b.WriteString("fields:\n")
 	for _, f := range append(slices.Clone(m.Fields), extra...) {
 		fmt.Fprintf(&b, "  - { key: %s, label: %s, type: %s", f.Key, strconv.Quote(f.Label), f.Type)
 		if f.Of != "" {

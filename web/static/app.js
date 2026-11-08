@@ -768,8 +768,8 @@
 
   // --- Share (D91) ----------------------------------------------------------------------------------
   // The Work Item's Share panel: pick a message, check (or change) the words, then hand them to an app
-  // on this device: an email, the clipboard, or the phone's own share menu (More…). Seyal's server sends
-  // nothing. After the hand-over the page reports it (POST …/shared), so the thread can say "Asha copied
+  // on this device: an email, the clipboard, the phone's own share menu (More…) or, when the server
+  // switched it on, a WhatsApp link (D92). Seyal's server sends nothing. After the hand-over the page reports it (POST …/shared), so the thread can say "Asha copied
   // ‘Tell a colleague’". The report carries the message's signed offer (data-offer), so Seyal judges it
   // by what it offered when the page was drawn, even if the item has moved on since. The report is kept
   // on this device first (localStorage) and sent with keepalive, which survives the page changing; if the
@@ -779,7 +779,6 @@
   // is recorded once.
 
   var SHARES = "seyal-share-records";
-  var EMAIL_MAX = 2000; // some email apps (Outlook on Windows) cut longer mailto: links
   var SHARE_MAX = 4000; // the most letters a share may hold (workitem.MaxShareText)
   var SHARE_LIFE = 7 * 24 * 3600 * 1000; // a record waits no longer (server/share.go offerLife)
 
@@ -811,18 +810,50 @@
   function sharePicked(panel) { return panel.querySelector('input[name="share-msg"]:checked'); }
   function shareWords(panel) { return panel.querySelector("[data-share-box]").value; }
   function shareStatus(panel, text) { panel.querySelector("[data-share-status]").textContent = text; }
-  function mailto(panel) {
-    var subject = sharePicked(panel).getAttribute("data-label") + " · " + panel.getAttribute("data-number");
-    return "mailto:?subject=" + encodeURIComponent(subject) + "&body=" + encodeURIComponent(shareWords(panel));
+  // shareLinks is the picked message's WhatsApp and Email links for the words in the box (links.js,
+  // D92): to the contact's phone and email when the message names one, each null or "" when the
+  // finished link is too long. The WhatsApp link exists only when the server switched it on.
+  function shareLinks(panel) {
+    var m = sharePicked(panel);
+    return SeyalLinks.buttons({ chatLinks: panel.hasAttribute("data-chat-links"), phone: m.getAttribute("data-phone") || "",
+      email: m.getAttribute("data-email") || "", text: shareWords(panel),
+      subject: m.getAttribute("data-label") + " · " + panel.getAttribute("data-number") });
   }
-  // shareLength hides Email when the finished link, counted after encoding, is too long, and says so
-  // when the words are over 4,000 letters (a long detail can make even Seyal's own words that long).
+  // shareLength hides WhatsApp and Email when their finished link, counted after encoding, is too long
+  // (and says so), and says so when the words are over 4,000 letters (a long detail can make even
+  // Seyal's own words that long).
   function shareLength(panel) {
-    var over = letters(shareWords(panel)) > SHARE_MAX;
-    var long = !over && mailto(panel).length > EMAIL_MAX;
-    panel.querySelector('[data-share-route="email"]').hidden = long || over;
-    panel.querySelector("[data-share-long]").hidden = !long;
+    var over = letters(shareWords(panel)) > SHARE_MAX, links = shareLinks(panel);
+    var mailLong = !over && !links.mail;
+    var chat = panel.querySelector('[data-share-route="chat_link"]');
+    var chatLong = !!chat && !over && !links.chat;
+    panel.querySelector('[data-share-route="email"]').hidden = mailLong || over;
+    if (chat) chat.hidden = chatLong || over;
+    panel.querySelector("[data-share-chat-note]").hidden = !chat || chat.hidden;
+    var web = panel.querySelector("[data-share-chat-web]");
+    if (web) web.hidden = true; // its link holds the words as they were when WhatsApp was tapped
+    panel.querySelector("[data-share-chat-long]").hidden = !chatLong;
+    panel.querySelector("[data-share-long]").hidden = !mailLong;
     panel.querySelector("[data-share-over]").hidden = !over;
+  }
+  // mobile is a phone or tablet: an iPad's Safari says "Macintosh", but has a touch screen.
+  function mobile() {
+    return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  }
+  // openChat opens a WhatsApp link. On a phone or tablet it tries the app's own address, which skips
+  // the website, and then shows a "didn't open?" link to the website. It never moves to the website on
+  // its own: while the phone asks "Open in WhatsApp?" the page still shows, so a timer would send the
+  // words to whatsapp.com (and could open the chat twice). The website is reached only by a second,
+  // deliberate tap. On a computer it opens the website link (WhatsApp Web or the desktop app) in a new
+  // tab.
+  function openChat(panel, c) {
+    if (!mobile()) { window.open(c.web, "_blank", "noopener"); return; }
+    var web = panel.querySelector("[data-share-chat-web]");
+    if (web) {
+      web.querySelector("a").href = c.web;
+      web.hidden = false;
+    }
+    location.href = c.app;
   }
   // shareFill puts the picked message's words in the box, with its hints: the words the person already
   // changed for that message in this panel, or else Seyal's.
@@ -922,9 +953,16 @@
         copyText(text, b, function (ok) { if (ok) done(); }, "Select the words and copy them");
         break;
       case "email": // recorded on the tap: Seyal can't see the email app
-        if (mailto(panel).length > EMAIL_MAX) { shareStatus(panel, "Too long for an email link: use More… or Copy."); return; }
+        var mail = shareLinks(panel).mail;
+        if (!mail) { shareStatus(panel, "Too long for an email link: use More… or Copy."); return; }
         done();
-        location.href = mailto(panel);
+        location.href = mail;
+        break;
+      case "chat_link": // recorded on the tap: Seyal can't see whether the person pressed Send
+        var chat = shareLinks(panel).chat;
+        if (!chat) { shareStatus(panel, "Too long for a WhatsApp link: use More… or Copy."); return; }
+        done();
+        openChat(panel, chat);
         break;
       case "menu": // recorded when the menu says an app took it; closing the menu records nothing
         if (!navigator.share) { shareStatus(panel, "This browser has no share menu. Use Copy instead."); return; }

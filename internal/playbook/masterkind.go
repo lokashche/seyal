@@ -26,9 +26,20 @@ type MasterKind struct {
 	// e.g. { is_new: true } so an admin checks it and processes can treat it as new. Yes/no, text,
 	// choice and number details only.
 	NewEntries map[string]any `yaml:"new_entries"`
+	// Contact says which of the list's text details are an entry's phone number and email address, e.g.
+	// { phone: phone, email: email }. A process's share message (ShareMessage.Contact) uses them for
+	// its chat link and Email buttons (part 4b-2, D92). Either may be left out.
+	Contact *Contact `yaml:"contact"`
 
 	Source []byte   `yaml:"-"` // the definition as written
 	Hash   [32]byte `yaml:"-"` // sha256 of Source
+}
+
+// Contact names a list's contact details: the keys of its text details that hold a phone number and an
+// email address.
+type Contact struct {
+	Phone string `yaml:"phone"`
+	Email string `yaml:"email"`
 }
 
 var masterFieldTypes = []string{"text", "number", "money", "date", "bool", "choice", "person", "list"}
@@ -124,6 +135,16 @@ func (m *MasterKind) Validate() error {
 		}
 		if !ok {
 			add("new_entries: %s: give a %s value (new entries can only preset yes/no, text, choice and number details)", k, f.Type)
+		}
+	}
+	if c := m.Contact; c != nil {
+		if c.Phone == "" && c.Email == "" {
+			add("contact: name a phone or an email detail, e.g. { phone: phone, email: email }")
+		}
+		for _, d := range [][2]string{{"phone", c.Phone}, {"email", c.Email}} {
+			if f := m.field(d[1]); d[1] != "" && (f == nil || f.Type != "text") {
+				add("contact: %s: %q must be a text detail of this list", d[0], d[1])
+			}
 		}
 	}
 	if len(problems) == 0 {
